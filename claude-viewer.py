@@ -30,8 +30,12 @@ for a in sys.argv[1:]:
 ROOT = os.path.abspath(os.path.expanduser(_pos[0])) if _pos else os.path.expanduser("~/Downloads/.claude/projects")
 PORT = int(_opt.get("--port", 8777))
 
+CONFIG_DIR = os.path.expanduser("~/.config/claude-viewer")
+ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
+_ROOTLOCK = threading.Lock()
+
 def _discover_roots(primary):
-    """Allowed project roots, switchable in-app. Primary (CLI/default) first."""
+    """Auto-discovered roots: CLI primary, the two standard locations, and --roots."""
     cands = [primary, os.path.expanduser("~/.claude/projects"), os.path.expanduser("~/Downloads/.claude/projects")]
     extra = _opt.get("--roots")
     if isinstance(extra, str):
@@ -43,7 +47,45 @@ def _discover_roots(primary):
             seen.append(c)
     return seen or [os.path.abspath(primary)]
 
-ROOTS = _discover_roots(ROOT)
+def _load_saved():
+    out = []
+    try:
+        with open(ROOTS_FILE, encoding="utf-8") as fh:
+            for ln in fh:
+                p = ln.strip()
+                if p and os.path.isdir(p):
+                    out.append(os.path.abspath(p))
+    except OSError:
+        pass
+    return out
+
+def _save_saved(extra):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(ROOTS_FILE, "w", encoding="utf-8") as fh:
+            fh.write("".join(p + "\n" for p in extra))
+    except OSError:
+        pass
+
+def normalize_root(path):
+    """Resolve a user-given path to a usable projects root (has */*.jsonl), or None.
+    Accepts the projects dir itself, a parent containing projects/, or a .claude dir."""
+    if not path:
+        return None
+    p = os.path.abspath(os.path.expanduser(path.strip()))
+    if not os.path.isdir(p):
+        return None
+    for cand in (p, os.path.join(p, "projects"), os.path.join(p, ".claude", "projects")):
+        if os.path.isdir(cand) and glob.glob(os.path.join(cand, "*", "*.jsonl")):
+            return cand
+    return None
+
+DEFAULT_ROOTS = _discover_roots(ROOT)
+SAVED_ROOTS = [p for p in _load_saved() if p not in DEFAULT_ROOTS]
+ROOTS = list(DEFAULT_ROOTS)
+for _p in SAVED_ROOTS:
+    if _p not in ROOTS:
+        ROOTS.append(_p)
 ROOT = ROOT if ROOT in ROOTS else ROOTS[0]   # default active root
 
 def root_for_path(p):
@@ -449,6 +491,28 @@ def hl(text, q):
 ROLE_LABEL = {"you": "🧑 나", "assistant": "✦ Claude", "tool-result": "⚙ 도구 결과",
               "system": "ⓘ 시스템·주입", "subagent": "🤖 서브에이전트",
               "orchestrator": "📋 지시 → 서브에이전트"}
+ROLE_DESC = {
+    "you": "내가 직접 타이핑하거나 붙여넣은 메시지 — 검증된 규칙으로 이것만 '나'로 표시",
+    "assistant": "Claude(어시스턴트)의 답변",
+    "tool-result": "Claude가 실행한 도구(Bash 명령·Edit/Write·Read 등)의 출력 결과. 사람이 쓴 게 아님",
+    "system": "시스템이 자동으로 끼워 넣은 컨텍스트 — system-reminder·IDE 알림·슬래시명령 출력·task-notification 등. 사람이 쓴 게 아님",
+    "subagent": "Claude가 띄운 하위(서브)에이전트의 대화",
+    "orchestrator": "서브에이전트에게 준 작업 지시문 (사람이 아니라 Claude가 생성)"}
+
+def legend_html(open_=False):
+    rows = [("🧑 나", ROLE_DESC["you"]),
+            ("✦ Claude", ROLE_DESC["assistant"]),
+            ("💭 추론", "Claude의 사고 과정 — 보통 비공개로 접혀 있음"),
+            ("🔧 도구 호출", "Claude가 도구(Bash 실행·파일 Edit/Write·Read 등)를 부른 호출"),
+            ("⚙ 도구 결과", ROLE_DESC["tool-result"]),
+            ("ⓘ 시스템·주입", ROLE_DESC["system"]),
+            ("📋 지시", ROLE_DESC["orchestrator"]),
+            ("🤖 서브에이전트", ROLE_DESC["subagent"])]
+    body = "".join(f'<div style="margin:3px 0"><b>{esc(e)}</b> — <span class=meta>{esc(d)}</span></div>'
+                   for e, d in rows)
+    return (f'<details class="card"{" open" if open_ else ""}>'
+            f'<summary style="cursor:pointer;font-weight:650;color:#1f6feb">❓ 메시지 종류 설명 (범례)</summary>'
+            f'<div style="margin-top:8px">{body}</div></details>')
 TAG_BADGE = {"error": "⚠️", "edit": "✏️", "command": "❯", "commit": "⎇", "test": "🧪", "url": "🔗", "web": "🌐"}
 
 def render_turn(gi, t, q="", thread_link=None):
@@ -476,7 +540,7 @@ def render_turn(gi, t, q="", thread_link=None):
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
     cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
-    who = (f'<div class=who><span>{ROLE_LABEL.get(role, role)} {badges}</span>'
+    who = (f'<div class=who><span title="{esc(ROLE_DESC.get(role, ""))}">{ROLE_LABEL.get(role, role)} {badges}</span>'
            f'<span class=whoR>{tstr}{link}</span></div>')
     return f'<div class="msg {role}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
 
@@ -501,6 +565,13 @@ header button{background:#0b4fc4;color:#fff}
 .rootbar a{font-size:12px;text-decoration:none;padding:4px 11px;border-radius:14px;background:#e9edf2;color:#444;border:1px solid #dfe3e8}
 .rootbar a.on{background:#0b4fc4;color:#fff;border-color:#0b4fc4}
 @media(prefers-color-scheme:dark){.rootbar a{background:#1b1e24;color:#cfd4db;border-color:#3a3f47}}
+.rootitem{display:inline-flex;align-items:center;gap:3px}
+.rootbar a.rmroot{padding:2px 6px;background:transparent;border:0;color:#b04;font-size:11px}
+.rootbar a.rmroot:hover{background:#fde;border-radius:8px}
+.addroot{display:inline-flex;gap:5px;margin-left:4px}
+.addroot input{padding:5px 10px;border:1px solid #cfd4db;border-radius:14px;font-size:12px;width:min(46vw,300px)}
+.addroot button{padding:5px 11px;border:0;border-radius:14px;background:#16a34a;color:#fff;font-size:12px;cursor:pointer}
+@media(prefers-color-scheme:dark){.addroot input{background:#1b1e24;color:#e7e9ec;border-color:#3a3f47}}
 .card{background:#fff;border:1px solid #e4e7eb;border-radius:11px;padding:12px 16px;margin:9px 0}
 @media(prefers-color-scheme:dark){.card{background:#1b1e24;border-color:#2a2e35}}
 .card a.t{font-weight:650;color:#1f6feb;text-decoration:none;font-size:15.5px}
@@ -677,13 +748,17 @@ def shell(title, body, q="", scope="all", root=None):
     multi = len(ROOTS) > 1
     home = ("/?root=" + urllib.parse.quote(root)) if multi else "/"
     hidden = f'<input type=hidden name=root value="{esc(root)}">' if multi else ""
-    if multi:
-        links = "".join(
-            f'<a class="{"on" if r==root else ""}" href="/?root={urllib.parse.quote(r)}">{esc(short_path(r))}</a>'
-            for r in ROOTS)
-        rootbar = f'<div class=rootbar><span class=lbl>📁 폴더:</span>{links}</div>'
-    else:
-        rootbar = ""
+    links = []
+    for r in ROOTS:
+        on = "on" if r == root else ""
+        rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="목록에서 제거">✕</a>'
+              if r in SAVED_ROOTS else "")
+        links.append(f'<span class=rootitem><a class="{on}" href="/?root={urllib.parse.quote(r)}">'
+                     f'{esc(short_path(r))}</a>{rm}</span>')
+    addform = ('<form class=addroot action="/addroot" method=get>'
+               '<input name=path placeholder="새 폴더 추가 — 경로 붙여넣기 (…/.claude/projects)">'
+               '<button>➕ 추가</button></form>')
+    rootbar = f'<div class=rootbar><span class=lbl>📁 폴더:</span>{"".join(links)}{addform}</div>'
     return (SHELL.replace("%%TITLE%%", esc(title)).replace("%%BODY%%", body)
             .replace("%%Q%%", esc(q))
             .replace("%%SA%%", " selected" if scope == "all" else "")
@@ -704,6 +779,12 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _redirect(self, loc):
+        self.send_response(302)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(u.query)
@@ -718,7 +799,40 @@ class H(BaseHTTPRequestHandler):
                                            int(g("off", "0") or 0), g("lim", ""), g("thread", ""), g("view", "")))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
+        if u.path == "/addroot":
+            return self.addroot(g("path"))
+        if u.path == "/delroot":
+            return self.delroot(g("path"))
         self.send_error(404)
+
+    # ---- add / remove a project folder at runtime (persisted) ----
+    def addroot(self, path):
+        np = normalize_root(path)
+        if np:
+            with _ROOTLOCK:
+                if np not in ROOTS:
+                    ROOTS.append(np)
+                if np not in DEFAULT_ROOTS and np not in SAVED_ROOTS:
+                    SAVED_ROOTS.append(np)
+                    _save_saved(SAVED_ROOTS)
+            return self._redirect("/?root=" + urllib.parse.quote(np))
+        body = (f'<div class=card><b>폴더를 추가할 수 없습니다.</b>'
+                f'<p class=meta>입력: <code class=sid>{esc(path)}</code></p>'
+                f'<p>그 경로가 존재하고, 안에 <code>*/*.jsonl</code> 세션이 있는 <b>projects</b> 폴더여야 해요. '
+                f'(<code>.claude</code> 폴더나 그 부모를 줘도 자동으로 <code>projects</code>를 찾습니다.)<br>'
+                f'예: <code>/Volumes/backup/.claude/projects</code></p>'
+                f'<p><a href="/">← 돌아가기</a></p></div>')
+        return self._send(shell("폴더 추가 실패", body))
+
+    def delroot(self, path):
+        p = os.path.abspath(os.path.expanduser(path or ""))
+        with _ROOTLOCK:
+            if p in SAVED_ROOTS:
+                SAVED_ROOTS.remove(p)
+                _save_saved(SAVED_ROOTS)
+            if p in ROOTS and p not in DEFAULT_ROOTS:
+                ROOTS.remove(p)
+        return self._redirect("/")
 
     # ---- index ----
     def index(self, proj_filter="", sort="date", dir_="", root=None):
@@ -779,7 +893,8 @@ class H(BaseHTTPRequestHandler):
         head = (f'<p class=meta>{len(items)}개 세션 · <b>🧑 나</b>는 검증된 규칙으로 '
                 f'<b>실제 네가 타이핑한 메시지만</b> 표시 · {esc(root)}</p>'
                 f'<p class=meta>범례: 🧑 나(내 메시지) · ✦ Claude 응답 · ⚙ 도구 결과 · ⓘ 시스템·주입 '
-                f'<span class=hint>(숫자에 마우스 올리면 설명)</span></p>')
+                f'<span class=hint>(숫자에 마우스 올리면 설명, 아래 ❓ 펼치면 전체 설명)</span></p>'
+                + legend_html())
         return shell("대화 뷰어", head + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
@@ -838,7 +953,8 @@ class H(BaseHTTPRequestHandler):
                 f'{esc(meta["branch"])} · {fmt_ts(meta["last_ts"])}</p>'
                 f'<h3 style="margin:4px 0">{esc(meta["title"])}</h3>'
                 f'<p class=meta>session-id <code class=sid>{esc(sid)}</code> · '
-                f'복귀: <code class=sid>claude --resume {esc(sid)}</code> · 📁 {esc(short_path(rt))}</p>')
+                f'복귀: <code class=sid>claude --resume {esc(sid)}</code> · 📁 {esc(short_path(rt))}</p>'
+                + legend_html())
 
         # subagent banner
         subs = [subagent_brief(s) for s in subagent_files(path)]
