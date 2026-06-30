@@ -1,0 +1,9 @@
+# runtime / OS noise
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+
+# never commit actual transcripts or copied .claude data
+**/.claude/
+*.jsonl
