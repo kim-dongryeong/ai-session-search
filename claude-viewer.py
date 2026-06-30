@@ -388,6 +388,7 @@ def summarize_file(path):
     ai_title = custom_title = last_prompt = first_human = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
     last_ts = cwd = branch = ""
+    loop = False
     for o in iter_lines(path):
         t = o.get("type")
         if t == "ai-title":
@@ -405,11 +406,14 @@ def summarize_file(path):
             continue
         if r[0] in n:
             n[r[0]] += 1
+        if r[0] == "system" and not loop:
+            if any(x[0] == "injected" and x[1].lstrip().startswith(LOOP_PREFIXES) for x in r[1]):
+                loop = True
         if r[0] == "you" and not first_human:
             first_human = " ".join(x[1] for x in r[1] if x[0] == "text").strip()
     title = custom_title or ai_title or first_human or last_prompt or "(제목 없음)"
     return {"title": title.strip()[:120], "preview": (last_prompt or first_human).strip()[:140],
-            "n": n, "last_ts": last_ts, "cwd": cwd, "branch": branch}
+            "n": n, "last_ts": last_ts, "cwd": cwd, "branch": branch, "loop": loop}
 
 # ---- index cache (per root) -------------------------------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
@@ -426,7 +430,8 @@ def build_index(root):
         s = summarize_file(path)
         items.append({"path": path, "proj": os.path.basename(os.path.dirname(path)),
                       "sid": os.path.basename(path)[:-6], "title": s["title"], "preview": s["preview"],
-                      "n": s["n"], "mtime": st.st_mtime, "size": st.st_size, "cwd": s["cwd"], "branch": s["branch"]})
+                      "n": s["n"], "mtime": st.st_mtime, "size": st.st_size, "cwd": s["cwd"],
+                      "branch": s["branch"], "loop": s["loop"]})
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
 
@@ -458,6 +463,28 @@ def fmt_ts_short(ts):
 
 def fmt_mtime(t):
     return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
+
+def fmt_size(b):
+    for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if b >= div:
+            return f"{b/div:.1f}{unit}"
+    return f"{b}B"
+
+def agg_stats(items):
+    s = {"sessions": 0, "my_sessions": 0, "my_msgs": 0, "size": 0, "my_size": 0,
+         "loop": 0, "asst": 0, "tool": 0}
+    for it in items:
+        s["sessions"] += 1
+        s["size"] += it["size"]
+        s["asst"] += it["n"]["assistant"]
+        s["tool"] += it["n"]["tool-result"]
+        s["my_msgs"] += it["n"]["you"]
+        if it["n"]["you"] > 0:
+            s["my_sessions"] += 1
+            s["my_size"] += it["size"]
+        if it.get("loop"):
+            s["loop"] += 1
+    return s
 
 _HOME = os.path.expanduser("~")
 def short_path(p):
@@ -595,6 +622,15 @@ header button{background:#0b4fc4;color:#fff}
 .digest{background:#f7f9fc;border:1px solid #dbe3ef}
 @media(prefers-color-scheme:dark){.digest{background:#171b22;border-color:#283041}}
 .digest b{color:#1f6feb}
+.loopchip{display:inline-block;background:#fff3cd;color:#8a6d00;border:1px solid #ffe08a;border-radius:12px;padding:1px 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
+@media(prefers-color-scheme:dark){.loopchip{background:#3a3115;color:#f0d68a;border-color:#5c4d1c}}
+table.stab{border-collapse:collapse;width:100%;margin-top:8px;font-size:12.5px}
+table.stab th,table.stab td{text-align:right;padding:4px 8px;border-bottom:1px solid #e8ebef}
+table.stab th:first-child,table.stab td:first-child{text-align:left}
+table.stab thead th{color:#8a8f98;font-weight:600;cursor:help}
+table.stab td a{color:#1f6feb;text-decoration:none}
+table.stab tr.tot td{font-weight:700;border-top:2px solid #cdd2d8;border-bottom:0}
+@media(prefers-color-scheme:dark){table.stab th,table.stab td{border-color:#2a2e35}}
 .dfile{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#555;display:block}
 @media(prefers-color-scheme:dark){.dfile{color:#9aa0a8}}
 .msg{margin:12px 0;border:1px solid #e4e7eb;border-radius:11px;overflow:hidden;scroll-margin-top:64px}
@@ -837,14 +873,13 @@ class H(BaseHTTPRequestHandler):
     # ---- index ----
     def index(self, proj_filter="", sort="date", dir_="", root=None):
         root = root if root in ROOTS else ROOT
-        items = get_index(root)
+        all_items = get_index(root)
         proj_cwd = {}
-        for it in items:
+        for it in all_items:
             if it["proj"] not in proj_cwd and it.get("cwd"):
                 proj_cwd[it["proj"]] = short_path(it["cwd"])
-        projs = sorted({it["proj"] for it in items}, key=lambda p: proj_cwd.get(p, p).lower())
-        if proj_filter:
-            items = [it for it in items if it["proj"] == proj_filter]
+        projs = sorted({it["proj"] for it in all_items}, key=lambda p: proj_cwd.get(p, p).lower())
+        items = [it for it in all_items if it["proj"] == proj_filter] if proj_filter else list(all_items)
 
         # sort: field + direction
         SORTF = {"date": "날짜", "mine": "내 메시지", "title": "제목", "size": "용량"}
@@ -862,6 +897,39 @@ class H(BaseHTTPRequestHandler):
             if len(ROOTS) > 1:
                 parts.append("root=" + urllib.parse.quote(root))
             return "/?" + "&".join(parts) if parts else "/"
+
+        # ---- project insight ----
+        if proj_filter:
+            st = agg_stats(items)
+            label = proj_cwd.get(proj_filter, proj_filter)
+            loopline = (f' · <span class=loopchip>🔁 자율 빌드루프 {st["loop"]}개</span>') if st["loop"] else ""
+            statsblock = (
+                f'<div class="card digest"><b>📁 {esc(label)}</b>{loopline}'
+                f'<div style="margin-top:6px">총 <b>{st["sessions"]}</b>개 세션 · '
+                f'🧑 내가 참여한 세션 <b>{st["my_sessions"]}</b>개 · 내가 쓴 메시지 <b>{st["my_msgs"]}</b>개</div>'
+                f'<div>총 용량 <b>{fmt_size(st["size"])}</b> · 🧑 내가 참여한 세션 용량 합 <b>{fmt_size(st["my_size"])}</b></div>'
+                f'<div class=meta>✦ Claude {st["asst"]} · ⚙ 도구결과 {st["tool"]}</div></div>')
+        else:
+            by = {}
+            for it in all_items:
+                by.setdefault(it["proj"], []).append(it)
+            ov = []
+            for p, its in sorted(by.items(), key=lambda kv: -agg_stats(kv[1])["size"]):
+                s = agg_stats(its)
+                lc = f'🔁 {s["loop"]}' if s["loop"] else ""
+                ov.append(f'<tr><td><a href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a></td>'
+                          f'<td>{s["sessions"]}</td><td>{s["my_sessions"]}</td><td>{s["my_msgs"]}</td>'
+                          f'<td>{fmt_size(s["size"])}</td><td>{fmt_size(s["my_size"])}</td><td>{lc}</td></tr>')
+            tot = agg_stats(all_items)
+            table = ('<table class=stab><thead><tr><th>프로젝트(폴더)</th><th title="세션 수">세션</th>'
+                     '<th title="내가(사람이) 참여한 세션 수">내 참여</th><th title="내가 쓴 총 메시지 수">내 메시지</th>'
+                     '<th title="모든 세션 용량 합">총 용량</th><th title="내가 참여한 세션들의 용량 합">내 세션 용량</th>'
+                     '<th title="자율 빌드루프 세션 수">🔁</th></tr></thead><tbody>' + "".join(ov)
+                     + f'<tr class=tot><td>합계 {len(by)}개 폴더</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
+                     f'<td>{tot["my_msgs"]}</td><td>{fmt_size(tot["size"])}</td><td>{fmt_size(tot["my_size"])}</td>'
+                     f'<td>{tot["loop"] or ""}</td></tr></tbody></table>')
+            statsblock = (f'<details class="card" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
+                          f'📊 프로젝트별 통계 ({len(by)}개 폴더)</summary>{table}</details>')
 
         arrow = "▼" if dir_ == "desc" else "▲"
         sortbar = ['<div class=bar><span class=meta>정렬:</span>']
@@ -883,11 +951,12 @@ class H(BaseHTTPRequestHandler):
         rows = []
         for it in items:
             link = "/session?p=" + urllib.parse.quote(it["path"])
+            loopchip = ' <span class=loopchip>🔁 자율 빌드루프</span>' if it.get("loop") else ""
             rows.append(
-                f'<div class=card><a class=t href="{link}">{esc(it["title"])}</a>'
+                f'<div class=card><a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
                 f'<div class=meta><span class=chip>{esc(proj_label(it))}</span>'
                 f'{counts_html(it["n"])} · '
-                f'{fmt_mtime(it["mtime"])} · {it["size"]//1024}KB · '
+                f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
                 + (f'<div class=preview>{esc(it["preview"])}</div>' if it["preview"] else "") + '</div>')
         head = (f'<p class=meta>{len(items)}개 세션 · <b>🧑 나</b>는 검증된 규칙으로 '
@@ -895,7 +964,7 @@ class H(BaseHTTPRequestHandler):
                 f'<p class=meta>범례: 🧑 나(내 메시지) · ✦ Claude 응답 · ⚙ 도구 결과 · ⓘ 시스템·주입 '
                 f'<span class=hint>(숫자에 마우스 올리면 설명, 아래 ❓ 펼치면 전체 설명)</span></p>'
                 + legend_html())
-        return shell("대화 뷰어", head + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+        return shell("대화 뷰어", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None):
@@ -951,7 +1020,8 @@ class H(BaseHTTPRequestHandler):
 
         head = (f'<p class=meta>{esc(meta["cwd"] or os.path.basename(os.path.dirname(path)))} · '
                 f'{esc(meta["branch"])} · {fmt_ts(meta["last_ts"])}</p>'
-                f'<h3 style="margin:4px 0">{esc(meta["title"])}</h3>'
+                f'<h3 style="margin:4px 0">{esc(meta["title"])}'
+                + (' <span class=loopchip>🔁 자율 빌드루프</span>' if meta.get("loop") else "") + '</h3>'
                 f'<p class=meta>session-id <code class=sid>{esc(sid)}</code> · '
                 f'복귀: <code class=sid>claude --resume {esc(sid)}</code> · 📁 {esc(short_path(rt))}</p>'
                 + legend_html())
