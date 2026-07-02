@@ -216,6 +216,19 @@ class Helpers(unittest.TestCase):
     def test_esc(self):
         self.assertEqual(app.esc('<a b="c">'), "&lt;a b=&quot;c&quot;&gt;")
 
+    def test_parse_query(self):
+        self.assertEqual(app.parse_query('foo bar "exact phrase"'), ["foo", "bar", "exact phrase"])
+        self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
+        self.assertEqual(app.parse_query("  "), [])
+
+    def test_hl_multi_term(self):
+        out = app.hl("foo and bar", "foo bar")
+        self.assertIn("<mark>foo</mark>", out)
+        self.assertIn("<mark>bar</mark>", out)
+        # overlapping terms merge instead of double-wrapping
+        out = app.hl("abcd", "abc bcd")
+        self.assertEqual(out, "<mark>abcd</mark>")
+
 
 if __name__ == "__main__":
     unittest.main()

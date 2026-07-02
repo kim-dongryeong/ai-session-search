@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0 — 2026-07-02
+
+Search overhaul.
+
+- **Jump to match**: search results and each snippet now link with `goto=<turn>` —
+  the session opens on the right page, scrolls to the matched message, and outlines it.
+  If the match is a non-human turn while filtered to 🧑 내 말만, the filter widens
+  automatically.
+- **Multi-term AND + phrases**: space-separated words must all appear in a turn;
+  `"quoted phrases"` (straight or curly quotes) match as a unit. Highlighting marks
+  every term (overlaps merged).
+- **Speed**: per-file searchable-turn cache keyed on (mtime_ns, size) — repeat searches
+  skip re-parsing unchanged files (measured on 157MB/174 sessions: 2.1s cold → ~1ms warm).
+- **Filters**: scope grew to 전체 / 🧑 내 말만 / ✦ Claude만 / 대화만(도구·시스템 제외);
+  period filter (7/30/90일, by session mtime); project chips over matched results.
+- Search header shows parsed query, scope, elapsed ms.
+
 ## 1.0.0 — 2026-06-30
 
 First packaged release.

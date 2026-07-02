@@ -33,7 +33,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # ---- config -----------------------------------------------------------------
 DEFAULT_PORT = 8777
@@ -115,6 +115,8 @@ def configure(primary_root=None, extra_roots=()):
     ROOT = primary if primary in ROOTS else ROOTS[0]
     with _INDEX["lock"]:
         _INDEX["by_root"].clear()
+    with _SEARCH["lock"]:
+        _SEARCH["by_path"].clear()
     return ROOT
 
 def root_for_path(p):
@@ -480,6 +482,31 @@ def get_index(root):
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
 
+# ---- search cache: per-file searchable turn texts, keyed on (mtime_ns, size) --
+_SEARCH = {"by_path": {}, "lock": threading.Lock()}
+_SEARCH_KINDS = ("text", "tool_result", "thinking", "injected")
+
+def search_turns(path):
+    """[(gi, role, text)] for a session file — cached so repeat searches skip
+    re-parsing unchanged files entirely."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (st.st_mtime_ns, st.st_size)
+    with _SEARCH["lock"]:
+        hit = _SEARCH["by_path"].get(path)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+    rows = []
+    for gi, t in enumerate(classify_turns(path)):
+        txt = " ".join(x[1] for x in t["segs"] if x[0] in _SEARCH_KINDS)
+        if txt.strip():
+            rows.append((gi, t["role"], txt))
+    with _SEARCH["lock"]:
+        _SEARCH["by_path"][path] = (key, rows)
+    return rows
+
 # ---- render helpers ---------------------------------------------------------
 def esc(s):
     return html.escape(s or "")
@@ -544,16 +571,46 @@ def counts_html(n, system=False):
         parts.append(f'<span title="시스템·주입 컨텍스트 수 (system-reminder/IDE/명령출력 등)">ⓘ {n["system"]}</span>')
     return " · ".join(parts)
 
+def parse_query(q):
+    """'foo bar "exact phrase"' → ['foo', 'bar', 'exact phrase'] (lowercased).
+    All terms must match (AND); quoted phrases match as a unit."""
+    terms = []
+    for m in re.finditer(r'"([^"]+)"|“([^”]+)”|(\S+)', q or ""):
+        t = (m.group(1) or m.group(2) or m.group(3) or "").strip().lower()
+        if t:
+            terms.append(t)
+    return terms
+
 def hl(text, q):
-    if not q:
+    """Highlight every occurrence of every query term (multi-term aware)."""
+    terms = parse_query(q)
+    if not terms:
         return esc(text)
-    out, low, ql, i = [], text.lower(), q.lower(), 0
-    while True:
-        j = low.find(ql, i)
-        if j < 0:
-            out.append(esc(text[i:])); break
-        out.append(esc(text[i:j])); out.append("<mark>" + esc(text[j:j+len(q)]) + "</mark>")
-        i = j + len(q)
+    low = text.lower()
+    spans = []
+    for t in terms:
+        i = 0
+        while True:
+            j = low.find(t, i)
+            if j < 0:
+                break
+            spans.append((j, j + len(t)))
+            i = j + len(t)
+    if not spans:
+        return esc(text)
+    spans.sort()
+    merged = [spans[0]]
+    for s, e in spans[1:]:
+        if s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    out, i = [], 0
+    for s, e in merged:
+        out.append(esc(text[i:s]))
+        out.append("<mark>" + esc(text[s:e]) + "</mark>")
+        i = e
+    out.append(esc(text[i:]))
     return "".join(out)
 
 ROLE_LABEL = {"you": "🧑 나", "assistant": "✦ Claude", "tool-result": "⚙ 도구 결과",
@@ -709,6 +766,8 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px}
 .pg{display:flex;gap:10px;justify-content:center;margin:18px 0}
 .pg a{padding:7px 16px;border-radius:9px;background:#1f6feb;color:#fff;text-decoration:none;font-size:13px}
 .snip{color:#666;font-size:12.5px;margin:4px 0 0;padding-left:10px;border-left:2px solid #d9dde2}
+.snip a.snipjump{text-decoration:none}
+.snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
 kbd{background:#e7e9ec;border-radius:4px;padding:0 5px;font-size:11px;border:1px solid #c7ccd2;color:#333}
 .codeart{margin:12px 0;border:1px solid #e4e7eb;border-radius:10px;overflow:hidden}
 @media(prefers-color-scheme:dark){.codeart{border-color:#2a2e35}}
@@ -728,8 +787,9 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 <header>
   <a class=home href="%%HOMEHREF%%">&#9776; 대화 뷰어</a>
   <form action="/search" role=search>
-    <input type=search name=q id=qbox placeholder="모든 대화 검색  ( / 키로 포커스 )" value="%%Q%%">
-    <select name=scope><option value=all%%SA%%>전체</option><option value=human%%SH%%>내 말만</option></select>
+    <input type=search name=q id=qbox placeholder='검색: 단어들 = AND · "정확한 구문"  ( / 키 )' value="%%Q%%">
+    <select name=scope title="검색 범위">%%SCOPEOPTS%%</select>
+    <select name=days title="기간">%%DAYSOPTS%%</select>
     %%ROOTHIDDEN%%
     <button>검색</button>
   </form>
@@ -820,7 +880,10 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 </script>
 </body></html>"""
 
-def shell(title, body, q="", scope="all", root=None):
+SCOPES = {"all": "전체", "human": "🧑 내 말만", "claude": "✦ Claude만", "chat": "대화만 (도구·시스템 제외)"}
+DAY_CHOICES = {"": "전체 기간", "7": "최근 7일", "30": "최근 30일", "90": "최근 90일"}
+
+def shell(title, body, q="", scope="all", root=None, days=""):
     root = root if root in ROOTS else ROOT
     multi = len(ROOTS) > 1
     home = ("/?root=" + urllib.parse.quote(root)) if multi else "/"
@@ -836,10 +899,13 @@ def shell(title, body, q="", scope="all", root=None):
                '<input name=path placeholder="새 폴더 추가 — 경로 붙여넣기 (…/.claude/projects)">'
                '<button>➕ 추가</button></form>')
     rootbar = f'<div class=rootbar><span class=lbl>📁 폴더:</span>{"".join(links)}{addform}</div>'
+    scopeopts = "".join(f'<option value="{k}"{" selected" if k == scope else ""}>{v}</option>'
+                        for k, v in SCOPES.items())
+    daysopts = "".join(f'<option value="{k}"{" selected" if k == days else ""}>{v}</option>'
+                       for k, v in DAY_CHOICES.items())
     return (SHELL.replace("%%TITLE%%", esc(title)).replace("%%BODY%%", body)
             .replace("%%Q%%", esc(q))
-            .replace("%%SA%%", " selected" if scope == "all" else "")
-            .replace("%%SH%%", " selected" if scope == "human" else "")
+            .replace("%%SCOPEOPTS%%", scopeopts).replace("%%DAYSOPTS%%", daysopts)
             .replace("%%HOMEHREF%%", home).replace("%%ROOTHIDDEN%%", hidden)
             .replace("%%ROOTBAR%%", rootbar))
 
@@ -882,10 +948,12 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/":
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
         if u.path == "/search":
-            return self._send(self.search(g("q"), g("scope", "all"), root))
+            return self._send(self.search(g("q"), g("scope", "all"), root,
+                                          g("days", ""), g("proj", "")))
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
-                                           gint("off"), g("lim", ""), g("thread", ""), g("view", "")))
+                                           gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
+                                           g("goto", "")))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot"):
@@ -1028,47 +1096,93 @@ class H(BaseHTTPRequestHandler):
         return shell("대화 뷰어", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
-    def search(self, q, scope, root=None):
+    def search(self, q, scope, root=None, days="", proj=""):
         root = root if root in ROOTS else ROOT
-        if not q.strip():
-            return shell("검색", "<p class=meta>검색어를 입력하세요. (<kbd>/</kbd> 로 검색창 포커스)</p>", q, scope, root)
-        human_only = scope == "human"
+        if scope not in SCOPES:
+            scope = "all"
+        if days not in DAY_CHOICES:
+            days = ""
+        terms = parse_query(q)
+        if not terms:
+            return shell("검색", '<p class=meta>검색어를 입력하세요. 여러 단어 = 모두 포함(AND), '
+                                 '"따옴표" = 정확한 구문. (<kbd>/</kbd> 로 검색창 포커스)</p>',
+                         q, scope, root, days)
+        t0 = time.perf_counter()
+        index = get_index(root)
         proj_cwd = {}
-        for it in get_index(root):
+        for it in index:
             if it["proj"] not in proj_cwd and it.get("cwd"):
                 proj_cwd[it["proj"]] = short_path(it["cwd"])
+        mtimes = {it["path"]: it["mtime"] for it in index}
+        titles = {it["path"]: it["title"] for it in index}
+        cutoff = (time.time() - int(days) * 86400) if days else None
+
+        ROLE_OK = {"all": None, "human": {"you"}, "claude": {"assistant"},
+                   "chat": {"you", "assistant"}}[scope]
         results = []
         for path in session_files(root):
-            hits, title = [], ""
-            for t in classify_turns(path):
-                role, segs = t["role"], t["segs"]
-                if role == "you" and not title:
-                    title = " ".join(x[1] for x in segs if x[0] == "text").strip()[:100]
-                if human_only and role != "you":
+            if cutoff and mtimes.get(path, 0) < cutoff:
+                continue
+            if proj and os.path.basename(os.path.dirname(path)) != proj:
+                continue
+            hits = []
+            for gi, role, txt in search_turns(path):
+                if ROLE_OK is not None and role not in ROLE_OK:
                     continue
-                txt = " ".join(x[1] for x in segs if x[0] in ("text", "tool_result", "thinking", "injected"))
-                if q.lower() in txt.lower():
-                    idx = txt.lower().find(q.lower())
-                    hits.append((role, txt[max(0, idx-55):idx+len(q)+90].replace("\n", " ")))
+                low = txt.lower()
+                if all(t in low for t in terms):
+                    idx = low.find(terms[0])
+                    snip = txt[max(0, idx - 55):idx + len(terms[0]) + 90].replace("\n", " ")
+                    hits.append((gi, role, snip))
             if hits:
-                results.append({"path": path, "title": title or "(제목 없음)",
-                                "proj": os.path.basename(os.path.dirname(path)), "n": len(hits), "hits": hits[:6]})
+                results.append({"path": path, "title": titles.get(path, "(제목 없음)"),
+                                "proj": os.path.basename(os.path.dirname(path)),
+                                "n": len(hits), "hits": hits[:6]})
         results.sort(key=lambda x: x["n"], reverse=True)
+        ms = int((time.perf_counter() - t0) * 1000)
+
+        def searchurl(**kw):
+            params = {"q": q, "scope": scope}
+            if days:
+                params["days"] = days
+            if len(ROOTS) > 1:
+                params["root"] = root
+            params.update({k: v for k, v in kw.items() if v})
+            return "/search?" + urllib.parse.urlencode(params)
+
+        # project filter chips over the matched set
+        projbar = ""
+        matched_projs = sorted({r["proj"] for r in results} | ({proj} if proj else set()),
+                               key=lambda p: proj_cwd.get(p, p).lower())
+        if matched_projs and (len(matched_projs) > 1 or proj):
+            chips = [f'<a class="{"on" if not proj else ""}" href="{searchurl()}">전체</a>']
+            for p in matched_projs:
+                chips.append(f'<a class="{"on" if p == proj else ""}" href="{searchurl(proj=p)}">'
+                             f'{esc(proj_cwd.get(p, p))}</a>')
+            projbar = '<div class=bar><span class=meta>프로젝트:</span>' + "".join(chips) + '</div>'
+
         rows = []
         for r in results:
-            link = ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(q)
-                    + ("&filter=human" if human_only else ""))
-            snips = "".join(f'<div class=snip><span class=chip>{ROLE_LABEL.get(role, role)}</span>{hl(s, q)}</div>'
-                            for role, s in r["hits"])
+            def jump(gi):
+                return ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(q)
+                        + f"&goto={gi}")
+            snips = "".join(
+                f'<div class=snip><a class=snipjump href="{jump(gi)}">'
+                f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, q)}</div>'
+                for gi, role, s in r["hits"])
             short = proj_cwd.get(r["proj"], r["proj"])
-            rows.append(f'<div class=card><a class=t href="{link}">{esc(r["title"])}</a> '
+            rows.append(f'<div class=card><a class=t href="{jump(r["hits"][0][0])}">{esc(r["title"])}</a> '
                         f'<span class=meta>({r["n"]}건)</span>'
                         f'<div class=meta><span class=chip>{esc(short)}</span></div>{snips}</div>')
-        head = f'<p class=meta>"{esc(q)}" — {len(results)}개 세션에서 매치{" · <b>내 말만</b> 범위" if human_only else ""} · 📁 {esc(short_path(root))}</p>'
-        return shell(f"검색: {q}", head + ("".join(rows) or "<p class=meta>결과 없음.</p>"), q, scope, root)
+        qdesc = " + ".join(f'"{t}"' if " " in t else t for t in terms)
+        head = (f'<p class=meta>{esc(qdesc)} — {len(results)}개 세션에서 매치 · {SCOPES[scope]}'
+                f'{" · " + DAY_CHOICES[days] if days else ""} · {ms}ms · 📁 {esc(short_path(root))}'
+                f' · <span class=hint>스니펫 클릭 = 그 위치로 점프</span></p>')
+        return shell(f"검색: {q}", head + projbar + ("".join(rows) or "<p class=meta>결과 없음.</p>"),
+                     q, scope, root, days)
 
     # ---- session ----
-    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view=""):
+    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
             return shell("?", "<p>세션을 찾을 수 없습니다.</p>")
@@ -1163,11 +1277,32 @@ class H(BaseHTTPRequestHandler):
         idxs = you_idx if filt == "human" else range(len(turns))
         view_turns = [(i, turns[i]) for i in idxs]
         total = len(view_turns)
+        # goto=<gi>: jump straight to that turn — flip to the page containing it
+        goto_gi = None
+        if goto != "":
+            try:
+                goto_gi = int(goto)
+            except ValueError:
+                goto_gi = None
+        if goto_gi is not None:
+            pos = next((k for k, (i, _) in enumerate(view_turns) if i == goto_gi), None)
+            if pos is None and filt == "human":       # match is a non-human turn
+                filt = "all"
+                view_turns = [(i, turns[i]) for i in range(len(turns))]
+                total = len(view_turns)
+                pos = goto_gi if goto_gi < total else None
+            if pos is not None and lim is not None:
+                off = (pos // lim) * lim
         page = view_turns if lim is None else view_turns[off:off + lim]
         body = []
         for gi, t in page:
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
             body.append(render_turn(gi, t, q, tl))
+        if goto_gi is not None:
+            body.append(
+                '<script>window.addEventListener("load",function(){'
+                f'var el=document.getElementById("t{goto_gi}");'
+                'if(el){el.classList.add("kfocus");el.scrollIntoView({block:"center"});}});</script>')
         ms = int((time.perf_counter() - t0) * 1000)
 
         n = meta["n"]
