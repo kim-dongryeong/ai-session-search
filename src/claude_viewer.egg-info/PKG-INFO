@@ -1,3 +1,13 @@
+Metadata-Version: 2.4
+Name: claude-viewer
+Version: 1.0.0
+Summary: Read-only local web viewer for Claude Code session transcripts (JSONL), with verified human-vs-machine message attribution
+Author-email: kdr <kdr@namouli.com>
+License: Proprietary
+Project-URL: Repository, https://github.com/kim-dongryeong/claude-viewer
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
 # claude-viewer
 
 A **read-only, stdlib-only** local web viewer for browsing **Claude Code** session
