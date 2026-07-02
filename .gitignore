@@ -7,3 +7,8 @@ __pycache__/
 # never commit actual transcripts or copied .claude data
 **/.claude/
 *.jsonl
+
+# build artifacts
+build/
+dist/
+*.egg-info/

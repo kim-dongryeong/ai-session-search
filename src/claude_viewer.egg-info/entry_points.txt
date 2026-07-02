@@ -1,2 +1,0 @@
-[console_scripts]
-claude-viewer = claude_viewer.app:main
