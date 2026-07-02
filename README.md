@@ -33,7 +33,24 @@ claude-viewer ~/Downloads/.claude/projects --port 8778 --open
 claude-viewer --version
 ```
 
-**macOS double-click:** `claude-viewer.command` (starts the server + opens the browser).
+**macOS app:** `./scripts/make-macos-app.sh` builds `dist/Claude Viewer.app` (icon in
+Dock/Finder, double-click, no lingering terminal); add `--dmg` for a draggable
+`dist/claude-viewer.dmg`. It doesn't bundle Python — it just launches the installed
+`claude-viewer`. Or use the plain `claude-viewer.command` (starts server + opens browser).
+
+### Which distribution form?
+
+| Form | Command | When |
+|---|---|---|
+| **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-viewer.git` | Any OS. One command, `pipx upgrade` to update. Target already has Python + git. |
+| **macOS .app / .dmg** | `./scripts/make-macos-app.sh --dmg` | Want a Dock icon + double-click on a Mac. Thin wrapper over the installed CLI. |
+| **`.command` double-click** | ship `claude-viewer.py` + `.command` | Zero-build, copy the folder. |
+
+A `.dmg` here is just the thin `.app` (≈90 KB) — it is **not** a self-contained binary,
+because every machine that has Claude Code transcripts already has Python. A full
+PyInstaller/py2app bundle (to run without Python) is intentionally avoided: it needs
+per-OS builds and macOS code-signing/notarization for a tool that only opens a local
+`127.0.0.1` page.
 
 Defaults: binds `127.0.0.1` only (never exposed to the network; `--host` warns if you
 change it), reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, and

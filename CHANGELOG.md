@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-07-03
+
+Search relevance + colors + custom dates; app icon & favicon; macOS app/dmg.
+
+- **Relevance ranking**: results are ordered by a score where whole-word matches
+  dominate substring pollution — a doc containing the literal word "oss" now ranks
+  above one that only has "ossean" (bonus when every term matches as a real word).
+  Substring-only matches are marked `≈ 부분일치`.
+- **Per-term highlight colors**: each query term gets its own color, with a color
+  key in the search header.
+- **Custom date range**: `from`/`to` date inputs (like a search engine's custom
+  range), alongside the 7/30/90일 presets; explicit dates override the preset.
+- **Snippets** now center on the whole-word match, not the first substring.
+- **Icon & favicon**: an SVG app icon (speech bubble + person = 🧑) served at
+  `/favicon.svg`; `assets/` ships PNG sizes + `icon.icns`.
+- **macOS app / dmg**: `scripts/make-macos-app.sh [--dmg]` builds a lightweight
+  `Claude Viewer.app` (no bundled Python — execs the installed `claude-viewer`) and
+  an optional `.dmg`.
+
 ## 1.1.0 — 2026-07-02
 
 Search overhaul.

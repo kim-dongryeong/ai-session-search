@@ -110,6 +110,23 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('document.getElementById("t1")', body)
 
+    def test_favicon(self):
+        status, body = self.get("/favicon.svg")
+        self.assertEqual(status, 200)
+        self.assertIn("<svg", body)
+
+    def test_search_multicolor_key(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("안녕 계획"))
+        self.assertEqual(status, 200)
+        self.assertIn('hlkey hl0', body)      # per-term color key in header
+        self.assertIn('hlkey hl1', body)
+
+    def test_search_custom_date_range_excludes_old(self):
+        # fixture session mtime is "now"; a past-only window must exclude it
+        status, body = self.get("/search?q=" + urllib.parse.quote("계획") + "&from=2000-01-01&to=2000-12-31")
+        self.assertEqual(status, 200)
+        self.assertIn("결과 없음", body)
+
     def test_code_view(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&view=code")
         self.assertEqual(status, 200)
