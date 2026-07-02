@@ -76,6 +76,40 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("결과 없음", body)                   # tool output is not "my words"
 
+    def test_search_multi_term_and(self):
+        # both words in the same turn → match
+        status, body = self.get("/search?q=" + urllib.parse.quote("안녕 계획"))
+        self.assertEqual(status, 200)
+        self.assertIn("1개 세션에서 매치", body)
+        # one word matches, the other doesn't → no result (AND semantics)
+        status, body = self.get("/search?q=" + urllib.parse.quote("안녕 없는단어졸라"))
+        self.assertEqual(status, 200)
+        self.assertIn("결과 없음", body)
+
+    def test_search_phrase(self):
+        # fixture text: "안녕 <b>계획</b> 알려줘" — exact contiguous phrase matches
+        status, body = self.get("/search?q=" + urllib.parse.quote('"<b>계획</b> 알려줘"'))
+        self.assertEqual(status, 200)
+        self.assertIn("1개 세션에서 매치", body)
+        status, body = self.get("/search?q=" + urllib.parse.quote('"알려줘 계획"'))  # wrong order
+        self.assertEqual(status, 200)
+        self.assertIn("결과 없음", body)
+
+    def test_search_scope_claude(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("커밋했습니다") + "&scope=claude")
+        self.assertEqual(status, 200)
+        self.assertIn("1개 세션에서 매치", body)
+
+    def test_search_result_links_carry_goto(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("계획"))
+        self.assertEqual(status, 200)
+        self.assertIn("&goto=", body)
+
+    def test_session_goto_scrolls_to_match(self):
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&goto=1")
+        self.assertEqual(status, 200)
+        self.assertIn('document.getElementById("t1")', body)
+
     def test_code_view(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&view=code")
         self.assertEqual(status, 200)
