@@ -33,7 +33,16 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
+
+# App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
+# One SVG, used as favicon and (rasterized by tooling) as the app icon.
+ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#1f6feb"/>
+<path d="M14 16h36a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30l-11 9v-9h-5a6 6 0 0 1-6-6V22a6 6 0 0 1 6-6z" fill="#fff"/>
+<circle cx="32" cy="29" r="6" fill="#1f6feb"/>
+<path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
+</svg>"""
 
 # ---- config -----------------------------------------------------------------
 DEFAULT_PORT = 8777
@@ -581,34 +590,51 @@ def parse_query(q):
             terms.append(t)
     return terms
 
+HL_COLORS = 6  # palette slots; term N uses color N % HL_COLORS
+
+def word_re(t):
+    """Whole-word matcher for a term/phrase (Unicode-aware boundaries)."""
+    return re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.I)
+
+def _date_ts(s, end=False):
+    """'YYYY-MM-DD' → local epoch seconds (end=True → next-day 00:00), else None."""
+    try:
+        d = datetime.date.fromisoformat((s or "").strip())
+    except (ValueError, TypeError):
+        return None
+    dt = datetime.datetime(d.year, d.month, d.day)
+    if end:
+        dt += datetime.timedelta(days=1)
+    return dt.timestamp()
+
 def hl(text, q):
-    """Highlight every occurrence of every query term (multi-term aware)."""
+    """Highlight every occurrence of every query term, each term its own color."""
     terms = parse_query(q)
     if not terms:
         return esc(text)
     low = text.lower()
-    spans = []
-    for t in terms:
+    spans = []  # (start, end, term_index)
+    for ti, t in enumerate(terms):
         i = 0
         while True:
             j = low.find(t, i)
             if j < 0:
                 break
-            spans.append((j, j + len(t)))
+            spans.append((j, j + len(t), ti))
             i = j + len(t)
     if not spans:
         return esc(text)
     spans.sort()
-    merged = [spans[0]]
-    for s, e in spans[1:]:
-        if s <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+    merged = [list(spans[0])]
+    for s, e, ti in spans[1:]:
+        if s <= merged[-1][1]:                       # overlap → extend, keep first color
+            merged[-1][1] = max(merged[-1][1], e)
         else:
-            merged.append((s, e))
+            merged.append([s, e, ti])
     out, i = [], 0
-    for s, e in merged:
+    for s, e, ti in merged:
         out.append(esc(text[i:s]))
-        out.append("<mark>" + esc(text[s:e]) + "</mark>")
+        out.append(f'<mark class="hl{ti % HL_COLORS}">{esc(text[s:e])}</mark>')
         i = e
     out.append(esc(text[i:]))
     return "".join(out)
@@ -672,6 +698,7 @@ def render_turn(gi, t, q="", thread_link=None):
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <title>%%TITLE%%</title>
 <style>
 :root{color-scheme:light dark}
@@ -760,7 +787,10 @@ code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
-mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px}
+mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:600}
+.hl0{background:#ffe27a}.hl1{background:#9ae6b4}.hl2{background:#9ecbff}
+.hl3{background:#fbb6ce}.hl4{background:#ffc38a}.hl5{background:#cbb2f7}
+.hlkey{display:inline-block;font-size:11px;padding:0 6px;border-radius:3px;color:#000;margin-right:5px;font-weight:600}
 .msg.kfocus{outline:3px solid #1f6feb;outline-offset:2px}
 .msg:target{outline:3px solid #f59e0b;outline-offset:2px}
 .pg{display:flex;gap:10px;justify-content:center;margin:18px 0}
@@ -789,7 +819,10 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   <form action="/search" role=search>
     <input type=search name=q id=qbox placeholder='검색: 단어들 = AND · "정확한 구문"  ( / 키 )' value="%%Q%%">
     <select name=scope title="검색 범위">%%SCOPEOPTS%%</select>
-    <select name=days title="기간">%%DAYSOPTS%%</select>
+    <select name=days title="빠른 기간 (직접 지정하려면 아래 날짜)">%%DAYSOPTS%%</select>
+    <input type=date name=from value="%%FROM%%" title="시작일 (직접 지정)">
+    <span style="color:#fff">~</span>
+    <input type=date name=to value="%%TO%%" title="종료일 (직접 지정)">
     %%ROOTHIDDEN%%
     <button>검색</button>
   </form>
@@ -883,7 +916,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 SCOPES = {"all": "전체", "human": "🧑 내 말만", "claude": "✦ Claude만", "chat": "대화만 (도구·시스템 제외)"}
 DAY_CHOICES = {"": "전체 기간", "7": "최근 7일", "30": "최근 30일", "90": "최근 90일"}
 
-def shell(title, body, q="", scope="all", root=None, days=""):
+def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
     root = root if root in ROOTS else ROOT
     multi = len(ROOTS) > 1
     home = ("/?root=" + urllib.parse.quote(root)) if multi else "/"
@@ -906,6 +939,7 @@ def shell(title, body, q="", scope="all", root=None, days=""):
     return (SHELL.replace("%%TITLE%%", esc(title)).replace("%%BODY%%", body)
             .replace("%%Q%%", esc(q))
             .replace("%%SCOPEOPTS%%", scopeopts).replace("%%DAYSOPTS%%", daysopts)
+            .replace("%%FROM%%", esc(from_)).replace("%%TO%%", esc(to))
             .replace("%%HOMEHREF%%", home).replace("%%ROOTHIDDEN%%", hidden)
             .replace("%%ROOTBAR%%", rootbar))
 
@@ -944,12 +978,20 @@ class H(BaseHTTPRequestHandler):
             except ValueError:
                 return d
 
+        if u.path in ("/favicon.svg", "/favicon.ico"):
+            b = ICON_SVG.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            return self.wfile.write(b)
         root = active_root(g("root"))
         if u.path == "/":
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
         if u.path == "/search":
             return self._send(self.search(g("q"), g("scope", "all"), root,
-                                          g("days", ""), g("proj", "")))
+                                          g("days", ""), g("proj", ""), g("from", ""), g("to", "")))
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
@@ -1096,7 +1138,7 @@ class H(BaseHTTPRequestHandler):
         return shell("대화 뷰어", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
-    def search(self, q, scope, root=None, days="", proj=""):
+    def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
         root = root if root in ROOTS else ROOT
         if scope not in SCOPES:
             scope = "all"
@@ -1105,8 +1147,9 @@ class H(BaseHTTPRequestHandler):
         terms = parse_query(q)
         if not terms:
             return shell("검색", '<p class=meta>검색어를 입력하세요. 여러 단어 = 모두 포함(AND), '
-                                 '"따옴표" = 정확한 구문. (<kbd>/</kbd> 로 검색창 포커스)</p>',
-                         q, scope, root, days)
+                                 '"따옴표" = 정확한 구문. 각 단어는 색으로 구분됩니다. '
+                                 '(<kbd>/</kbd> 로 검색창 포커스)</p>',
+                         q, scope, root, days, from_, to)
         t0 = time.perf_counter()
         index = get_index(root)
         proj_cwd = {}
@@ -1115,42 +1158,63 @@ class H(BaseHTTPRequestHandler):
                 proj_cwd[it["proj"]] = short_path(it["cwd"])
         mtimes = {it["path"]: it["mtime"] for it in index}
         titles = {it["path"]: it["title"] for it in index}
-        cutoff = (time.time() - int(days) * 86400) if days else None
 
+        # date window: explicit from/to overrides the preset days dropdown
+        lo = _date_ts(from_)
+        hi = _date_ts(to, end=True)
+        if lo is None and hi is None and days:
+            lo = time.time() - int(days) * 86400
+
+        wres = [word_re(t) for t in terms]
         ROLE_OK = {"all": None, "human": {"you"}, "claude": {"assistant"},
                    "chat": {"you", "assistant"}}[scope]
         results = []
         for path in session_files(root):
-            if cutoff and mtimes.get(path, 0) < cutoff:
+            mt = mtimes.get(path, 0)
+            if (lo is not None and mt < lo) or (hi is not None and mt >= hi):
                 continue
             if proj and os.path.basename(os.path.dirname(path)) != proj:
                 continue
-            hits = []
+            hits, ww = [], [0] * len(terms)
             for gi, role, txt in search_turns(path):
                 if ROLE_OK is not None and role not in ROLE_OK:
                     continue
                 low = txt.lower()
-                if all(t in low for t in terms):
-                    idx = low.find(terms[0])
-                    snip = txt[max(0, idx - 55):idx + len(terms[0]) + 90].replace("\n", " ")
-                    hits.append((gi, role, snip))
+                if not all(t in low for t in terms):    # AND: all terms in the same turn
+                    continue
+                pos, plen = None, len(terms[0])
+                for ti, t in enumerate(terms):
+                    m = wres[ti].search(txt)             # count + locate whole-word matches
+                    if m:
+                        ww[ti] += len(wres[ti].findall(txt))
+                        if pos is None:
+                            pos, plen = m.start(), len(t)
+                if pos is None:
+                    pos = low.find(terms[0])
+                snip = txt[max(0, pos - 55):pos + plen + 90].replace("\n", " ")
+                hits.append((gi, role, snip))
             if hits:
+                all_word = all(c > 0 for c in ww)
+                # relevance: exact whole-word matches dominate substring pollution;
+                # docs matching every term as a real word get the big bonus, so a
+                # doc with the literal word "oss" outranks one that only has "ossean".
+                score = (1000 if all_word else 0) + sum(10 * min(c, 5) for c in ww) + min(len(hits), 20) * 0.1
                 results.append({"path": path, "title": titles.get(path, "(제목 없음)"),
                                 "proj": os.path.basename(os.path.dirname(path)),
-                                "n": len(hits), "hits": hits[:6]})
-        results.sort(key=lambda x: x["n"], reverse=True)
+                                "n": len(hits), "score": score, "all_word": all_word, "hits": hits[:6]})
+        results.sort(key=lambda x: (x["score"], x["n"]), reverse=True)
         ms = int((time.perf_counter() - t0) * 1000)
 
         def searchurl(**kw):
             params = {"q": q, "scope": scope}
-            if days:
-                params["days"] = days
+            for k, v in (("days", days), ("from", from_), ("to", to)):
+                if v:
+                    params[k] = v
             if len(ROOTS) > 1:
                 params["root"] = root
             params.update({k: v for k, v in kw.items() if v})
             return "/search?" + urllib.parse.urlencode(params)
 
-        # project filter chips over the matched set
         projbar = ""
         matched_projs = sorted({r["proj"] for r in results} | ({proj} if proj else set()),
                                key=lambda p: proj_cwd.get(p, p).lower())
@@ -1166,20 +1230,24 @@ class H(BaseHTTPRequestHandler):
             def jump(gi):
                 return ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(q)
                         + f"&goto={gi}")
+            exact = "" if r["all_word"] else ' <span class=hint title="일부 단어가 부분일치(다른 단어의 조각)로만 매치됨">≈ 부분일치</span>'
             snips = "".join(
                 f'<div class=snip><a class=snipjump href="{jump(gi)}">'
                 f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, q)}</div>'
                 for gi, role, s in r["hits"])
             short = proj_cwd.get(r["proj"], r["proj"])
             rows.append(f'<div class=card><a class=t href="{jump(r["hits"][0][0])}">{esc(r["title"])}</a> '
-                        f'<span class=meta>({r["n"]}건)</span>'
+                        f'<span class=meta>({r["n"]}건)</span>{exact}'
                         f'<div class=meta><span class=chip>{esc(short)}</span></div>{snips}</div>')
-        qdesc = " + ".join(f'"{t}"' if " " in t else t for t in terms)
-        head = (f'<p class=meta>{esc(qdesc)} — {len(results)}개 세션에서 매치 · {SCOPES[scope]}'
-                f'{" · " + DAY_CHOICES[days] if days else ""} · {ms}ms · 📁 {esc(short_path(root))}'
-                f' · <span class=hint>스니펫 클릭 = 그 위치로 점프</span></p>')
+
+        # color key: which color = which term
+        keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(terms))
+        when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
+                (" · " + DAY_CHOICES[days] if days else ""))
+        head = (f'<p class=meta>{keys} — {len(results)}개 세션에서 매치 (관련도순) · {SCOPES[scope]}{when} · {ms}ms · '
+                f'📁 {esc(short_path(root))} · <span class=hint>스니펫 클릭 = 그 위치로 점프</span></p>')
         return shell(f"검색: {q}", head + projbar + ("".join(rows) or "<p class=meta>결과 없음.</p>"),
-                     q, scope, root, days)
+                     q, scope, root, days, from_, to)
 
     # ---- session ----
     def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto=""):

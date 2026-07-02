@@ -221,13 +221,25 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
         self.assertEqual(app.parse_query("  "), [])
 
-    def test_hl_multi_term(self):
+    def test_hl_multi_color(self):
         out = app.hl("foo and bar", "foo bar")
-        self.assertIn("<mark>foo</mark>", out)
-        self.assertIn("<mark>bar</mark>", out)
+        self.assertIn('<mark class="hl0">foo</mark>', out)   # term 0 → color 0
+        self.assertIn('<mark class="hl1">bar</mark>', out)   # term 1 → color 1
         # overlapping terms merge instead of double-wrapping
         out = app.hl("abcd", "abc bcd")
-        self.assertEqual(out, "<mark>abcd</mark>")
+        self.assertEqual(out, '<mark class="hl0">abcd</mark>')
+
+    def test_word_re(self):
+        self.assertTrue(app.word_re("oss").search("this is OSS software"))
+        self.assertIsNone(app.word_re("oss").search("OSSEAN ossea"))   # substring only → no whole-word match
+        self.assertTrue(app.word_re("open source").search("free/open source stuff"))
+
+    def test_date_ts(self):
+        self.assertIsNone(app._date_ts(""))
+        self.assertIsNone(app._date_ts("not-a-date"))
+        a = app._date_ts("2026-07-01")
+        b = app._date_ts("2026-07-01", end=True)
+        self.assertAlmostEqual(b - a, 86400, delta=3700)   # ~1 day (DST tolerance)
 
 
 if __name__ == "__main__":
