@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-viewer"
+description = "Read-only local web viewer for Claude Code session transcripts (JSONL), with verified human-vs-machine message attribution"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "kdr", email = "kdr@namouli.com" }]
+dynamic = ["version"]
+dependencies = []  # stdlib only, by design
+
+[project.scripts]
+claude-viewer = "claude_viewer.app:main"
+
+[project.urls]
+Repository = "https://github.com/kim-dongryeong/claude-viewer"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["claude_viewer"]
+
+[tool.setuptools.dynamic]
+version = { attr = "claude_viewer.app.__version__" }
