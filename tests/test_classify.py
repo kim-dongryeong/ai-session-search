@@ -342,6 +342,31 @@ class ToolRender(unittest.TestCase):
         h = app.tool_use_html("Weird\nnot json {")
         self.assertIn("not json", h)
 
+    def _turn(self, role, segs):
+        return {"role": role, "segs": segs, "ts": "", "tags": set()}
+
+    def test_bash_call_and_result_open_by_default(self):
+        use = app.render_turn(0, self._turn("assistant", [("tool_use", 'Bash\n{"command":"ls"}')]))
+        self.assertIn('<details class="fold" open>', use)
+        res = app.render_turn(1, self._turn("tool-result", [("tool_result", '{"stdout":"x","stderr":""}')]))
+        self.assertIn('<details class="fold" open>', res)
+        self.assertIn("실행 결과", res)
+
+    def test_edit_call_opens_but_edit_result_stays_folded(self):
+        use = app.render_turn(0, self._turn("assistant",
+            [("tool_use", 'Edit\n{"file_path":"/a.py","old_string":"a\\nb","new_string":"a\\nc"}')]))
+        self.assertIn('<details class="fold" open>', use)     # the diff opens
+        result_json = json.dumps({"filePath": "/a.py", "structuredPatch": [
+            {"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2, "lines": [" a", "-b", "+c"]}]})
+        res = app.render_turn(1, self._turn("tool-result", [("tool_result", result_json)]))
+        self.assertNotIn(' open>', res)                       # paired result folded
+        self.assertIn("편집 결과", res)
+
+    def test_thinking_stays_folded(self):
+        h = app.render_turn(0, self._turn("assistant", [("thinking", "some reasoning")]))
+        self.assertIn("<details class=fold>", h)
+        self.assertNotIn(" open>", h)
+
 
 if __name__ == "__main__":
     unittest.main()

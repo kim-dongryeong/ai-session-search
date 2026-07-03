@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -1064,6 +1064,25 @@ def tool_result_html(txt):
             return _dict_result_html(data)
     return _tk_pre(txt)
 
+# Tool calls worth showing expanded by default (compact & informative: the command,
+# the diff, the file, the pattern). Everything else stays folded.
+AUTO_OPEN_USE = set(EDIT_TOOLS) | {"Bash", "Read", "Grep", "Glob"}
+
+def _result_kind(txt):
+    """Classify a tool result so the view can decide what to expand by default.
+    'edit' results are folded (the paired Edit call above already shows the diff)."""
+    if txt.lstrip()[:1] in ("{", "["):
+        try:
+            d = json.loads(txt)
+        except Exception:
+            d = None
+        if isinstance(d, dict):
+            if "stdout" in d or "stderr" in d:
+                return "bash"
+            if "structuredPatch" in d or ("oldString" in d and "newString" in d) or "filePath" in d:
+                return "edit"
+    return "other"
+
 def render_turn(gi, t, q="", thread_link=None):
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
     parts = []
@@ -1078,9 +1097,17 @@ def render_turn(gi, t, q="", thread_link=None):
         elif kind == "tool_use":
             name, prev = _tool_use_summary(txt)
             sm = f"🔧 <b>{esc(name)}</b>" + (f' <span class="tk-sum">{esc(prev)}</span>' if prev else "")
-            parts.append(f'<details class=fold><summary>{sm}</summary><div class="tk-body">{tool_use_html(txt)}</div></details>')
+            op = " open" if name in AUTO_OPEN_USE else ""
+            parts.append(f'<details class="fold"{op}><summary>{sm}</summary><div class="tk-body">{tool_use_html(txt)}</div></details>')
         elif kind == "tool_result":
-            parts.append(f'<details class=fold><summary>⚙ 도구 결과 ({len(txt)}자)</summary>'
+            rk = _result_kind(txt)
+            if rk == "bash":
+                lbl, op = "⚙ 실행 결과", " open"
+            elif rk == "edit":
+                lbl, op = "⚙ 편집 결과 <span class=tk-sum>· 위 편집과 동일 — 펼치면 diff</span>", ""
+            else:
+                lbl, op = f"⚙ 도구 결과 ({len(txt)}자)", (" open" if len(txt) < 1200 else "")
+            parts.append(f'<details class="fold"{op}><summary>{lbl}</summary>'
                          f'<div class="tk-body">{tool_result_html(txt)}</div></details>')
         elif kind == "injected":
             tt = txt if len(txt) < 4000 else txt[:4000] + "\n… (생략)"
