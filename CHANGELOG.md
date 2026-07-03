@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.2 — 2026-07-03
+
+- **Useful tool blocks are expanded by default** — the view now reads like the live
+  conversation instead of a wall of folds. `Bash`/`Edit`/`Write`/`Read`/`Grep`/`Glob`
+  calls and **Bash results** open on load; short generic results (<1200 chars) too.
+  Because an `Edit` call and its result are near-identical, only the **call** (the
+  diff) opens — the paired result stays folded, labelled *"위 편집과 동일 — 펼치면
+  diff"*. Long file reads and 추론/시스템·주입 blocks stay folded. Every block is still
+  height-capped with internal scroll, so nothing blows up the page.
+
 ## 1.4.1 — 2026-07-03
 
 - **Edit/Write results render as a GitHub-style diff** instead of a raw JSON blob.
