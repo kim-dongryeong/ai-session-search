@@ -70,6 +70,14 @@ it never writes to your transcripts.
 - **Correct attribution** — 🧑 나 / ✦ Claude / 💭 추론 / 🔧 도구 호출 / ⚙ 도구 결과 /
   ⓘ 시스템·주입 / 📋 지시 / 🤖 서브에이전트; tooltips + an in-app legend (❓) explain
   each; technical blocks folded by default.
+- **Markdown rendering** — message text renders as Markdown: GFM tables (with
+  alignment), fenced/inline code, headings, nested lists, blockquotes, bold/italic,
+  clickable links. Dependency-free renderer; raw HTML is always escaped (never
+  executed); `snake_case` survives; search highlighting stays inside text nodes.
+- **Pretty tool blocks** — `🔧 Bash` shows the command in a shell block + its
+  description; `Edit` shows a red/green old→new diff; `Read`/`Grep`/`Write` show the
+  file/pattern; a tool result splits `stdout`/`stderr` (stderr in red) instead of raw
+  JSON. Each fold summary previews the command/file so you can scan without expanding.
 - **Index** — real titles (`ai-title`/`custom-title`), project filter (by real `cwd`),
   sort by 날짜/내 메시지/제목/용량 with direction toggle, per-session counts,
   **session-id** per row, **🔁 자율 빌드루프 chips** for autonomous-loop sessions.
@@ -97,7 +105,7 @@ it never writes to your transcripts.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 49 tests: attribution + HTTP smoke
+python3 -m unittest discover -s tests -v   # 62 tests: attribution + markdown/tools + HTTP smoke
 ```
 
 CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package

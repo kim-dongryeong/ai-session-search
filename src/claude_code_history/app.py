@@ -33,7 +33,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -639,6 +639,228 @@ def hl(text, q):
     out.append(esc(text[i:]))
     return "".join(out)
 
+def hl_html(html_str, q):
+    """Highlight query terms inside already-rendered HTML, touching text nodes only
+    (never tag names or attribute values)."""
+    terms = parse_query(q)
+    if not terms:
+        return html_str
+    parts = re.split(r"(<[^>]+>)", html_str)   # even idx = text, odd = tags
+    for k in range(0, len(parts), 2):
+        parts[k] = _hl_frag(parts[k], terms)
+    return "".join(parts)
+
+def _hl_frag(text, terms):
+    """Highlight terms in an ALREADY-escaped text fragment (no re-escaping)."""
+    if not text:
+        return text
+    low = text.lower()
+    spans = []
+    for ti, t in enumerate(terms):
+        i = 0
+        while True:
+            j = low.find(t, i)
+            if j < 0:
+                break
+            spans.append((j, j + len(t), ti))
+            i = j + len(t)
+    if not spans:
+        return text
+    spans.sort()
+    merged = [list(spans[0])]
+    for s, e, ti in spans[1:]:
+        if s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e, ti])
+    res, i = [], 0
+    for s, e, ti in merged:
+        res.append(text[i:s])
+        res.append(f'<mark class="hl{ti % HL_COLORS}">{text[s:e]}</mark>')
+        i = e
+    res.append(text[i:])
+    return "".join(res)
+
+# ---- minimal, safe Markdown → HTML (stdlib only, by design) -----------------
+# Everything is html.escape()'d BEFORE any markdown transform, so raw HTML in a
+# transcript is neutralised (shown as text) and the syntax chars (* _ ` # | - [ ])
+# survive escaping untouched.
+_MD_FENCE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_MD_HEAD_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+_MD_HR_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
+_MD_LIST_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
+_MD_DELIM_RE = re.compile(r"^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$")
+
+def _md_cells(line):
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", s)]
+
+def _md_aligns(delim):
+    out = []
+    for c in _md_cells(delim):
+        left, right = c.startswith(":"), c.endswith(":")
+        out.append("center" if left and right else "right" if right else "left" if left else "")
+    return out
+
+def _md_table(header, delim, rows):
+    aligns = _md_aligns(delim)
+    hcells = _md_cells(header)
+    ncol = len(hcells)
+    def sty(i):
+        a = aligns[i] if i < len(aligns) else ""
+        return f' style="text-align:{a}"' if a else ""
+    thead = "".join(f"<th{sty(i)}>{md_inline(esc(c))}</th>" for i, c in enumerate(hcells))
+    body = []
+    for r in rows:
+        cells = _md_cells(r)
+        cells += [""] * (ncol - len(cells))
+        tds = "".join(f"<td{sty(i)}>{md_inline(esc(cells[i]))}</td>" for i in range(ncol))
+        body.append(f"<tr>{tds}</tr>")
+    return (f'<div class="md-tablewrap"><table class="md-table"><thead><tr>{thead}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>')
+
+def md_inline(s):
+    """Inline markdown on an ALREADY-escaped string. Underscore emphasis is
+    word-boundary-gated so snake_case identifiers survive."""
+    if not s:
+        return s
+    stash = []
+    def keep(html_):
+        stash.append(html_)
+        return f"\x00{len(stash) - 1}\x01"
+    s = re.sub(r"`([^`]+)`", lambda m: keep(f'<code class="md-ic">{m.group(1)}</code>'), s)
+    def _lnk(m):
+        text, url = m.group(1), m.group(2)
+        low = url.lower()
+        if low.startswith(("http://", "https://", "mailto:")) or url[:1] in ("/", "#", "."):
+            return keep(f'<a href="{url}" target="_blank" rel="noopener noreferrer">{text}</a>')
+        return m.group(0)
+    s = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _lnk, s)
+    s = re.sub(r"(?<![\"=/\w])(https?://[^\s<>()]+[^\s<>().,;:!?])",
+               lambda m: keep(f'<a href="{m.group(1)}" target="_blank" rel="noopener noreferrer">{m.group(1)}</a>'), s)
+    s = re.sub(r"\*\*(\S(?:.*?\S)?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"(?<!\w)__(\S(?:.*?\S)?)__(?!\w)", r"<strong>\1</strong>", s)
+    s = re.sub(r"~~(\S(?:.*?\S)?)~~", r"<del>\1</del>", s)
+    s = re.sub(r"(?<!\*)\*(?!\s)([^*\n]+?)\*(?!\*)", r"<em>\1</em>", s)
+    s = re.sub(r"(?<!\w)_(?!\s)([^_\n]+?)_(?!\w)", r"<em>\1</em>", s)
+    return re.sub(r"\x00(\d+)\x01", lambda m: stash[int(m.group(1))], s)
+
+def _md_is_block(lines, i):
+    line = lines[i]
+    ls = line.lstrip()
+    if _MD_FENCE_RE.match(ls) or _MD_HEAD_RE.match(line.strip()) or _MD_HR_RE.match(line):
+        return True
+    if ls.startswith(">") or _MD_LIST_RE.match(line):
+        return True
+    if "|" in line and i + 1 < len(lines) and _MD_DELIM_RE.match(lines[i + 1]):
+        return True
+    return False
+
+def _md_list(block):
+    items = []
+    for ln in block:
+        m = _MD_LIST_RE.match(ln)
+        if m:
+            indent = len(m.group(1).replace("\t", "  "))
+            ordered = m.group(2)[0] not in "-*+"
+            items.append({"indent": indent, "ordered": ordered, "text": m.group(3), "children": []})
+        elif items:
+            items[-1]["text"] += "\n" + ln.strip()
+    root = []
+    stack = [(-1, root)]
+    for it in items:
+        while len(stack) > 1 and it["indent"] <= stack[-1][0]:
+            stack.pop()
+        stack[-1][1].append(it)
+        stack.append((it["indent"], it["children"]))
+    def render(nodes):
+        if not nodes:
+            return ""
+        tag = "ol" if nodes[0]["ordered"] else "ul"
+        lis = []
+        for nd in nodes:
+            inner = "<br>".join(md_inline(esc(x)) for x in nd["text"].split("\n"))
+            lis.append(f'<li>{inner}{render(nd["children"])}</li>')
+        return f'<{tag} class="md-list">{"".join(lis)}</{tag}>'
+    return render(root)
+
+def md_to_html(text):
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    n = len(lines)
+    out, i = [], 0
+    while i < n:
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        m = _MD_FENCE_RE.match(line.lstrip())
+        if m:                                        # fenced code
+            fence = m.group(1)[0] * 3
+            langtok = m.group(2).strip().split()
+            lang = langtok[0] if langtok else ""
+            body = []
+            i += 1
+            while i < n and not lines[i].lstrip().startswith(fence):
+                body.append(lines[i])
+                i += 1
+            i += 1
+            head = f'<div class="md-clang">{esc(lang)}</div>' if lang else ""
+            out.append(f'<div class="md-codewrap">{head}'
+                       f'<pre class="md-code"><code>{esc(chr(10).join(body))}</code></pre></div>')
+            continue
+        if "|" in line and i + 1 < n and _MD_DELIM_RE.match(lines[i + 1]):   # table
+            header, delim = line, lines[i + 1]
+            i += 2
+            rows = []
+            while i < n and lines[i].strip() and "|" in lines[i] and not _MD_FENCE_RE.match(lines[i].lstrip()):
+                rows.append(lines[i])
+                i += 1
+            out.append(_md_table(header, delim, rows))
+            continue
+        m = _MD_HEAD_RE.match(line.strip())
+        if m:                                        # heading
+            lvl = len(m.group(1))
+            out.append(f'<div class="md-h md-h{lvl}">{md_inline(esc(m.group(2).strip().rstrip("#").strip()))}</div>')
+            i += 1
+            continue
+        if _MD_HR_RE.match(line):                     # horizontal rule
+            out.append('<hr class="md-hr">')
+            i += 1
+            continue
+        if line.lstrip().startswith(">"):             # blockquote
+            bq = []
+            while i < n and lines[i].lstrip().startswith(">"):
+                bq.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            out.append(f'<blockquote class="md-bq">{md_to_html(chr(10).join(bq))}</blockquote>')
+            continue
+        if _MD_LIST_RE.match(line):                   # list
+            block = []
+            while i < n and lines[i].strip() and (_MD_LIST_RE.match(lines[i]) or lines[i][:1] in (" ", "\t")):
+                block.append(lines[i])
+                i += 1
+            out.append(_md_list(block))
+            continue
+        para = []                                     # paragraph
+        while i < n and lines[i].strip() and not _md_is_block(lines, i):
+            para.append(lines[i])
+            i += 1
+        out.append('<p class="md-p">' + "<br>".join(md_inline(esc(p)) for p in para) + "</p>")
+    return "".join(out)
+
+def md_html(text, q=""):
+    """Render markdown safely; on any failure fall back to escaped+highlighted text."""
+    try:
+        h = md_to_html(text)
+        return hl_html(h, q) if q else h
+    except Exception:
+        return hl(text, q)
+
 ROLE_LABEL = {"you": "🧑 나", "assistant": "✦ Claude", "tool-result": "⚙ 도구 결과",
               "system": "ⓘ 시스템·주입", "subagent": "🤖 서브에이전트",
               "orchestrator": "📋 지시 → 서브에이전트"}
@@ -666,22 +888,140 @@ def legend_html(open_=False):
             f'<div style="margin-top:8px">{body}</div></details>')
 TAG_BADGE = {"error": "⚠️", "edit": "✏️", "command": "❯", "commit": "⎇", "test": "🧪", "url": "🔗", "web": "🌐"}
 
+# ---- tool-call & tool-result pretty rendering -------------------------------
+def _split_tool(txt):
+    """'Name\\n{json}' → (name, parsed_input_or_None, raw_rest)."""
+    name, _, rest = txt.partition("\n")
+    try:
+        return name.strip(), json.loads(rest), rest
+    except Exception:
+        return name.strip(), None, rest
+
+def _tk_pre(s, cls="tk-out", cap=8000):
+    s = str(s)
+    s = s if len(s) <= cap else s[:cap] + "\n… (생략)"
+    return f'<pre class="{cls}">{esc(s)}</pre>'
+
+def _tool_use_summary(txt):
+    name, inp, _ = _split_tool(txt)
+    prev = ""
+    if isinstance(inp, dict):
+        if name == "Bash":
+            prev = inp.get("command", "")
+        elif name in EDIT_TOOLS:
+            fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
+            prev = short_path(fp) if fp else ""
+        elif name == "Read":
+            fp = inp.get("file_path") or inp.get("path") or ""
+            prev = short_path(fp) if fp else ""
+        elif name in ("Grep", "Glob"):
+            prev = inp.get("pattern", inp.get("query", ""))
+        else:
+            prev = inp.get("description", "") or inp.get("prompt", "")
+    prev = " ".join(str(prev).split())
+    return name, (prev[:72] + "…") if len(prev) > 72 else prev
+
+def tool_use_html(txt):
+    name, inp, raw = _split_tool(txt)
+    if not isinstance(inp, dict):
+        return _tk_pre(raw)
+    rows = []
+    if name == "Bash":
+        rows.append(_tk_pre(inp.get("command", ""), "tk-cmd"))
+        meta = []
+        if inp.get("run_in_background"):
+            meta.append("백그라운드")
+        if inp.get("timeout"):
+            meta.append(f'timeout {inp["timeout"]}ms')
+        if meta:
+            rows.append(f'<div class="tk-meta">{esc(" · ".join(meta))}</div>')
+        if inp.get("description"):
+            rows.append(f'<div class="tk-desc">{esc(inp["description"])}</div>')
+    elif name in EDIT_TOOLS:
+        fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
+        if fp:
+            rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
+        if inp.get("old_string") is not None and inp.get("new_string") is not None:
+            rows.append(_tk_pre(inp["old_string"], "tk-out tk-del", 4000))
+            rows.append(_tk_pre(inp["new_string"], "tk-out tk-add", 4000))
+        elif "content" in inp:
+            rows.append(_tk_pre(inp.get("content", ""), "tk-out tk-add"))
+        elif "new_string" in inp:
+            rows.append(_tk_pre(inp.get("new_string", ""), "tk-out tk-add"))
+    elif name == "Read":
+        fp = inp.get("file_path") or inp.get("path") or ""
+        extra = [f"{k} {inp[k]}" for k in ("offset", "limit") if inp.get(k)]
+        rows.append(f'<div class="tk-file">📄 {esc(fp)}'
+                    + (f' <span class="tk-meta">· {esc(" · ".join(extra))}</span>' if extra else "") + "</div>")
+    elif name in ("Grep", "Glob"):
+        rows.append(_tk_pre(inp.get("pattern", inp.get("query", "")), "tk-cmd"))
+        if inp.get("path"):
+            rows.append(f'<div class="tk-meta">경로: {esc(inp["path"])}</div>')
+    else:
+        for k, v in inp.items():
+            if isinstance(v, str) and ("\n" in v or len(v) > 80):
+                rows.append(f'<div class="tk-lbl">{esc(k)}</div>{_tk_pre(v)}')
+            else:
+                vs = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+                rows.append(f'<div class="tk-kv"><span class="tk-k">{esc(k)}</span> {esc(vs)}</div>')
+    return "".join(rows) or _tk_pre(raw, cap=4000)
+
+def _dict_result_html(d):
+    if "stdout" in d or "stderr" in d:
+        rows = []
+        stdout, stderr = d.get("stdout"), d.get("stderr")
+        if stdout:
+            rows.append(_tk_pre(stdout))
+        elif not (stderr and str(stderr).strip()):
+            rows.append('<div class="tk-meta">(출력 없음)</div>')
+        if stderr and str(stderr).strip():
+            rows.append(f'<div class="tk-lbl">stderr</div>{_tk_pre(stderr, "tk-out tk-err")}')
+        meta = []
+        if d.get("interrupted"):
+            meta.append("⚠️ 중단됨")
+        ec = d.get("exit_code", d.get("exitCode"))
+        if isinstance(ec, int) and ec != 0:
+            meta.append(f"exit {ec}")
+        if meta:
+            rows.append(f'<div class="tk-meta">{esc(" · ".join(meta))}</div>')
+        return "".join(rows)
+    for key in ("content", "text", "result", "output", "stdout"):
+        v = d.get(key)
+        if isinstance(v, str) and v.strip():
+            return _tk_pre(v)
+    f = d.get("file")
+    if isinstance(f, dict) and isinstance(f.get("content"), str):
+        return (f'<div class="tk-file">📄 {esc(str(f.get("filePath", "")))}</div>' + _tk_pre(f["content"]))
+    return _tk_pre(json.dumps(d, ensure_ascii=False, indent=2))
+
+def tool_result_html(txt):
+    if txt.lstrip()[:1] in ("{", "["):
+        try:
+            data = json.loads(txt)
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            return _dict_result_html(data)
+    return _tk_pre(txt)
+
 def render_turn(gi, t, q="", thread_link=None):
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
     parts = []
     for kind, txt in segs:
         if kind == "text":
-            parts.append(f'<div class=seg>{hl(txt, q)}</div>')
+            parts.append(f'<div class="seg md">{md_html(txt, q)}</div>')
         elif kind == "thinking":
             if (txt or "").strip():
-                parts.append(f'<details class=fold><summary>💭 추론 과정</summary><div class="seg mono">{esc(txt)}</div></details>')
+                parts.append(f'<details class=fold><summary>💭 추론 과정</summary><div class="seg md">{md_html(txt, q)}</div></details>')
             else:
                 parts.append('<div class="seg muted">💭 (추론 비공개)</div>')
         elif kind == "tool_use":
-            parts.append(f'<details class=fold><summary>🔧 도구 호출</summary><div class="seg mono">{esc(txt[:6000])}</div></details>')
+            name, prev = _tool_use_summary(txt)
+            sm = f"🔧 <b>{esc(name)}</b>" + (f' <span class="tk-sum">{esc(prev)}</span>' if prev else "")
+            parts.append(f'<details class=fold><summary>{sm}</summary><div class="tk-body">{tool_use_html(txt)}</div></details>')
         elif kind == "tool_result":
-            tt = txt if len(txt) < 6000 else txt[:6000] + "\n… (생략)"
-            parts.append(f'<details class=fold><summary>⚙ 도구 결과 ({len(txt)}자)</summary><div class="seg mono">{esc(tt)}</div></details>')
+            parts.append(f'<details class=fold><summary>⚙ 도구 결과 ({len(txt)}자)</summary>'
+                         f'<div class="tk-body">{tool_result_html(txt)}</div></details>')
         elif kind == "injected":
             tt = txt if len(txt) < 4000 else txt[:4000] + "\n… (생략)"
             parts.append(f'<details class=fold><summary>주입된 컨텍스트 보기</summary><div class="seg mono">{esc(tt)}</div></details>')
@@ -789,6 +1129,61 @@ code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 .seg.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#555;max-height:340px;overflow:auto;background:#fafbfc}
 @media(prefers-color-scheme:dark){.seg.mono{color:#9aa0a8;background:#15171c}}
 .muted{color:#9aa0a8;font-style:italic}
+/* rendered markdown */
+.seg.md{white-space:normal;word-break:break-word}
+.md>*:first-child{margin-top:0}.md>*:last-child{margin-bottom:0}
+.md-p{margin:8px 0}
+.md-h{font-weight:700;margin:14px 0 6px;line-height:1.3}
+.md-h1{font-size:1.35em}.md-h2{font-size:1.22em}.md-h3{font-size:1.1em}
+.md-h4,.md-h5,.md-h6{font-size:1em;color:#555}
+@media(prefers-color-scheme:dark){.md-h4,.md-h5,.md-h6{color:#aeb4bd}}
+.md-list{margin:6px 0;padding-left:24px}
+.md-list li{margin:2px 0}
+.md-list .md-list{margin:2px 0}
+.md-bq{margin:8px 0;padding:2px 12px;border-left:3px solid #cbd2da;color:#555}
+@media(prefers-color-scheme:dark){.md-bq{border-color:#3a3f47;color:#9aa0a8}}
+.md-hr{border:0;border-top:1px solid #e0e3e7;margin:12px 0}
+.md-ic{background:#eef1f4;border-radius:4px;padding:.5px 5px;font-family:ui-monospace,Menlo,monospace;font-size:.9em}
+@media(prefers-color-scheme:dark){.md-ic{background:#2a2e35}}
+.md a{color:#1f6feb}
+.md-codewrap{margin:8px 0;border:1px solid #e4e7eb;border-radius:8px;overflow:hidden}
+@media(prefers-color-scheme:dark){.md-codewrap{border-color:#2a2e35}}
+.md-clang{font:11px/1 ui-monospace,Menlo,monospace;color:#8a8f98;padding:6px 10px;background:#f0f1f3;border-bottom:1px solid #e4e7eb}
+@media(prefers-color-scheme:dark){.md-clang{background:#23262d;border-color:#2a2e35}}
+pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:#fafbfc;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;line-height:1.5}
+@media(prefers-color-scheme:dark){pre.md-code{background:#15171c}}
+.md-tablewrap{overflow-x:auto;margin:9px 0}
+table.md-table{border-collapse:collapse;font-size:13px}
+table.md-table th,table.md-table td{border:1px solid #dfe3e8;padding:5px 11px;text-align:left;vertical-align:top}
+table.md-table thead th{background:#f0f3f7;font-weight:650;white-space:nowrap}
+table.md-table tbody tr:nth-child(even){background:#fafbfc}
+@media(prefers-color-scheme:dark){
+ table.md-table th,table.md-table td{border-color:#2a2e35}
+ table.md-table thead th{background:#23262d}
+ table.md-table tbody tr:nth-child(even){background:#191c22}}
+/* tool call / tool result */
+.tk-body{padding:8px 14px;background:#fafbfc}
+@media(prefers-color-scheme:dark){.tk-body{background:#15171c}}
+.tk-sum{color:#8a8f98;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;margin-left:4px}
+pre.tk-cmd,pre.tk-out{margin:5px 0;padding:9px 12px;border-radius:7px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:360px;line-height:1.5}
+pre.tk-cmd{background:#0d1117;color:#e6edf3;border:1px solid #23272e}
+pre.tk-cmd::before{content:"$ ";color:#7ee787}
+pre.tk-out{background:#fff;color:#333;border:1px solid #e4e7eb}
+@media(prefers-color-scheme:dark){pre.tk-out{background:#1b1e24;color:#cfd4db;border-color:#2a2e35}}
+pre.tk-err{background:#fff5f5;color:#9b2c2c;border-color:#e5a0a3}
+@media(prefers-color-scheme:dark){pre.tk-err{background:#2a1a1a;color:#f0a0a0;border-color:#5c2a2a}}
+pre.tk-del{background:#fff0f0;color:#86181d;border-color:#f1b0b7}
+pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
+@media(prefers-color-scheme:dark){
+ pre.tk-del{background:#2a1416;color:#f0a8ac;border-color:#5c2a2e}
+ pre.tk-add{background:#12261a;color:#8ddfa3;border-color:#2c5c3a}}
+.tk-desc{color:#8a8f98;font-style:italic;font-size:12px;margin:3px 0 2px}
+.tk-meta{color:#8a8f98;font-size:11.5px;margin:3px 0}
+.tk-file{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#1f6feb;margin:2px 0 4px;word-break:break-all}
+.tk-lbl{font-size:11px;color:#8a8f98;margin:6px 0 1px;text-transform:uppercase;letter-spacing:.03em}
+.tk-kv{font-size:12.5px;margin:2px 0}
+.tk-k{font-family:ui-monospace,Menlo,monospace;color:#6b3fb5;font-size:11.5px}
+@media(prefers-color-scheme:dark){.tk-k{color:#c2a8f0}}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
