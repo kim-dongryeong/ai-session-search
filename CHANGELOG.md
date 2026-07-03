@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1 — 2026-07-03
+
+- **Edit/Write results render as a GitHub-style diff** instead of a raw JSON blob.
+  A tool result carrying `structuredPatch` (Claude's ready-made unified diff) is
+  drawn as colored hunks — green additions, red deletions, gray context, `@@` hunk
+  headers — with the file path on top; the `oldString`/`newString`/`userModified`
+  envelope is gone. The `Edit` *call* now shows a real old→new diff (via stdlib
+  `difflib`) rather than two stacked full-text blocks, and `MultiEdit` renders one
+  diff per edit. Long diffs cap at 800 lines with a `… (diff 생략)` marker.
+
 ## 1.4.0 — 2026-07-03
 
 Rich rendering — messages and tool blocks now read like the real conversation.

@@ -301,11 +301,31 @@ class ToolRender(unittest.TestCase):
         self.assertEqual(prev, "git commit -m x")
 
     def test_edit_use_shows_diff(self):
-        txt = 'Edit\n{"file_path": "/a/b.py", "old_string": "foo", "new_string": "bar"}'
+        txt = 'Edit\n{"file_path": "/a/b.py", "old_string": "foo\\nx", "new_string": "bar\\nx"}'
         h = app.tool_use_html(txt)
-        self.assertIn("tk-del", h)
-        self.assertIn("tk-add", h)
+        self.assertIn("tk-diff", h)
+        self.assertIn("d-del", h)
+        self.assertIn("d-add", h)
         self.assertIn("b.py", h)
+
+    def test_edit_result_structuredpatch_becomes_diff(self):
+        txt = json.dumps({
+            "filePath": "/a/b.md", "oldString": "x", "newString": "x\ny",
+            "structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 2,
+                                 "lines": [" x", "+y"]}],
+            "userModified": False,
+        }, ensure_ascii=False, indent=2)
+        h = app.tool_result_html(txt)
+        self.assertIn('class="tk-diff"', h)
+        self.assertIn("d-hunk", h)
+        self.assertIn("d-add", h)
+        self.assertIn("b.md", h)
+        self.assertNotIn("structuredPatch", h)     # raw JSON envelope must be gone
+
+    def test_multiedit_use_renders_each_hunk(self):
+        txt = 'MultiEdit\n' + json.dumps({"file_path": "/a/c.py", "edits": [
+            {"old_string": "a", "new_string": "b"}, {"old_string": "x", "new_string": "y"}]})
+        self.assertEqual(app.tool_use_html(txt).count("tk-diff"), 2)
 
     def test_bash_result_splits_stdout_stderr(self):
         txt = json.dumps({"stdout": "done", "stderr": "\noops", "interrupted": False},

@@ -21,6 +21,7 @@ Defaults to $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
 """
 import argparse
 import datetime
+import difflib
 import glob
 import html
 import json
@@ -33,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -902,6 +903,45 @@ def _tk_pre(s, cls="tk-out", cap=8000):
     s = s if len(s) <= cap else s[:cap] + "\n… (생략)"
     return f'<pre class="{cls}">{esc(s)}</pre>'
 
+def _diff_line(ln):
+    s = ln[:1]
+    cls = "d-add" if s == "+" else "d-del" if s == "-" else "d-ctx"
+    return f'<div class="dl {cls}">{esc(ln) or "&nbsp;"}</div>'
+
+def _patch_html(patch, filepath="", cap=800):
+    """Render Claude's structuredPatch (a ready-made unified diff) as GitHub-style diff."""
+    rows = [f'<div class="tk-file">📄 {esc(filepath)}</div>'] if filepath else []
+    body, count = [], 0
+    for h in patch:
+        if not isinstance(h, dict):
+            continue
+        body.append(f'<div class="dl d-hunk">@@ -{h.get("oldStart","?")},{h.get("oldLines","?")}'
+                    f' +{h.get("newStart","?")},{h.get("newLines","?")} @@</div>')
+        for ln in h.get("lines", []):
+            if count >= cap:
+                body.append('<div class="dl d-ctx">… (diff 생략)</div>')
+                break
+            body.append(_diff_line(ln))
+            count += 1
+        if count >= cap:
+            break
+    rows.append(f'<div class="tk-diff">{"".join(body)}</div>')
+    return "".join(rows)
+
+def _difflib_html(old, new, filepath="", cap=800):
+    """Diff two strings (Edit old→new) with stdlib difflib, GitHub-style."""
+    lines = list(difflib.unified_diff(str(old).splitlines(), str(new).splitlines(), lineterm="", n=3))
+    while lines and (lines[0].startswith("--- ") or lines[0].startswith("+++ ")):
+        lines.pop(0)
+    rows = [f'<div class="tk-file">📄 {esc(filepath)}</div>'] if filepath else []
+    body = []
+    for ln in lines[:cap]:
+        body.append(f'<div class="dl d-hunk">{esc(ln)}</div>' if ln.startswith("@@") else _diff_line(ln))
+    if len(lines) > cap:
+        body.append('<div class="dl d-ctx">… (diff 생략)</div>')
+    rows.append(f'<div class="tk-diff">{"".join(body)}</div>')
+    return "".join(rows)
+
 def _tool_use_summary(txt):
     name, inp, _ = _split_tool(txt)
     prev = ""
@@ -939,15 +979,21 @@ def tool_use_html(txt):
             rows.append(f'<div class="tk-desc">{esc(inp["description"])}</div>')
     elif name in EDIT_TOOLS:
         fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
-        if fp:
-            rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
-        if inp.get("old_string") is not None and inp.get("new_string") is not None:
-            rows.append(_tk_pre(inp["old_string"], "tk-out tk-del", 4000))
-            rows.append(_tk_pre(inp["new_string"], "tk-out tk-add", 4000))
-        elif "content" in inp:
+        old, new = inp.get("old_string"), inp.get("new_string")
+        if isinstance(old, str) and isinstance(new, str):
+            rows.append(_difflib_html(old, new, fp))          # Edit → real diff
+        elif "content" in inp:                                # Write → new file body
+            if fp:
+                rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
             rows.append(_tk_pre(inp.get("content", ""), "tk-out tk-add"))
-        elif "new_string" in inp:
-            rows.append(_tk_pre(inp.get("new_string", ""), "tk-out tk-add"))
+        elif isinstance(inp.get("edits"), list):              # MultiEdit → each hunk
+            if fp:
+                rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
+            for e in inp["edits"]:
+                if isinstance(e, dict) and isinstance(e.get("old_string"), str) and isinstance(e.get("new_string"), str):
+                    rows.append(_difflib_html(e["old_string"], e["new_string"]))
+        elif fp:
+            rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
     elif name == "Read":
         fp = inp.get("file_path") or inp.get("path") or ""
         extra = [f"{k} {inp[k]}" for k in ("offset", "limit") if inp.get(k)]
@@ -967,6 +1013,20 @@ def tool_use_html(txt):
     return "".join(rows) or _tk_pre(raw, cap=4000)
 
 def _dict_result_html(d):
+    # Edit/Write result: {filePath, oldString, newString, structuredPatch, content, …}
+    if "structuredPatch" in d or ("oldString" in d and "newString" in d) or "filePath" in d:
+        fp = d.get("filePath") or d.get("file_path") or ""
+        patch = d.get("structuredPatch")
+        if isinstance(patch, list) and patch:
+            return _patch_html(patch, fp)
+        old, new = d.get("oldString"), d.get("newString")
+        if isinstance(old, str) and isinstance(new, str):
+            return _difflib_html(old, new, fp)
+        if isinstance(d.get("content"), str):                 # Write result
+            head = f'<div class="tk-file">📄 {esc(fp)}</div>' if fp else ""
+            return head + _tk_pre(d["content"], "tk-out tk-add")
+        if fp:
+            return f'<div class="tk-file">📄 {esc(fp)}</div><div class="tk-meta">파일 저장됨</div>'
     if "stdout" in d or "stderr" in d:
         rows = []
         stdout, stderr = d.get("stdout"), d.get("stderr")
@@ -1184,6 +1244,18 @@ pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
 .tk-kv{font-size:12.5px;margin:2px 0}
 .tk-k{font-family:ui-monospace,Menlo,monospace;color:#6b3fb5;font-size:11.5px}
 @media(prefers-color-scheme:dark){.tk-k{color:#c2a8f0}}
+.tk-diff{margin:5px 0;border:1px solid #e4e7eb;border-radius:7px;overflow:auto;max-height:440px;background:#fff;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.55}
+@media(prefers-color-scheme:dark){.tk-diff{background:#1b1e24;border-color:#2a2e35}}
+.tk-diff .dl{padding:0 10px;white-space:pre-wrap;word-break:break-word;border-left:3px solid transparent}
+.dl.d-add{background:#e6ffec;border-left-color:#2da44e;color:#116329}
+.dl.d-del{background:#ffebe9;border-left-color:#cf222e;color:#82071e}
+.dl.d-ctx{color:#57606a}
+.dl.d-hunk{background:#f0f3f7;color:#57606a;font-weight:600}
+@media(prefers-color-scheme:dark){
+ .dl.d-add{background:#12261a;color:#7ee787}
+ .dl.d-del{background:#2a1416;color:#ffa198}
+ .dl.d-ctx{color:#9aa0a8}
+ .dl.d-hunk{background:#23262d;color:#9aa0a8}}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
