@@ -33,7 +33,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -711,6 +711,11 @@ header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
 header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
 header button{background:#0b4fc4;color:#fff}
+header .advbtn{background:#1857b8}
+.adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
+.adv.open{display:flex}
+.adv .advlbl{color:#fff;font-size:12px;opacity:.85}
+.adv select,.adv input{padding:6px 9px;border:0;border-radius:7px;font-size:13px}
 .wrap{max-width:940px;margin:0 auto;padding:16px}
 .rootbar{max-width:940px;margin:0 auto;padding:8px 16px 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .rootbar .lbl{font-size:11.5px;color:#8a8f98}
@@ -819,12 +824,17 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   <form action="/search" role=search>
     <input type=search name=q id=qbox placeholder='검색: 단어들 = AND · "정확한 구문"  ( / 키 )' value="%%Q%%">
     <select name=scope title="검색 범위">%%SCOPEOPTS%%</select>
-    <select name=days title="빠른 기간 (직접 지정하려면 아래 날짜)">%%DAYSOPTS%%</select>
-    <input type=date name=from value="%%FROM%%" title="시작일 (직접 지정)">
-    <span style="color:#fff">~</span>
-    <input type=date name=to value="%%TO%%" title="종료일 (직접 지정)">
     %%ROOTHIDDEN%%
     <button>검색</button>
+    <button type=button id=advtoggle class=advbtn title="기간 등 고급 검색">🔧 도구%%ADVDOT%%</button>
+    <div id=advpanel class="adv %%ADVOPEN%%">
+      <span class=advlbl>기간</span>
+      <select name=days title="빠른 기간">%%DAYSOPTS%%</select>
+      <span class=advlbl>또는 직접</span>
+      <input type=date name=from value="%%FROM%%" title="시작일">
+      <span class=advlbl>~</span>
+      <input type=date name=to value="%%TO%%" title="종료일">
+    </div>
   </form>
 </header>
 %%ROOTBAR%%
@@ -837,6 +847,9 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function focusYou(i){var a=ys();if(!a.length)return;cur=((i%a.length)+a.length)%a.length;
     a.forEach(function(e){e.classList.remove('kfocus');});var el=a[cur];
     el.classList.add('kfocus');el.scrollIntoView({block:'center',behavior:'smooth'});}
+  // advanced-search (도구) toggle
+  var at=document.getElementById('advtoggle');
+  if(at){at.addEventListener('click',function(){document.getElementById('advpanel').classList.toggle('open');});}
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
@@ -936,10 +949,13 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
                         for k, v in SCOPES.items())
     daysopts = "".join(f'<option value="{k}"{" selected" if k == days else ""}>{v}</option>'
                        for k, v in DAY_CHOICES.items())
+    adv_active = bool(days or from_ or to)
     return (SHELL.replace("%%TITLE%%", esc(title)).replace("%%BODY%%", body)
             .replace("%%Q%%", esc(q))
             .replace("%%SCOPEOPTS%%", scopeopts).replace("%%DAYSOPTS%%", daysopts)
             .replace("%%FROM%%", esc(from_)).replace("%%TO%%", esc(to))
+            .replace("%%ADVOPEN%%", "open" if adv_active else "")
+            .replace("%%ADVDOT%%", " ●" if adv_active else "")
             .replace("%%HOMEHREF%%", home).replace("%%ROOTHIDDEN%%", hidden)
             .replace("%%ROOTBAR%%", rootbar))
 

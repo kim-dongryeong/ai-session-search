@@ -2,7 +2,7 @@
 
 A **read-only, stdlib-only** local web viewer for browsing **Claude Code** session
 transcripts (the JSONL files under `~/.claude/projects/`). No dependencies, no build
-step, no database — just Python ≥ 3.10.
+step, no database — just Python ≥ 3.9.
 
 It exists to answer one question reliably: **who actually said what?** In Claude Code's
 transcript format, ~95% of `type:"user"` lines are *not* the human — they are tool
@@ -42,15 +42,21 @@ Dock/Finder, double-click, no lingering terminal); add `--dmg` for a draggable
 
 | Form | Command | When |
 |---|---|---|
-| **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-viewer.git` | Any OS. One command, `pipx upgrade` to update. Target already has Python + git. |
+| **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-viewer.git` | Any OS with Python 3.9+ and git. One command, `pipx upgrade` to update. |
 | **macOS .app / .dmg** | `./scripts/make-macos-app.sh --dmg` | Want a Dock icon + double-click on a Mac. Thin wrapper over the installed CLI. |
 | **`.command` double-click** | ship `claude-viewer.py` + `.command` | Zero-build, copy the folder. |
 
-A `.dmg` here is just the thin `.app` (≈90 KB) — it is **not** a self-contained binary,
-because every machine that has Claude Code transcripts already has Python. A full
-PyInstaller/py2app bundle (to run without Python) is intentionally avoided: it needs
+**Requirement:** Python **3.9+**. Note Claude Code itself is a *Node* app, so a machine
+with transcripts does **not** necessarily have Python — Windows has none by default, and
+macOS only ships `python3` (3.9) if the Xcode Command Line Tools are installed. On such a
+machine, install Python once (`brew install python`, python.org, or `xcode-select
+--install`) before `pipx`.
+
+A `.dmg` here is just the thin `.app` (≈90 KB), **not** a self-contained binary. A full
+PyInstaller/py2app bundle (to run with zero Python) is intentionally avoided: it needs
 per-OS builds and macOS code-signing/notarization for a tool that only opens a local
-`127.0.0.1` page.
+`127.0.0.1` page. If you truly need Python-free distribution, that's the tradeoff to
+revisit.
 
 Defaults: binds `127.0.0.1` only (never exposed to the network; `--host` warns if you
 change it), reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, and
@@ -94,7 +100,7 @@ it never writes to your transcripts.
 python3 -m unittest discover -s tests -v   # 33 tests: attribution regression, HTTP smoke
 ```
 
-CI runs the suite on Ubuntu/macOS/Windows × Python 3.10/3.14, then installs the package
+CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package
 and checks the `claude-viewer` entry point. The attribution tests are the contract:
 **no machine-authored line may ever be classified as 🧑 나.**
 
