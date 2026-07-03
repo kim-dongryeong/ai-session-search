@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.3 — 2026-07-04
+
+- **Channel-relayed human messages get their own category** (💬 텔레그램·채널). A
+  message sent into a session through a plugin (Telegram/Slack/…) arrives wrapped in
+  `<channel source="plugin:telegram:…" user="…" ts="…">…</channel>` and is flagged
+  `isMeta`/`promptSource=system` by the harness — so it used to render as raw XML
+  inside **ⓘ 시스템·주입**. It's now recognised as genuine person-authored text: the
+  envelope is parsed, the label shows **who sent it** (`💬 텔레그램 · @user` — not
+  assumed to be you, since anyone paired can send), the body renders as Markdown, and
+  a small caption keeps the source/chat/original-timestamp. Searchable by body only
+  (no attribute noise). Legend updated.
+
 ## 1.4.2 — 2026-07-03
 
 - **Useful tool blocks are expanded by default** — the view now reads like the live
