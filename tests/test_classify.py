@@ -95,6 +95,24 @@ class ClassifyLine(unittest.TestCase):
         role, _ = app.classify_line(user_line("anything", promptSource="system"))
         self.assertEqual(role, "system")
 
+    def test_channel_message_is_not_system(self):
+        # Telegram/plugin-relayed human message: harness flags it isMeta/system, but it
+        # is genuine person text and must NOT land in ⓘ 시스템·주입.
+        content = ('<channel source="plugin:telegram:telegram" chat_id="42" message_id="9" '
+                   'user="kdr11" user_id="42" ts="2026-07-03T15:22:05.000Z">\n안녕\n</channel>')
+        role, segs = app.classify_line(user_line(content, isMeta=True, promptSource="system"))
+        self.assertEqual(role, "channel")
+        self.assertEqual(segs, [("channel", content)])
+
+    def test_parse_channel_and_label(self):
+        content = '<channel source="plugin:telegram:telegram" user="kdr11">\n본문\n</channel>'
+        attrs, body = app.parse_channel(content)
+        self.assertEqual(body, "본문")
+        self.assertEqual(attrs["user"], "kdr11")
+        self.assertIn("텔레그램", app.channel_label(attrs))
+        self.assertIn("@kdr11", app.channel_label(attrs))
+        self.assertIsNone(app.parse_channel("<system-reminder>hi</system-reminder>"))
+
     # ---- assistant ----
     def test_assistant_text_thinking_tooluse(self):
         role, segs = app.classify_line(asst_line([

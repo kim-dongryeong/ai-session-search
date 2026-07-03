@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -222,6 +222,26 @@ def user_text(o):
         return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return ""
 
+_CHANNEL_RE = re.compile(r'^\s*<channel\s+([^>]*?)>\n?(.*?)\n?</channel>\s*$', re.S)
+_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+
+def parse_channel(text):
+    """'<channel source=… user=…>\\nbody\\n</channel>' → (attrs_dict, body) or None.
+    These are human messages relayed into the session by a channel plugin (Telegram/…)."""
+    m = _CHANNEL_RE.match(text or "")
+    if not m:
+        return None
+    return dict(_ATTR_RE.findall(m.group(1))), m.group(2)
+
+_CHANNEL_NAMES = [("telegram", "텔레그램"), ("slack", "Slack"), ("discord", "Discord"),
+                  ("whatsapp", "WhatsApp"), ("sms", "SMS"), ("email", "이메일")]
+
+def channel_label(attrs):
+    src = (attrs.get("source") or "").lower()
+    name = next((nm for key, nm in _CHANNEL_NAMES if key in src), "채널")
+    user = attrs.get("user") or attrs.get("user_id") or ""
+    return f"💬 {esc(name)}" + (f" · @{esc(user)}" if user else "")
+
 def classify_line(o, sub=False):
     t = o.get("type")
     if t in TITLE_TYPES or t in SKIP_TYPES:
@@ -255,6 +275,15 @@ def classify_line(o, sub=False):
 
     if t == "user":
         you_role = "orchestrator" if sub else "you"
+        # channel-relayed human message (Telegram/Slack/… plugin). The harness flags
+        # these isMeta/promptSource=system, but they are genuine person-authored text —
+        # keep them out of ⓘ 시스템·주입 and show who sent them.
+        chan = content if isinstance(content, str) else (
+            next((b.get("text", "") for b in content
+                  if isinstance(b, dict) and b.get("type") == "text"), "")
+            if isinstance(content, list) else "")
+        if chan.lstrip().startswith("<channel ") and parse_channel(chan):
+            return ("channel", [("channel", chan)])
         has_block = isinstance(content, list) and any(
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
         if o.get("toolUseResult") is not None or has_block:
@@ -510,7 +539,14 @@ def search_turns(path):
             return hit[1]
     rows = []
     for gi, t in enumerate(classify_turns(path)):
-        txt = " ".join(x[1] for x in t["segs"] if x[0] in _SEARCH_KINDS)
+        parts = []
+        for k, v in t["segs"]:
+            if k == "channel":
+                pc = parse_channel(v)
+                parts.append(pc[1] if pc else v)
+            elif k in _SEARCH_KINDS:
+                parts.append(v)
+        txt = " ".join(parts)
         if txt.strip():
             rows.append((gi, t["role"], txt))
     with _SEARCH["lock"]:
@@ -864,17 +900,19 @@ def md_html(text, q=""):
 
 ROLE_LABEL = {"you": "🧑 나", "assistant": "✦ Claude", "tool-result": "⚙ 도구 결과",
               "system": "ⓘ 시스템·주입", "subagent": "🤖 서브에이전트",
-              "orchestrator": "📋 지시 → 서브에이전트"}
+              "orchestrator": "📋 지시 → 서브에이전트", "channel": "💬 채널"}
 ROLE_DESC = {
     "you": "내가 직접 타이핑하거나 붙여넣은 메시지 — 검증된 규칙으로 이것만 '나'로 표시",
     "assistant": "Claude(어시스턴트)의 답변",
     "tool-result": "Claude가 실행한 도구(Bash 명령·Edit/Write·Read 등)의 출력 결과. 사람이 쓴 게 아님",
     "system": "시스템이 자동으로 끼워 넣은 컨텍스트 — system-reminder·IDE 알림·슬래시명령 출력·task-notification 등. 사람이 쓴 게 아님",
     "subagent": "Claude가 띄운 하위(서브)에이전트의 대화",
-    "orchestrator": "서브에이전트에게 준 작업 지시문 (사람이 아니라 Claude가 생성)"}
+    "orchestrator": "서브에이전트에게 준 작업 지시문 (사람이 아니라 Claude가 생성)",
+    "channel": "텔레그램 등 외부 채널(플러그인)로 세션에 전달된 사람 메시지. @뒤에 보낸 사람 표시 — 반드시 나라는 보장은 없음"}
 
 def legend_html(open_=False):
     rows = [("🧑 나", ROLE_DESC["you"]),
+            ("💬 텔레그램·채널", ROLE_DESC["channel"]),
             ("✦ Claude", ROLE_DESC["assistant"]),
             ("💭 추론", "Claude의 사고 과정 — 보통 비공개로 접혀 있음"),
             ("🔧 도구 호출", "Claude가 도구(Bash 실행·파일 Edit/Write·Read 등)를 부른 호출"),
@@ -1085,10 +1123,23 @@ def _result_kind(txt):
 
 def render_turn(gi, t, q="", thread_link=None):
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
+    role_label, role_desc = ROLE_LABEL.get(role, role), ROLE_DESC.get(role, "")
     parts = []
     for kind, txt in segs:
         if kind == "text":
             parts.append(f'<div class="seg md">{md_html(txt, q)}</div>')
+        elif kind == "channel":
+            pc = parse_channel(txt)
+            if pc:
+                attrs, body = pc
+                role_label = channel_label(attrs)
+                srcbits = [b for b in (attrs.get("source"), attrs.get("chat_id") and f'chat {attrs["chat_id"]}',
+                                       attrs.get("ts")) if b]
+                role_desc = ROLE_DESC["channel"] + (" — " + " · ".join(srcbits) if srcbits else "")
+                cap = f'<div class="chan-cap">{esc(" · ".join(srcbits))}</div>' if srcbits else ""
+                parts.append(f'<div class="seg md chan-body">{md_html(body, q)}</div>{cap}')
+            else:
+                parts.append(f'<div class="seg md">{md_html(txt, q)}</div>')
         elif kind == "thinking":
             if (txt or "").strip():
                 parts.append(f'<details class=fold><summary>💭 추론 과정</summary><div class="seg md">{md_html(txt, q)}</div></details>')
@@ -1118,7 +1169,7 @@ def render_turn(gi, t, q="", thread_link=None):
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
     cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
-    who = (f'<div class=who><span title="{esc(ROLE_DESC.get(role, ""))}">{ROLE_LABEL.get(role, role)} {badges}</span>'
+    who = (f'<div class=who><span title="{esc(role_desc)}">{role_label} {badges}</span>'
            f'<span class=whoR>{tstr}{link}</span></div>')
     return f'<div class="msg {role}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
 
@@ -1198,10 +1249,14 @@ table.stab tr.tot td{font-weight:700;border-top:2px solid #cdd2d8;border-bottom:
 .assistant .who{background:#e8f7ee;color:#157038}
 .tool-result .who,.system .who,.subagent .who{background:#f0f1f3;color:#777}
 .orchestrator .who{background:#f3eefe;color:#6b3fb5} .orchestrator{border-color:#d9c8f5}
+.channel .who{background:#e2f4fb;color:#0b6a8f} .channel{border-color:#b7e2f2}
+.chan-body{border-left:3px solid #34aadc}
+.chan-cap{padding:2px 15px 8px;font-size:11px;color:#8a8f98;font-family:ui-monospace,Menlo,monospace;word-break:break-all}
 @media(prefers-color-scheme:dark){
  .you .who{background:#16304f;color:#9ec5ff} .you{border-color:#244668}
  .assistant .who{background:#15331f;color:#7ddfa1}
  .orchestrator .who{background:#241a3a;color:#c2a8f0} .orchestrator{border-color:#3a2c5c}
+ .channel .who{background:#0e2c39;color:#7fcbe6} .channel{border-color:#1d4a5e}
  .tool-result .who,.system .who,.subagent .who{background:#23262d;color:#9aa0a8}}
 .subcard{background:#faf7ff;border:1px solid #e3d7f7}
 @media(prefers-color-scheme:dark){.subcard{background:#1c1830;border-color:#352a52}}
