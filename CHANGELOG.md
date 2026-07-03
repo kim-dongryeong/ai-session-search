@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1 — 2026-07-03
+
+- **Python floor lowered to 3.9** (was 3.10) — verified the whole suite passes on the
+  macOS system `python3` (3.9.6). CI matrix now tests 3.9/3.14. README corrected: Claude
+  Code is a *Node* app, so Python is **not** guaranteed on a machine with transcripts
+  (Windows has none; macOS only ships 3.9 with Xcode CLT) — install once before pipx.
+- **Advanced search menu**: the 기간/날짜 range moved out of the always-on bar into a
+  🔧 도구 toggle (Google-style), hidden by default and auto-opened (with a ● dot) when a
+  time filter is active. The main bar is now just query + scope.
+
 ## 1.2.0 — 2026-07-03
 
 Search relevance + colors + custom dates; app icon & favicon; macOS app/dmg.
