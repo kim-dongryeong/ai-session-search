@@ -242,5 +242,86 @@ class Helpers(unittest.TestCase):
         self.assertAlmostEqual(b - a, 86400, delta=3700)   # ~1 day (DST tolerance)
 
 
+class Markdown(unittest.TestCase):
+    def test_table_renders_with_alignment(self):
+        md = "| A | B |\n|:--|--:|\n| 1 | 2 |"
+        h = app.md_to_html(md)
+        self.assertIn("<table", h)
+        self.assertIn("<th", h)
+        self.assertIn('style="text-align:right"', h)
+        self.assertIn("<td", h)
+
+    def test_raw_html_is_escaped_not_executed(self):
+        h = app.md_to_html("hi <script>alert(1)</script> **bold**")
+        self.assertIn("&lt;script&gt;", h)
+        self.assertNotIn("<script>", h)
+        self.assertIn("<strong>bold</strong>", h)
+
+    def test_snake_case_survives_underscore_emphasis(self):
+        h = app.md_to_html("call some_long_name here")
+        self.assertIn("some_long_name", h)
+        self.assertNotIn("<em>", h)
+
+    def test_fenced_code_block(self):
+        h = app.md_to_html("```python\nx = a < b\n```")
+        self.assertIn('<pre class="md-code">', h)
+        self.assertIn("a &lt; b", h)          # escaped inside code
+        self.assertIn("python", h)            # language label
+
+    def test_inline_code_and_link(self):
+        h = app.md_to_html("see `foo()` at [docs](https://x.com)")
+        self.assertIn('<code class="md-ic">foo()</code>', h)
+        self.assertIn('href="https://x.com"', h)
+
+    def test_nested_list(self):
+        h = app.md_to_html("- a\n  - b\n- c")
+        self.assertEqual(h.count("<ul"), 2)   # one nested
+
+    def test_highlight_only_in_text_nodes(self):
+        h = app.md_html("a **table** row", "table")
+        self.assertIn('<mark class="hl0">table</mark>', h)
+        # the tag/attribute stream must stay intact (no mark injected into a tag)
+        self.assertIn("<strong>", h)
+        self.assertNotIn("<st<mark", h)
+
+    def test_md_html_falls_back_on_error(self):
+        # md_html must never raise — worst case returns escaped+highlighted text
+        self.assertIsInstance(app.md_html("plain text", ""), str)
+
+
+class ToolRender(unittest.TestCase):
+    def test_bash_use_shows_command_and_desc(self):
+        txt = 'Bash\n{"command": "git commit -m x", "description": "commit it"}'
+        h = app.tool_use_html(txt)
+        self.assertIn('class="tk-cmd"', h)
+        self.assertIn("git commit -m x", h)
+        self.assertIn("commit it", h)
+        name, prev = app._tool_use_summary(txt)
+        self.assertEqual(name, "Bash")
+        self.assertEqual(prev, "git commit -m x")
+
+    def test_edit_use_shows_diff(self):
+        txt = 'Edit\n{"file_path": "/a/b.py", "old_string": "foo", "new_string": "bar"}'
+        h = app.tool_use_html(txt)
+        self.assertIn("tk-del", h)
+        self.assertIn("tk-add", h)
+        self.assertIn("b.py", h)
+
+    def test_bash_result_splits_stdout_stderr(self):
+        txt = json.dumps({"stdout": "done", "stderr": "\noops", "interrupted": False},
+                         ensure_ascii=False, indent=2)
+        h = app.tool_result_html(txt)
+        self.assertIn("done", h)
+        self.assertIn("stderr", h)
+        self.assertIn("oops", h)
+
+    def test_plain_string_result(self):
+        self.assertIn("hello world", app.tool_result_html("hello world"))
+
+    def test_unparseable_tool_use_does_not_crash(self):
+        h = app.tool_use_html("Weird\nnot json {")
+        self.assertIn("not json", h)
+
+
 if __name__ == "__main__":
     unittest.main()

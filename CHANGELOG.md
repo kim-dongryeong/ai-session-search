@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.4.0 — 2026-07-03
+
+Rich rendering — messages and tool blocks now read like the real conversation.
+
+- **Markdown rendering**: assistant/human message text is rendered as Markdown —
+  **GFM tables** (with column alignment), fenced & inline code, headings, ordered/
+  nested lists, blockquotes, bold/italic/strikethrough, and clickable links. A
+  previously-flat message with a comparison table now shows the actual table. The
+  renderer is a compact, dependency-free (**stdlib only**) implementation: every
+  message is `html.escape()`d *before* any transform, so raw HTML in a transcript is
+  shown as text, never executed; underscore emphasis is word-boundary-gated so
+  `snake_case` identifiers survive. Search highlighting is applied to the rendered
+  HTML's *text nodes only* (never inside tags/attributes). `md_html()` can never
+  raise — on any parse trouble it falls back to escaped+highlighted plain text.
+- **Pretty tool calls & results**: a `🔧 Bash` call now shows its command in a shell
+  block (with the description beneath) instead of raw JSON; `Edit` shows a red/green
+  old→new diff; `Read`/`Grep`/`Write` show the file/pattern. A tool *result* splits
+  `stdout` / `stderr` (stderr in red) and drops the JSON envelope noise, with plain
+  results shown as-is. Each fold's summary carries a one-line preview (the command,
+  the file) so you can scan without expanding.
+
 ## 1.3.0 — 2026-07-03
 
 - **Renamed `claude-viewer` → `claude-code-history`** (repo, package
