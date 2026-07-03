@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 — 2026-07-03
+
+- **Renamed `claude-viewer` → `claude-code-history`** (repo, package
+  `claude_code_history`, command). The tool views specifically *Claude Code* session
+  transcripts, not claude.ai/API — the name now says so. A short **`cch`** console alias
+  is installed alongside `claude-code-history`. GitHub redirects the old repo URL; update
+  local remotes and reinstall from the new URL.
+
 ## 1.2.1 — 2026-07-03
 
 - **Python floor lowered to 3.9** (was 3.10) — verified the whole suite passes on the
@@ -26,7 +34,7 @@ Search relevance + colors + custom dates; app icon & favicon; macOS app/dmg.
 - **Icon & favicon**: an SVG app icon (speech bubble + person = 🧑) served at
   `/favicon.svg`; `assets/` ships PNG sizes + `icon.icns`.
 - **macOS app / dmg**: `scripts/make-macos-app.sh [--dmg]` builds a lightweight
-  `Claude Viewer.app` (no bundled Python — execs the installed `claude-viewer`) and
+  `Claude Code History.app` (no bundled Python — execs the installed `claude-code-history`) and
   an optional `.dmg`.
 
 ## 1.1.0 — 2026-07-02
@@ -50,9 +58,9 @@ Search overhaul.
 
 First packaged release.
 
-- **Packaging**: proper Python package (`src/claude_viewer/`), `pyproject.toml`,
-  `claude-viewer` console entry point, `python -m claude_viewer`, pipx/uvx installable
-  from the private git repo. Root `claude-viewer.py` kept as a compatibility shim.
+- **Packaging**: proper Python package (`src/claude_code_history/`), `pyproject.toml`,
+  `claude-code-history` console entry point, `python -m claude_code_history`, pipx/uvx installable
+  from the private git repo. Root `claude-code-history.py` kept as a compatibility shim.
 - **CLI**: argparse — positional projects dir, `--port`, `--host` (with network-exposure
   warning), `--roots`, `--open` (auto-open browser, cross-platform via `webbrowser`),
   `--version`, `--help`.

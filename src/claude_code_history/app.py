@@ -14,8 +14,8 @@ event/error chips, structure minimap, per-session extracted-fact digest, code/di
 extraction with copy, per-project stats, in-app folder add/remove.
 
 Usage:
-    claude-viewer [PROJECTS_DIR] [--port 8777] [--open]
-    python3 -m claude_viewer [PROJECTS_DIR] [--port 8777]
+    claude-code-history [PROJECTS_DIR] [--port 8777] [--open]
+    python3 -m claude_code_history [PROJECTS_DIR] [--port 8777]
 
 Defaults to $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
 """
@@ -33,7 +33,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -47,9 +47,9 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 # ---- config -----------------------------------------------------------------
 DEFAULT_PORT = 8777
 if os.name == "nt":
-    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude-viewer")
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude-code-history")
 else:
-    CONFIG_DIR = os.path.expanduser("~/.config/claude-viewer")
+    CONFIG_DIR = os.path.expanduser("~/.config/claude-code-history")
 ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
 _ROOTLOCK = threading.Lock()
 
@@ -820,7 +820,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 @media(max-width:760px){#minimap{display:none}}
 </style></head><body>
 <header>
-  <a class=home href="%%HOMEHREF%%">&#9776; 대화 뷰어</a>
+  <a class=home href="%%HOMEHREF%%">&#9776; Claude Code 기록</a>
   <form action="/search" role=search>
     <input type=search name=q id=qbox placeholder='검색: 단어들 = AND · "정확한 구문"  ( / 키 )' value="%%Q%%">
     <select name=scope title="검색 범위">%%SCOPEOPTS%%</select>
@@ -1151,7 +1151,7 @@ class H(BaseHTTPRequestHandler):
             head += ('<div class=card><b>세션이 없습니다.</b>'
                      f'<p class=meta>{esc(root)} 아래에 <code>&lt;프로젝트&gt;/&lt;uuid&gt;.jsonl</code> 파일이 보이지 않아요. '
                      'Claude Code를 한 번이라도 실행한 폴더인지 확인하거나, 위의 ➕ 추가로 다른 폴더를 불러오세요.</p></div>')
-        return shell("대화 뷰어", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+        return shell("Claude Code 기록", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
@@ -1459,7 +1459,7 @@ def make_server(host="127.0.0.1", port=DEFAULT_PORT):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="claude-viewer",
+        prog="claude-code-history",
         description="Read-only local web viewer for Claude Code session transcripts.")
     ap.add_argument("root", nargs="?", default=None,
                     help="projects dir to browse (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
@@ -1495,7 +1495,7 @@ def main(argv=None):
         print(f"  ⚠️  포트 {args.port}가 사용 중입니다 — 임시 포트로 대신 엽니다. (--port 로 지정 가능)")
         srv = make_server(args.host, 0)
     url = f"http://{args.host}:{srv.server_address[1]}"
-    print(f"\n  Claude 대화 뷰어 v{__version__} → {url}")
+    print(f"\n  Claude Code History v{__version__} → {url}")
     print(f"  보는 폴더: {ROOT}" + (f"  (+{len(ROOTS)-1}개 전환 가능)" if len(ROOTS) > 1 else ""))
     print("  (이 창을 닫거나 Ctrl-C 로 종료)\n")
     if args.open:

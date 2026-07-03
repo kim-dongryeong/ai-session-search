@@ -11,4 +11,4 @@ if curl -s -o /dev/null "$URL" 2>/dev/null; then
   open "$URL"; exit 0
 fi
 
-exec python3 "$(dirname "$0")/claude-viewer.py" --port="$PORT" --open
+exec python3 "$(dirname "$0")/claude-code-history.py" --port="$PORT" --open

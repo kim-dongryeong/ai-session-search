@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-viewer"
+name = "claude-code-history"
 description = "Read-only local web viewer for Claude Code session transcripts (JSONL), with verified human-vs-machine message attribution"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,14 +13,15 @@ dynamic = ["version"]
 dependencies = []  # stdlib only, by design
 
 [project.scripts]
-claude-viewer = "claude_viewer.app:main"
+claude-code-history = "claude_code_history.app:main"
+cch = "claude_code_history.app:main"
 
 [project.urls]
-Repository = "https://github.com/kim-dongryeong/claude-viewer"
+Repository = "https://github.com/kim-dongryeong/claude-code-history"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["claude_viewer"]
+packages = ["claude_code_history"]
 
 [tool.setuptools.dynamic]
-version = { attr = "claude_viewer.app.__version__" }
+version = { attr = "claude_code_history.app.__version__" }

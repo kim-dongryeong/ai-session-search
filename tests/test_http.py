@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-from claude_viewer import app  # noqa: E402
+from claude_code_history import app  # noqa: E402
 
 
 def build_fixture_root():

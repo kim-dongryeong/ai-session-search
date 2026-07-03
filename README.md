@@ -1,4 +1,4 @@
-# claude-viewer
+# claude-code-history  (`cch`)
 
 A **read-only, stdlib-only** local web viewer for browsing **Claude Code** session
 transcripts (the JSONL files under `~/.claude/projects/`). No dependencies, no build
@@ -16,35 +16,35 @@ adversarially verified ruleset so only genuinely human-typed text is labelled **
 **Run from a checkout (no install):**
 
 ```bash
-python3 claude-viewer.py                 # compatibility shim at the repo root
+python3 claude-code-history.py                 # compatibility shim at the repo root
 # or
-python3 -m claude_viewer                 # with src/ on PYTHONPATH
+python3 -m claude_code_history                 # with src/ on PYTHONPATH
 ```
 
 **Install as a command (pipx / uv / pip):**
 
 ```bash
-pipx install git+ssh://git@github.com/kim-dongryeong/claude-viewer.git
-# or: uvx --from git+ssh://git@github.com/kim-dongryeong/claude-viewer.git claude-viewer
+pipx install git+ssh://git@github.com/kim-dongryeong/claude-code-history.git
+# or: uvx --from git+ssh://git@github.com/kim-dongryeong/claude-code-history.git claude-code-history
 # or: pip install .
 
-claude-viewer                            # browse ~/.claude/projects
-claude-viewer ~/Downloads/.claude/projects --port 8778 --open
-claude-viewer --version
+claude-code-history                            # browse ~/.claude/projects
+claude-code-history ~/Downloads/.claude/projects --port 8778 --open
+claude-code-history --version
 ```
 
-**macOS app:** `./scripts/make-macos-app.sh` builds `dist/Claude Viewer.app` (icon in
+**macOS app:** `./scripts/make-macos-app.sh` builds `dist/Claude Code History.app` (icon in
 Dock/Finder, double-click, no lingering terminal); add `--dmg` for a draggable
-`dist/claude-viewer.dmg`. It doesn't bundle Python — it just launches the installed
-`claude-viewer`. Or use the plain `claude-viewer.command` (starts server + opens browser).
+`dist/claude-code-history.dmg`. It doesn't bundle Python — it just launches the installed
+`claude-code-history`. Or use the plain `claude-code-history.command` (starts server + opens browser).
 
 ### Which distribution form?
 
 | Form | Command | When |
 |---|---|---|
-| **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-viewer.git` | Any OS with Python 3.9+ and git. One command, `pipx upgrade` to update. |
+| **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-code-history.git` | Any OS with Python 3.9+ and git. One command, `pipx upgrade` to update. |
 | **macOS .app / .dmg** | `./scripts/make-macos-app.sh --dmg` | Want a Dock icon + double-click on a Mac. Thin wrapper over the installed CLI. |
-| **`.command` double-click** | ship `claude-viewer.py` + `.command` | Zero-build, copy the folder. |
+| **`.command` double-click** | ship `claude-code-history.py` + `.command` | Zero-build, copy the folder. |
 
 **Requirement:** Python **3.9+**. Note Claude Code itself is a *Node* app, so a machine
 with transcripts does **not** necessarily have Python — Windows has none by default, and
@@ -62,7 +62,7 @@ Defaults: binds `127.0.0.1` only (never exposed to the network; `--host` warns i
 change it), reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, and
 auto-discovers `~/Downloads/.claude/projects` (copied-from-another-machine data) in the
 in-app **📁 folder switcher**. Add any other folder at runtime by pasting its path
-(persisted in `~/.config/claude-viewer/roots.txt`), remove with ✕. Strictly read-only —
+(persisted in `~/.config/claude-code-history/roots.txt`), remove with ✕. Strictly read-only —
 it never writes to your transcripts.
 
 ## Features
@@ -97,20 +97,20 @@ it never writes to your transcripts.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 33 tests: attribution regression, HTTP smoke
+python3 -m unittest discover -s tests -v   # 49 tests: attribution + HTTP smoke
 ```
 
 CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package
-and checks the `claude-viewer` entry point. The attribution tests are the contract:
+and checks the `claude-code-history` entry point. The attribution tests are the contract:
 **no machine-authored line may ever be classified as 🧑 나.**
 
-Layout: the whole app is one module (`src/claude_viewer/app.py`) by design — stdlib
-only, no framework. `claude-viewer.py` at the repo root is a thin shim for
-`python3 claude-viewer.py` muscle memory.
+Layout: the whole app is one module (`src/claude_code_history/app.py`) by design — stdlib
+only, no framework. `claude-code-history.py` at the repo root is a thin shim for
+`python3 claude-code-history.py` muscle memory.
 
 ## How attribution works
 
-See `classify_line` in `src/claude_viewer/app.py`. A genuine human message is a
+See `classify_line` in `src/claude_code_history/app.py`. A genuine human message is a
 `type:"user"` line that is **not** a tool result (`toolUseResult`/`tool_result` block),
 **not** `isMeta`/`isCompactSummary`/`promptSource==system`, **not** a
 `<task-notification>`/`<command-*>`/`<system-reminder>`/`Caveat:` wrapper, **not** an
