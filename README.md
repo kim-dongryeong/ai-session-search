@@ -83,10 +83,14 @@ it never writes to your transcripts.
   **session-id** per row, **🔁 자율 빌드루프 chips** for autonomous-loop sessions.
 - **Per-project stats** — sessions, my-participated sessions, my message count, total
   size, my-session size, loop count; overview table + per-folder detail card.
-- **Full-text search** across all sessions, scope 전체 ↔ 내 말만, highlighted snippets.
+- **Full-text search** across all sessions — relevance-ranked, multi-term AND +
+  `"phrases"`, per-term colors, scope 전체 ↔ 내 말만, tool-call args (Bash commands,
+  file paths) included, highlighted snippets. **Search by session-id / reference** too
+  (UUID, branched-from id, workspace path) — exact id matches rank to the top.
 - **Session view** — per-message timestamps, 🧑 내 말만 filter, **답변 스레드** links,
-  page size 100…10000/전체 with render timing, `session-id` + `claude --resume` line,
-  dark mode.
+  page size 100…10000/전체 with render timing, dark mode, and a **📍 Session
+  Reference card**: Workspace / Started-in (when moved) / file path / session-id /
+  Branched-from (linked) / `claude --resume`.
 - **Event/error chips** — ⚠️ 에러 / ✏️ 편집 / ❯ 명령 / ⎇ 커밋 / 🧪 테스트 / 🔗 URL filters.
 - **Structure minimap** — right-edge rail (you/error/edit/command density), click to jump.
 - **Extracted-fact digest** — files touched, commands, tests, commits, PR links.

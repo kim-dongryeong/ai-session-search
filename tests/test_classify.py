@@ -259,6 +259,33 @@ class Helpers(unittest.TestCase):
         b = app._date_ts("2026-07-01", end=True)
         self.assertAlmostEqual(b - a, 86400, delta=3700)   # ~1 day (DST tolerance)
 
+    def test_looks_ref(self):
+        self.assertTrue(app._looks_ref("40b92137-2ff9-4461-90c3-21729c2b3bee"))
+        self.assertTrue(app._looks_ref("606730d3"))        # hex fragment
+        self.assertFalse(app._looks_ref("commit"))         # normal word
+        self.assertFalse(app._looks_ref("abc"))            # too short
+
+    def test_summarize_captures_workspace_launchdir_and_fork(self):
+        import tempfile
+        lines = [
+            {"type": "user", "cwd": "/a/launch", "gitBranch": "main",
+             "forkedFrom": {"sessionId": "aaaa1111-bbbb-2222-cccc-333344445555", "messageUuid": "m"},
+             "message": {"role": "user", "content": "hi"}, "timestamp": "2026-07-05T00:00:00Z"},
+            {"type": "assistant", "cwd": "/a/work",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+            path = fh.name
+        try:
+            s = app.summarize_file(path)
+            self.assertEqual(s["cwd"], "/a/work")          # last cwd = current workspace
+            self.assertEqual(s["start_cwd"], "/a/launch")  # first cwd = launch dir
+            self.assertEqual(s["forked"], "aaaa1111-bbbb-2222-cccc-333344445555")
+        finally:
+            os.unlink(path)
+
 
 class Markdown(unittest.TestCase):
     def test_table_renders_with_alignment(self):
