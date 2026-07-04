@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0 — 2026-07-05
+
+- **Tool calls are now searchable.** The search corpus previously indexed message
+  text, tool *results*, thinking, injected context and channel bodies — but not the
+  tool *call* itself, so a `Bash` command like `git commit -m …`, a `Read`/`Edit`
+  file path, or a `Grep` pattern was invisible to search (a real gap vs viewers that
+  scan the whole JSON). `search_turns` now adds, per tool_use, the tool name plus its
+  identifying args (`command`, `file_path`/`path`/`notebook_path`, `pattern`, `query`,
+  `url`, `description`, `prompt`). Large code blobs (`content`/`new_string`/
+  `old_string`) are deliberately left out — they're already searchable via the
+  tool_result diff, so indexing them again would only bloat the index and double-rank.
+
 ## 1.4.3 — 2026-07-04
 
 - **Channel-relayed human messages get their own category** (💬 텔레그램·채널). A

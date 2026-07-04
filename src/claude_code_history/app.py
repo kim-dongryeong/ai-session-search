@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.4.3"
+__version__ = "1.5.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -398,6 +398,24 @@ def _toolinput(txt):
     except Exception:
         return name.strip(), {}
 
+# Fields that make a tool CALL findable: the command, the files, the pattern, the
+# intent — NOT raw JSON keys and NOT large code blobs (content/new_string are already
+# searchable via the tool_result diff, so re-indexing them would only bloat the index).
+_TOOL_SEARCH_FIELDS = ("command", "file_path", "path", "notebook_path", "pattern",
+                       "query", "url", "description", "prompt")
+
+def _tool_use_search_text(txt):
+    """Searchable text for a tool_use seg: tool name + its identifying args
+    (e.g. `Bash git commit -m …`, `Read src/app.py`, `Grep TODO`)."""
+    name, inp = _toolinput(txt)
+    vals = [name]
+    if isinstance(inp, dict):
+        for k in _TOOL_SEARCH_FIELDS:
+            v = inp.get(k)
+            if isinstance(v, str) and v.strip():
+                vals.append(v)
+    return " ".join(vals)
+
 def session_digest(turns):
     files, commits, urls = set(), [], set()
     cmds = tests = errors = edits = webs = 0
@@ -544,6 +562,8 @@ def search_turns(path):
             if k == "channel":
                 pc = parse_channel(v)
                 parts.append(pc[1] if pc else v)
+            elif k == "tool_use":
+                parts.append(_tool_use_search_text(v))
             elif k in _SEARCH_KINDS:
                 parts.append(v)
         txt = " ".join(parts)
