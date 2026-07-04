@@ -20,9 +20,11 @@ def build_fixture_root():
     sid = "11111111-2222-3333-4444-555555555555"
     lines = [
         {"type": "ai-title", "aiTitle": "데모 세션"},
-        {"type": "user", "timestamp": "2026-06-30T01:00:00Z",
+        {"type": "user", "timestamp": "2026-06-30T01:00:00Z", "cwd": "/Users/x/launchdir",
+         "gitBranch": "main", "forkedFrom": {"sessionId": "99999999-8888-7777-6666-555555555555",
+                                             "messageUuid": "m1"},
          "message": {"role": "user", "content": "안녕 <b>계획</b> 알려줘"}},
-        {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "assistant", "cwd": "/Users/x/demo", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git commit -m 'x'"}},
             {"type": "text", "text": "커밋했습니다 ```python\nprint(1)\n```"}]}},
         {"type": "user", "toolUseResult": "done",
@@ -114,6 +116,34 @@ class HttpSmoke(unittest.TestCase):
         status, body = self.get("/favicon.svg")
         self.assertEqual(status, 200)
         self.assertIn("<svg", body)
+
+    def test_search_by_session_id(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        status, body = self.get("/search?q=" + sid + "&scope=all")
+        self.assertEqual(status, 200)
+        self.assertIn("데모 세션", body)        # the session is found by its own id
+        self.assertIn("참조", body)             # reference-match chip / label
+
+    def test_search_by_branched_from_id(self):
+        status, body = self.get("/search?q=99999999-8888-7777-6666-555555555555&scope=all")
+        self.assertEqual(status, 200)
+        self.assertIn("데모 세션", body)        # found via its forkedFrom (Branched from) id
+
+    def test_search_by_workspace_path(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("launchdir") + "&scope=all")
+        self.assertEqual(status, 200)
+        self.assertIn("데모 세션", body)        # findable by the launch dir in metadata
+
+    def test_session_metadata_card(self):
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
+        self.assertEqual(status, 200)
+        self.assertIn("Session Reference", body)
+        self.assertIn("Workspace", body)
+        self.assertIn("/Users/x/demo", body)                  # workspace = last cwd
+        self.assertIn("Started in", body)
+        self.assertIn("/Users/x/launchdir", body)             # launch dir = first cwd (differs)
+        self.assertIn("Branched from", body)
+        self.assertIn("99999999-8888-7777-6666-555555555555", body)
 
     def test_search_multicolor_key(self):
         status, body = self.get("/search?q=" + urllib.parse.quote("안녕 계획"))

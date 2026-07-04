@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -476,7 +476,7 @@ def extract_code(turns):
 def summarize_file(path):
     ai_title = custom_title = last_prompt = first_human = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
-    last_ts = cwd = branch = ""
+    last_ts = cwd = start_cwd = branch = forked = ""
     loop = False
     for o in iter_lines(path):
         t = o.get("type")
@@ -486,8 +486,16 @@ def summarize_file(path):
             custom_title = o.get("customTitle", custom_title) or custom_title; continue
         if t == "last-prompt":
             last_prompt = o.get("lastPrompt", last_prompt) or last_prompt; continue
-        cwd = o.get("cwd", cwd) or cwd
+        c = o.get("cwd")
+        if c:
+            cwd = c                       # last cwd = current workspace
+            if not start_cwd:
+                start_cwd = c             # first cwd = launch dir
         branch = o.get("gitBranch", branch) or branch
+        if not forked:
+            ff = o.get("forkedFrom")
+            if isinstance(ff, dict) and ff.get("sessionId"):
+                forked = ff["sessionId"]
         if o.get("timestamp"):
             last_ts = o["timestamp"]
         r = classify_line(o)
@@ -502,19 +510,33 @@ def summarize_file(path):
             first_human = " ".join(x[1] for x in r[1] if x[0] == "text").strip()
     title = custom_title or ai_title or first_human or last_prompt or "(제목 없음)"
     return {"title": title.strip()[:120], "preview": (last_prompt or first_human).strip()[:140],
-            "n": n, "last_ts": last_ts, "cwd": cwd, "branch": branch, "loop": loop}
+            "n": n, "last_ts": last_ts, "cwd": cwd, "start_cwd": start_cwd, "branch": branch,
+            "forked": forked, "loop": loop}
 
 # ---- index cache (per root, incrementally refreshed) -------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
 def session_files(root):
     return sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
 
+def _looks_ref(t):
+    """A hex/UUID-ish token (a session-id or a fragment of one), not a normal word."""
+    s = (t or "").replace("-", "")
+    return len(s) >= 6 and all(c in "0123456789abcdef" for c in s)
+
+def find_session_by_sid(root, sid):
+    """First transcript file named <sid>.jsonl anywhere under root (for branched-from links)."""
+    if not re.fullmatch(r"[0-9a-f-]{8,36}", sid or ""):
+        return None
+    for p in sorted(glob.glob(os.path.join(root, "*", sid + ".jsonl"))):
+        return p
+    return None
+
 def _index_item(path, st):
     s = summarize_file(path)
     return {"path": path, "proj": os.path.basename(os.path.dirname(path)),
             "sid": os.path.basename(path)[:-6], "title": s["title"], "preview": s["preview"],
             "n": s["n"], "mtime": st.st_mtime, "size": st.st_size, "cwd": s["cwd"],
-            "branch": s["branch"], "loop": s["loop"]}
+            "start_cwd": s["start_cwd"], "branch": s["branch"], "forked": s["forked"], "loop": s["loop"]}
 
 def get_index(root):
     """Per-root index; re-summarizes only files whose (mtime, size) changed,
@@ -1285,6 +1307,15 @@ table.stab tr.tot td{font-weight:700;border-top:2px solid #cdd2d8;border-bottom:
 .sid{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#9aa0a8;user-select:all}
 code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 @media(prefers-color-scheme:dark){code.sid{background:#2a2e35;color:#aeb4bd}}
+.srefcard>summary{cursor:pointer;font-weight:650;color:#1f6feb}
+.srefbody{margin-top:8px}
+.srow{display:flex;gap:10px;align-items:baseline;padding:2px 0;font-size:12.5px}
+.srow .slbl{flex:0 0 110px;color:#8a8f98;font-size:11.5px;text-align:right}
+.srow .sval{flex:1;min-width:0;word-break:break-all}
+.spath{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;background:#eef1f4;padding:1px 5px;border-radius:4px;color:#444;user-select:all}
+@media(prefers-color-scheme:dark){.spath{background:#2a2e35;color:#cfd4db}}
+.slink code.sid{color:#1f6feb;text-decoration:underline}
+@media(max-width:620px){.srow{flex-direction:column;gap:1px}.srow .slbl{flex:none;text-align:left}}
 .badge{font-weight:400;font-size:11px;margin-left:2px}
 .threadlink{font-weight:600;color:#1f6feb;text-decoration:none;font-size:11px;white-space:nowrap}
 .seg{padding:9px 15px;white-space:pre-wrap;word-break:break-word}
@@ -1743,6 +1774,7 @@ class H(BaseHTTPRequestHandler):
                 proj_cwd[it["proj"]] = short_path(it["cwd"])
         mtimes = {it["path"]: it["mtime"] for it in index}
         titles = {it["path"]: it["title"] for it in index}
+        metas = {it["path"]: it for it in index}
 
         # date window: explicit from/to overrides the preset days dropdown
         lo = _date_ts(from_)
@@ -1760,6 +1792,15 @@ class H(BaseHTTPRequestHandler):
                 continue
             if proj and os.path.basename(os.path.dirname(path)) != proj:
                 continue
+            # session-level metadata match: session-id / branched-from id / workspace
+            # / launch dir / file path / title — findable regardless of scope.
+            it = metas.get(path, {})
+            sid = os.path.basename(path)[:-6]
+            forked = it.get("forked", "")
+            meta_blob = " ".join(filter(None, [sid, forked, it.get("cwd", ""),
+                                               it.get("start_cwd", ""), path, titles.get(path, "")])).lower()
+            meta_hit = all(t in meta_blob for t in terms)
+            is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in terms)
             hits, ww = [], [0] * len(terms)
             for gi, role, txt in search_turns(path):
                 if ROLE_OK is not None and role not in ROLE_OK:
@@ -1778,15 +1819,21 @@ class H(BaseHTTPRequestHandler):
                     pos = low.find(terms[0])
                 snip = txt[max(0, pos - 55):pos + plen + 90].replace("\n", " ")
                 hits.append((gi, role, snip))
-            if hits:
-                all_word = all(c > 0 for c in ww)
+            if hits or meta_hit:
+                all_word = bool(hits) and all(c > 0 for c in ww)
                 # relevance: exact whole-word matches dominate substring pollution;
                 # docs matching every term as a real word get the big bonus, so a
                 # doc with the literal word "oss" outranks one that only has "ossean".
                 score = (1000 if all_word else 0) + sum(10 * min(c, 5) for c in ww) + min(len(hits), 20) * 0.1
+                if is_ref:                    # exact id/reference → top of the list
+                    score += 3000
+                elif meta_hit and not hits:   # path/title-only meta match → modest
+                    score += 5
                 results.append({"path": path, "title": titles.get(path, "(제목 없음)"),
                                 "proj": os.path.basename(os.path.dirname(path)),
-                                "n": len(hits), "score": score, "all_word": all_word, "hits": hits[:6]})
+                                "n": len(hits), "score": score, "all_word": all_word, "hits": hits[:6],
+                                "meta_hit": meta_hit, "sid": sid, "forked": forked,
+                                "cwd": it.get("cwd", ""), "start_cwd": it.get("start_cwd", "")})
         results.sort(key=lambda x: (x["score"], x["n"]), reverse=True)
         ms = int((time.perf_counter() - t0) * 1000)
 
@@ -1815,15 +1862,26 @@ class H(BaseHTTPRequestHandler):
             def jump(gi):
                 return ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(q)
                         + f"&goto={gi}")
-            exact = "" if r["all_word"] else ' <span class=hint title="일부 단어가 부분일치(다른 단어의 조각)로만 매치됨">≈ 부분일치</span>'
+            openurl = jump(r["hits"][0][0]) if r["hits"] else (
+                "/session?p=" + urllib.parse.quote(r["path"]) + (("&q=" + urllib.parse.quote(q)) if q else ""))
+            exact = "" if (r["all_word"] or not r["hits"]) else ' <span class=hint title="일부 단어가 부분일치(다른 단어의 조각)로만 매치됨">≈ 부분일치</span>'
+            metaline = ""
+            if r.get("meta_hit"):
+                bits = [f'🔗 <code class=sid>{hl(r["sid"], q)}</code>']
+                if r.get("cwd"):
+                    bits.append(f'📂 {hl(short_path(r["cwd"]), q)}')
+                if r.get("forked"):
+                    bits.append(f'⑂ <code class=sid>{hl(r["forked"], q)}</code>')
+                metaline = f'<div class=snip><span class=chip>참조</span> ' + " · ".join(bits) + '</div>'
             snips = "".join(
                 f'<div class=snip><a class=snipjump href="{jump(gi)}">'
                 f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, q)}</div>'
                 for gi, role, s in r["hits"])
+            cnt = f'({r["n"]}건)' if r["hits"] else '참조 일치'
             short = proj_cwd.get(r["proj"], r["proj"])
-            rows.append(f'<div class=card><a class=t href="{jump(r["hits"][0][0])}">{esc(r["title"])}</a> '
-                        f'<span class=meta>({r["n"]}건)</span>{exact}'
-                        f'<div class=meta><span class=chip>{esc(short)}</span></div>{snips}</div>')
+            rows.append(f'<div class=card><a class=t href="{openurl}">{esc(r["title"])}</a> '
+                        f'<span class=meta>{cnt}</span>{exact}'
+                        f'<div class=meta><span class=chip>{esc(short)}</span></div>{metaline}{snips}</div>')
 
         # color key: which color = which term
         keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(terms))
@@ -1850,13 +1908,31 @@ class H(BaseHTTPRequestHandler):
             params.update({k: v for k, v in kw.items() if v not in (None, "")})
             return "/session?" + urllib.parse.urlencode(params)
 
-        head = (f'<p class=meta>{esc(meta["cwd"] or os.path.basename(os.path.dirname(path)))} · '
-                f'{esc(meta["branch"])} · {fmt_ts(meta["last_ts"])}</p>'
-                f'<h3 style="margin:4px 0">{esc(meta["title"])}'
+        workspace, started, forked = meta.get("cwd", ""), meta.get("start_cwd", ""), meta.get("forked", "")
+        def _srow(lbl, val):
+            return f'<div class=srow><span class=slbl>{lbl}</span><span class=sval>{val}</span></div>'
+        mrows = []
+        if workspace:
+            mrows.append(_srow("Workspace", f'<code class=spath>{esc(workspace)}</code>'))
+        if started and started != workspace:
+            mrows.append(_srow("Started in",
+                               f'<code class=spath>{esc(started)}</code>'
+                               ' <span class=hint>· 세션이 시작된 폴더 (파일은 다른 워크스페이스로 이동됨)</span>'))
+        mrows.append(_srow("세션 파일", f'<code class=spath>{esc(path)}</code>'))
+        mrows.append(_srow("session-id", f'<code class=sid>{esc(sid)}</code>'))
+        if forked:
+            pf = find_session_by_sid(rt, forked)
+            fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>'
+                  if pf else f'<code class=sid>{esc(forked)}</code> <span class=hint>· 이 폴더엔 없음</span>')
+            mrows.append(_srow("Branched from", fv))
+        if meta.get("branch"):
+            mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>'))
+        mrows.append(_srow("복귀", f'<code class=sid>claude --resume {esc(sid)}</code>'))
+        mrows.append(_srow("저장 위치", f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
+        refcard = f'<details class="card srefcard" open><summary>📍 세션 정보 (Session Reference)</summary><div class=srefbody>{"".join(mrows)}</div></details>'
+        head = (f'<h3 style="margin:4px 0 8px">{esc(meta["title"])}'
                 + (' <span class=loopchip>🔁 자율 빌드루프</span>' if meta.get("loop") else "") + '</h3>'
-                f'<p class=meta>session-id <code class=sid>{esc(sid)}</code> · '
-                f'복귀: <code class=sid>claude --resume {esc(sid)}</code> · 📁 {esc(short_path(rt))}</p>'
-                + legend_html())
+                + refcard + legend_html())
 
         # subagent banner
         subs = [subagent_brief(s) for s in subagent_files(path)]

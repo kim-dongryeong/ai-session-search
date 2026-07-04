@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.0 — 2026-07-05
+
+- **Search by session-id / reference.** Searching a UUID like
+  `40b92137-2ff9-4461-90c3-21729c2b3bee` now finds the session(s) — matched against
+  each session's **session-id, branched-from id, workspace path, launch dir, file
+  path and title** (a session-level match, so it works in any scope). Exact id
+  matches rank to the very top with a `참조` chip; the same id living under two
+  project folders (e.g. a correctly-placed copy + a stray one) both show up. Metadata
+  is searchable too — find sessions by their workspace path.
+- **Session metadata card** (`📍 세션 정보 / Session Reference`) at the top of each
+  session, modeled on the `session-ref` skill: **Workspace** (current dir = last
+  `cwd`), **Started in** (launch dir = first `cwd`, shown only when it differs — i.e.
+  the transcript was moved to another workspace), **session file** path, **session-id**,
+  **Branched from** (`forkedFrom.sessionId`, linked to the parent session when it
+  exists in the same root), git branch, and the resume command. `summarize_file` now
+  records `start_cwd` and `forked`.
+
 ## 1.5.0 — 2026-07-05
 
 - **Tool calls are now searchable.** The search corpus previously indexed message
