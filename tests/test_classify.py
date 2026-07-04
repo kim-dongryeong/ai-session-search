@@ -345,6 +345,42 @@ class ToolRender(unittest.TestCase):
             {"old_string": "a", "new_string": "b"}, {"old_string": "x", "new_string": "y"}]})
         self.assertEqual(app.tool_use_html(txt).count("tk-diff"), 2)
 
+    def test_tool_use_search_text_indexes_args_not_json_keys(self):
+        txt = ('Bash\n' + json.dumps(
+            {"command": "git commit -m zzq", "description": "do it", "run_in_background": False}))
+        s = app._tool_use_search_text(txt)
+        self.assertIn("Bash", s)
+        self.assertIn("git commit -m zzq", s)     # command is findable
+        self.assertIn("do it", s)                  # description too
+        self.assertNotIn("run_in_background", s)   # raw JSON keys are NOT indexed
+        # Edit → file path findable; big blobs excluded
+        edit = 'Edit\n' + json.dumps({"file_path": "/a/uniquename.py",
+                                       "old_string": "SECRETBLOB", "new_string": "SECRETBLOB2"})
+        se = app._tool_use_search_text(edit)
+        self.assertIn("/a/uniquename.py", se)
+        self.assertNotIn("SECRETBLOB", se)         # content blob left to the tool_result diff
+
+    def test_search_turns_finds_bash_command(self):
+        import tempfile
+        session = [
+            {"type": "user", "message": {"role": "user", "content": "커밋해줘"},
+             "timestamp": "2026-07-05T00:00:00Z"},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "git commit -m zzquniquecmd", "description": "commit"}}]},
+             "timestamp": "2026-07-05T00:00:01Z"},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as fh:
+            for o in session:
+                fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+            path = fh.name
+        try:
+            rows = app.search_turns(path)
+            blob = " ".join(txt for _, _, txt in rows)
+            self.assertIn("zzquniquecmd", blob)     # command now in the search corpus
+        finally:
+            os.unlink(path)
+
     def test_bash_result_splits_stdout_stderr(self):
         txt = json.dumps({"stdout": "done", "stderr": "\noops", "interrupted": False},
                          ensure_ascii=False, indent=2)
