@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.0 — 2026-07-05
+
+- **Token usage & model, at every level.** Claude Code records `message.usage`
+  (input / output / cache-creation / cache-read) and `message.model` on each assistant
+  message — the viewer now surfaces all of it (reasoning **effort is *not* stored** in
+  the transcript, so it is deliberately never shown/guessed):
+  - **Per project** — the 📊 stats table gains an **출력토큰** column (tooltip = full
+    input/output/cache breakdown) and a **모델** mix column; projects sort by output
+    tokens; a note flags that cache-read is cheap re-use so totals aren't misread.
+  - **Per session** — a 토큰 line + model-mix badges in the session summary, and a
+    token badge + dominant model on every index row.
+  - **Per question** — each 🧑 turn shows the tokens its whole answer block (tool loop
+    included) consumed; each ✦ Claude turn shows its own tokens + the model it used
+    (so mid-session model switches are visible).
+- **Scoped search.** Search **within one folder** (a 🔎 box on the project stats card,
+  scoping results to that project) and **within the current session** (a 🔎 box on every
+  session; `?sq=` lists just the matching messages with a count, highlight, and a
+  "← 전체 대화" toggle — and it searches the same rich corpus, so Bash commands and file
+  paths are findable in-session too).
+- **Windows.** Confirmed cross-platform (config in `%APPDATA%`, root under
+  `%USERPROFILE%\.claude\projects`, utf-8 stdout) and covered by CI on `windows-latest`;
+  added a double-click **`claude-code-history.cmd`** launcher (installed command → else
+  `python`/`py` on the shim).
+
 ## 1.6.0 — 2026-07-05
 
 - **Search by session-id / reference.** Searching a UUID like

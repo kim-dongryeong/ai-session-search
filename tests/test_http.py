@@ -24,9 +24,13 @@ def build_fixture_root():
          "gitBranch": "main", "forkedFrom": {"sessionId": "99999999-8888-7777-6666-555555555555",
                                              "messageUuid": "m1"},
          "message": {"role": "user", "content": "안녕 <b>계획</b> 알려줘"}},
-        {"type": "assistant", "cwd": "/Users/x/demo", "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git commit -m 'x'"}},
-            {"type": "text", "text": "커밋했습니다 ```python\nprint(1)\n```"}]}},
+        {"type": "assistant", "cwd": "/Users/x/demo", "message": {
+            "role": "assistant", "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 100, "output_tokens": 50,
+                      "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5000},
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git commit -m 'x'"}},
+                {"type": "text", "text": "커밋했습니다 ```python\nprint(1)\n```"}]}},
         {"type": "user", "toolUseResult": "done",
          "message": {"role": "user", "content": [
              {"type": "tool_result", "tool_use_id": "t1", "content": "Traceback: boom"}]}},
@@ -133,6 +137,33 @@ class HttpSmoke(unittest.TestCase):
         status, body = self.get("/search?q=" + urllib.parse.quote("launchdir") + "&scope=all")
         self.assertEqual(status, 200)
         self.assertIn("데모 세션", body)        # findable by the launch dir in metadata
+
+    def test_token_and_model_in_session(self):
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
+        self.assertEqual(status, 200)
+        self.assertIn("<b>토큰</b>", body)          # session token summary
+        self.assertIn("Opus 4.8", body)              # model badge (claude-opus-4-8 → Opus 4.8)
+        self.assertIn("tokb qtok", body)             # per-question token badge on the 🧑 turn
+
+    def test_token_column_in_index(self):
+        status, body = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertIn("출력토큰", body)              # project-stats token column
+        self.assertIn("class=mdlcell", body)         # model-mix column
+
+    def test_in_session_search(self):
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path)
+                                + "&sq=" + urllib.parse.quote("계획"))
+        self.assertEqual(status, 200)
+        self.assertIn("이 세션에서", body)           # in-session result bar
+        self.assertIn("1개 메시지 매치", body)        # the one human turn matches "계획"
+        self.assertIn("← 전체 대화", body)
+
+    def test_in_session_search_bash_command(self):
+        # tool-call text is searchable in-session too (git commit lives in a tool_use)
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path)
+                                + "&sq=" + urllib.parse.quote("git commit"))
+        self.assertIn("1개 메시지 매치", body)
 
     def test_session_metadata_card(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")

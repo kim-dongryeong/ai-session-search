@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -366,8 +366,13 @@ def classify_turns(path, sub=False):
     for o in iter_lines(path):
         r = classify_line(o, sub)
         if r:
-            out.append({"role": r[0], "segs": r[1], "ts": o.get("timestamp", ""),
-                        "tags": turn_tags(o, r[0], r[1])})
+            turn = {"role": r[0], "segs": r[1], "ts": o.get("timestamp", ""),
+                    "tags": turn_tags(o, r[0], r[1])}
+            if o.get("type") == "assistant":
+                msg = o.get("message") or {}
+                turn["model"] = msg.get("model", "")
+                turn["tok"] = usage_tok(msg.get("usage"))
+            out.append(turn)
     return out
 
 # ---- subagents --------------------------------------------------------------
@@ -477,9 +482,17 @@ def summarize_file(path):
     ai_title = custom_title = last_prompt = first_human = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
     last_ts = cwd = start_cwd = branch = forked = ""
+    tok = {"in": 0, "out": 0, "cw": 0, "cr": 0}
+    models = {}
     loop = False
     for o in iter_lines(path):
         t = o.get("type")
+        if t == "assistant":
+            m = o.get("message") or {}
+            add_tok(tok, usage_tok(m.get("usage")))
+            mdl = m.get("model")
+            if mdl:
+                models[mdl] = models.get(mdl, 0) + 1
         if t == "ai-title":
             ai_title = o.get("aiTitle", ai_title) or ai_title; continue
         if t == "custom-title":
@@ -511,7 +524,7 @@ def summarize_file(path):
     title = custom_title or ai_title or first_human or last_prompt or "(제목 없음)"
     return {"title": title.strip()[:120], "preview": (last_prompt or first_human).strip()[:140],
             "n": n, "last_ts": last_ts, "cwd": cwd, "start_cwd": start_cwd, "branch": branch,
-            "forked": forked, "loop": loop}
+            "forked": forked, "loop": loop, "tok": tok, "models": models}
 
 # ---- index cache (per root, incrementally refreshed) -------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
@@ -536,7 +549,8 @@ def _index_item(path, st):
     return {"path": path, "proj": os.path.basename(os.path.dirname(path)),
             "sid": os.path.basename(path)[:-6], "title": s["title"], "preview": s["preview"],
             "n": s["n"], "mtime": st.st_mtime, "size": st.st_size, "cwd": s["cwd"],
-            "start_cwd": s["start_cwd"], "branch": s["branch"], "forked": s["forked"], "loop": s["loop"]}
+            "start_cwd": s["start_cwd"], "branch": s["branch"], "forked": s["forked"], "loop": s["loop"],
+            "tok": s["tok"], "models": s["models"]}
 
 def get_index(root):
     """Per-root index; re-summarizes only files whose (mtime, size) changed,
@@ -624,15 +638,75 @@ def fmt_size(b):
             return f"{b/div:.1f}{unit}"
     return f"{b}B"
 
+# ---- token usage & model ----------------------------------------------------
+_TOK_KEYS = (("in", "input_tokens"), ("out", "output_tokens"),
+             ("cw", "cache_creation_input_tokens"), ("cr", "cache_read_input_tokens"))
+
+def usage_tok(u):
+    """Pull the 4 token counts from a message.usage dict → {in,out,cw,cr} or None."""
+    if not isinstance(u, dict):
+        return None
+    d = {}
+    for a, b in _TOK_KEYS:
+        v = u.get(b)
+        d[a] = v if isinstance(v, int) else 0
+    return d if any(d.values()) else None
+
+def add_tok(dst, src):
+    if src:
+        for a, _ in _TOK_KEYS:
+            dst[a] += src.get(a, 0)
+    return dst
+
+def fmt_tok(n):
+    n = n or 0
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}k"
+    return str(n)
+
+_MODEL_RE = re.compile(r"(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?")
+def model_short(m):
+    """'claude-opus-4-8' → 'Opus 4.8'; synthetic/unknown → '' (skip)."""
+    s = (m or "")
+    if not s or s.startswith("<"):
+        return ""
+    mm = _MODEL_RE.search(s)
+    if mm:
+        base = mm.group(1).capitalize()
+        return f"{base} {mm.group(2)}.{mm.group(3)}" if mm.group(3) else f"{base} {mm.group(2)}"
+    return s.replace("claude-", "")
+
+def tok_badge(tok, cls="tokb"):
+    if not tok or not any(tok.values()):
+        return ""
+    title = (f"입력 {tok['in']:,} · 출력 {tok['out']:,} · "
+             f"캐시생성 {tok['cw']:,} · 캐시읽기 {tok['cr']:,} (캐시읽기는 재사용분이라 저비용)")
+    return (f'<span class="{cls}" title="{esc(title)}">'
+            f'↑{fmt_tok(tok["in"])} ↓{fmt_tok(tok["out"])}'
+            f'<span class=tokc> 💾{fmt_tok(tok["cw"])}</span></span>')
+
+def models_badge(models):
+    out = []
+    for m, c in sorted((models or {}).items(), key=lambda kv: -kv[1]):
+        sh = model_short(m)
+        if sh:
+            out.append(f'<span class=mdl title="{esc(m)} · {c}개 응답">{esc(sh)}<span class=mdlc> {c}</span></span>')
+    return " ".join(out)
+
 def agg_stats(items):
     s = {"sessions": 0, "my_sessions": 0, "my_msgs": 0, "size": 0, "my_size": 0,
-         "loop": 0, "asst": 0, "tool": 0}
+         "loop": 0, "asst": 0, "tool": 0, "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": {}}
     for it in items:
         s["sessions"] += 1
         s["size"] += it["size"]
         s["asst"] += it["n"]["assistant"]
         s["tool"] += it["n"]["tool-result"]
         s["my_msgs"] += it["n"]["you"]
+        add_tok(s["tok"], it.get("tok"))
+        for m, c in (it.get("models") or {}).items():
+            s["models"][m] = s["models"].get(m, 0) + c
         if it["n"]["you"] > 0:
             s["my_sessions"] += 1
             s["my_size"] += it["size"]
@@ -1211,8 +1285,16 @@ def render_turn(gi, t, q="", thread_link=None):
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
     cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
+    extra = ""
+    if role == "assistant":
+        sh = model_short(t.get("model", ""))
+        if sh:
+            extra += f'<span class=mdl>{esc(sh)}</span>'
+        extra += tok_badge(t.get("tok"))
+    elif role == "you" and t.get("qtok"):
+        extra += tok_badge(t["qtok"], "tokb qtok")
     who = (f'<div class=who><span title="{esc(role_desc)}">{role_label} {badges}</span>'
-           f'<span class=whoR>{tstr}{link}</span></div>')
+           f'<span class=whoR>{extra}{tstr}{link}</span></div>')
     return f'<div class="msg {role}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
@@ -1318,6 +1400,21 @@ code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 @media(max-width:620px){.srow{flex-direction:column;gap:1px}.srow .slbl{flex:none;text-align:left}}
 .badge{font-weight:400;font-size:11px;margin-left:2px}
 .threadlink{font-weight:600;color:#1f6feb;text-decoration:none;font-size:11px;white-space:nowrap}
+.tokb{font-weight:500;font-size:10.5px;color:#6b7280;font-variant-numeric:tabular-nums;background:#eef1f4;border-radius:5px;padding:0 6px;white-space:nowrap;cursor:help}
+@media(prefers-color-scheme:dark){.tokb{background:#242830;color:#aeb4bd}}
+.tokb .tokc{color:#a0a6ae}
+.tokb.qtok{background:#e3efff;color:#10488f}
+@media(prefers-color-scheme:dark){.tokb.qtok{background:#16304f;color:#9ec5ff}}
+.mdl{font-weight:600;font-size:10.5px;color:#157038;background:#e8f7ee;border-radius:5px;padding:0 6px;white-space:nowrap}
+.mdl .mdlc{font-weight:400;color:#5aa77a}
+@media(prefers-color-scheme:dark){.mdl{background:#15331f;color:#7ddfa1}}
+td.mdlcell{text-align:left;white-space:normal;line-height:1.9}
+td.mdlcell .mdl{display:inline-block;margin:1px 0}
+form.ssearch{display:flex;gap:7px;margin:10px 0;flex-wrap:wrap}
+form.ssearch input[type=search]{flex:1;min-width:180px;padding:7px 12px;border:1px solid #cfd4db;border-radius:8px;font-size:13.5px}
+@media(prefers-color-scheme:dark){form.ssearch input[type=search]{background:#1b1e24;color:#e7e9ec;border-color:#3a3f47}}
+form.ssearch button{padding:7px 14px;border:0;border-radius:8px;background:#1f6feb;color:#fff;font-size:13px;cursor:pointer}
+form.ssearch a.ssclear{align-self:center;font-size:12px;color:#b04;text-decoration:none}
 .seg{padding:9px 15px;white-space:pre-wrap;word-break:break-word}
 .seg.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#555;max-height:340px;overflow:auto;background:#fafbfc}
 @media(prefers-color-scheme:dark){.seg.mono{color:#9aa0a8;background:#15171c}}
@@ -1611,7 +1708,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
-                                           g("goto", "")))
+                                           g("goto", ""), g("sq", "")))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot"):
@@ -1682,37 +1779,55 @@ class H(BaseHTTPRequestHandler):
             return "/?" + "&".join(parts) if parts else "/"
 
         # ---- project insight ----
+        def _toktip(tk):
+            return (f'입력 {tk["in"]:,} · 출력 {tk["out"]:,} · 캐시생성 {tk["cw"]:,} · '
+                    f'캐시읽기 {tk["cr"]:,} (캐시읽기는 재사용분이라 저비용)')
         if proj_filter:
             st = agg_stats(items)
             label = proj_cwd.get(proj_filter, proj_filter)
             loopline = (f' · <span class=loopchip>🔁 자율 빌드루프 {st["loop"]}개</span>') if st["loop"] else ""
+            hidden_root = f'<input type=hidden name=root value="{esc(root)}">' if len(ROOTS) > 1 else ""
             statsblock = (
                 f'<div class="card digest"><b>📁 {esc(label)}</b>{loopline}'
                 f'<div style="margin-top:6px">총 <b>{st["sessions"]}</b>개 세션 · '
                 f'🧑 내가 참여한 세션 <b>{st["my_sessions"]}</b>개 · 내가 쓴 메시지 <b>{st["my_msgs"]}</b>개</div>'
                 f'<div>총 용량 <b>{fmt_size(st["size"])}</b> · 🧑 내가 참여한 세션 용량 합 <b>{fmt_size(st["my_size"])}</b></div>'
-                f'<div class=meta>✦ Claude {st["asst"]} · ⚙ 도구결과 {st["tool"]}</div></div>')
+                f'<div style="margin-top:6px" title="{esc(_toktip(st["tok"]))}"><b>토큰</b> {tok_badge(st["tok"])} '
+                f'<span class=meta>입력 {st["tok"]["in"]:,} · 출력 {st["tok"]["out"]:,} · '
+                f'캐시 {st["tok"]["cw"]+st["tok"]["cr"]:,}</span></div>'
+                + (f'<div style="margin-top:4px"><b>모델</b> {models_badge(st["models"])}</div>' if st["models"] else "")
+                + f'<div class=meta>✦ Claude {st["asst"]} · ⚙ 도구결과 {st["tool"]}</div>'
+                f'<form class=ssearch method=get action=/search style="margin-top:8px">'
+                f'<input type=hidden name=proj value="{esc(proj_filter)}">{hidden_root}'
+                f'<input type=search name=q placeholder="🔎 이 폴더에서만 검색…"><button>검색</button></form></div>')
         else:
             by = {}
             for it in all_items:
                 by.setdefault(it["proj"], []).append(it)
+            proj_stats = {p: agg_stats(its) for p, its in by.items()}
             ov = []
-            for p, its in sorted(by.items(), key=lambda kv: -agg_stats(kv[1])["size"]):
-                s = agg_stats(its)
+            for p, s in sorted(proj_stats.items(), key=lambda kv: -kv[1]["tok"]["out"]):
                 lc = f'🔁 {s["loop"]}' if s["loop"] else ""
                 ov.append(f'<tr><td><a href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a></td>'
                           f'<td>{s["sessions"]}</td><td>{s["my_sessions"]}</td><td>{s["my_msgs"]}</td>'
-                          f'<td>{fmt_size(s["size"])}</td><td>{fmt_size(s["my_size"])}</td><td>{lc}</td></tr>')
+                          f'<td title="{esc(_toktip(s["tok"]))}">{fmt_tok(s["tok"]["out"])}</td>'
+                          f'<td class=mdlcell>{models_badge(s["models"])}</td>'
+                          f'<td>{fmt_size(s["size"])}</td><td>{lc}</td></tr>')
             tot = agg_stats(all_items)
             table = ('<table class=stab><thead><tr><th>프로젝트(폴더)</th><th title="세션 수">세션</th>'
                      '<th title="내가(사람이) 참여한 세션 수">내 참여</th><th title="내가 쓴 총 메시지 수">내 메시지</th>'
-                     '<th title="모든 세션 용량 합">총 용량</th><th title="내가 참여한 세션들의 용량 합">내 세션 용량</th>'
+                     '<th title="출력(생성) 토큰. 마우스오버=입력·출력·캐시 전체 분해">출력토큰</th>'
+                     '<th title="이 폴더에서 쓰인 모델과 응답 수">모델</th>'
+                     '<th title="모든 세션 용량 합">용량</th>'
                      '<th title="자율 빌드루프 세션 수">🔁</th></tr></thead><tbody>' + "".join(ov)
                      + f'<tr class=tot><td>합계 {len(by)}개 폴더</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
-                     f'<td>{tot["my_msgs"]}</td><td>{fmt_size(tot["size"])}</td><td>{fmt_size(tot["my_size"])}</td>'
+                     f'<td>{tot["my_msgs"]}</td><td title="{esc(_toktip(tot["tok"]))}">{fmt_tok(tot["tok"]["out"])}</td>'
+                     f'<td class=mdlcell>{models_badge(tot["models"])}</td><td>{fmt_size(tot["size"])}</td>'
                      f'<td>{tot["loop"] or ""}</td></tr></tbody></table>')
             statsblock = (f'<details class="card" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
-                          f'📊 프로젝트별 통계 ({len(by)}개 폴더)</summary>{table}</details>')
+                          f'📊 프로젝트별 통계 ({len(by)}개 폴더) · 출력토큰순</summary>{table}'
+                          f'<p class=meta style="padding:0 4px">💡 캐시읽기 토큰은 매 턴 재사용분이라 저비용 — '
+                          f'"많이 쓴 정도"는 출력·입력·캐시생성으로 보세요.</p></details>')
 
         arrow = "▼" if dir_ == "desc" else "▲"
         sortbar = ['<div class=bar><span class=meta>정렬:</span>']
@@ -1735,10 +1850,17 @@ class H(BaseHTTPRequestHandler):
         for it in items:
             link = "/session?p=" + urllib.parse.quote(it["path"])
             loopchip = ' <span class=loopchip>🔁 자율 빌드루프</span>' if it.get("loop") else ""
+            tk = it.get("tok")
+            tokbit = f' · {tok_badge(tk)}' if (tk and any(tk.values())) else ""
+            mdlbit = ""
+            if it.get("models"):
+                sh = model_short(max(it["models"].items(), key=lambda kv: kv[1])[0])
+                if sh:
+                    mdlbit = f' · <span class=mdl>{esc(sh)}</span>'
             rows.append(
                 f'<div class=card><a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
                 f'<div class=meta><span class=chip>{esc(proj_label(it))}</span>'
-                f'{counts_html(it["n"])} · '
+                f'{counts_html(it["n"])}{tokbit}{mdlbit} · '
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
                 + (f'<div class=preview>{esc(it["preview"])}</div>' if it["preview"] else "") + '</div>')
@@ -1893,7 +2015,7 @@ class H(BaseHTTPRequestHandler):
                      q, scope, root, days, from_, to)
 
     # ---- session ----
-    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto=""):
+    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
             return shell("?", "<p>세션을 찾을 수 없습니다.</p>")
@@ -1902,6 +2024,16 @@ class H(BaseHTTPRequestHandler):
         meta = summarize_file(path)
         sid = os.path.basename(path)[:-6]
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
+        # per-question token cost: sum each 🧑 turn's answer block (until the next 🧑)
+        for i, tt in enumerate(turns):
+            if tt["role"] == "you":
+                qsum = {"in": 0, "out": 0, "cw": 0, "cr": 0}
+                j = i + 1
+                while j < len(turns) and turns[j]["role"] != "you":
+                    add_tok(qsum, turns[j].get("tok"))
+                    j += 1
+                if any(qsum.values()):
+                    tt["qtok"] = qsum
 
         def url(**kw):
             params = {"p": path}
@@ -1952,6 +2084,13 @@ class H(BaseHTTPRequestHandler):
         # extracted-fact digest
         d = session_digest(turns)
         dl = []
+        if any(meta["tok"].values()):
+            tk = meta["tok"]
+            dl.append(f'<div style="margin-bottom:6px"><b>토큰</b> {tok_badge(tk)} '
+                      f'<span class=meta>입력 {tk["in"]:,} · 출력 {tk["out"]:,} · '
+                      f'캐시생성 {tk["cw"]:,} · 캐시읽기 {tk["cr"]:,}</span></div>')
+        if meta["models"]:
+            dl.append(f'<div style="margin-bottom:6px"><b>모델</b> {models_badge(meta["models"])}</div>')
         dl.append(f'✏️ 편집 {d["edits"]}회 ({len(d["files"])}개 파일) · ❯ 명령 {d["cmds"]} · '
                   f'🧪 테스트 {d["tests"]} · ⚠️ 에러 {d["errors"]} · ⎇ 커밋 {len(d["commits"])} · 🌐 웹 {d["webs"]}')
         if d["files"]:
@@ -1967,6 +2106,27 @@ class H(BaseHTTPRequestHandler):
         digest = (f'<details class="card digest" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
                   f'📊 이 세션 요약 (추출된 사실)</summary><div style="margin-top:8px">{"".join(dl)}</div></details>')
         head += digest
+
+        # in-session search box (always available)
+        head += (f'<form class=ssearch method=get action=/session>'
+                 f'<input type=hidden name=p value="{esc(path)}">'
+                 f'<input type=search name=sq value="{esc(sq)}" placeholder="🔎 이 세션에서 검색… (단어들=AND, \"구문\")">'
+                 f'<button>검색</button>'
+                 + (f'<a class=ssclear href="{url()}">✕ 지우기</a>' if sq else "") + '</form>')
+
+        # ---- in-session search (sq) ----
+        if sq.strip():
+            terms = parse_query(sq)
+            match_gis = [gi for gi, role, txt in search_turns(path)
+                         if terms and all(t in txt.lower() for t in terms)]
+            body = [render_turn(gi, turns[gi], sq, url(thread=gi) if turns[gi]["role"] == "you" else None)
+                    for gi in match_gis]
+            ms = int((time.perf_counter() - t0) * 1000)
+            bar = (f'<div class=bar><a href="{url()}">← 전체 대화</a>'
+                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — 이 세션에서 {len(match_gis)}개 메시지 매치 · {ms}ms'
+                   f'<span id=perf></span></span></div>')
+            return shell(meta["title"][:50], head + bar
+                         + ("".join(body) or "<p class=meta>이 세션에서 결과가 없어요.</p>"), q, root=rt)
 
         # ---- CODE view ----
         if view == "code":
