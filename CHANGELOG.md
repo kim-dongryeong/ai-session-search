@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.0.0 — 2026-07-05
+
+First public release. 🎉
+
+- **Open source under GPL-3.0-or-later.** A finished end-user tool distributed free;
+  copyleft keeps forks/derivatives open (you can use, modify, sell, self-host — but a
+  distributed modified version must ship its source under the GPL). `LICENSE` added,
+  `pyproject` license + classifiers set.
+- **UI is now English by default**, and fully **internationalized**. Every user-facing
+  string goes through a tiny stdlib `tr()` layer whose keys are the English text.
+  Switch language live with a 🌐 header picker (remembered via a cookie); set a default
+  with `--lang` / `CCH_LANG`. A **Korean (한국어)** locale ships built in.
+- **Add a language with no rebuild**: drop `<code>.json` (e.g. `ja.json`) into the
+  package's `locales/` or `~/.config/claude-code-history/locales/` (or `%APPDATA%\…` on
+  Windows) — keys are the English strings; missing keys fall back to English.
+- 86 tests (added i18n + language-switch coverage).
+
 ## 1.7.0 — 2026-07-05
 
 - **Token usage & model, at every level.** Claude Code records `message.usage`

@@ -2,7 +2,7 @@
 """Claude Code transcript viewer — stdlib only, read-only.
 
 Correctly attributes WHO said what (audited + adversarially verified ruleset for the
-Claude Code JSONL schema). Only genuine human-typed text is labelled "나" (You); tool
+Claude Code JSONL schema). Only genuine human-typed text is labelled "You"; tool
 results, reasoning, tool calls, system/IDE injections, slash-command output,
 task-notifications, autonomous build-loop prompts, and subagent threads are each their
 own category, folded by default.
@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "1.7.0"
+__version__ = "2.0.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -53,6 +53,48 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/claude-code-history")
 ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
 _ROOTLOCK = threading.Lock()
+
+# ---- i18n -------------------------------------------------------------------
+# The UI is authored in English; the English string is its own translation key.
+# tr(s) returns the active language's translation of s, or s unchanged (English).
+# Ship a language by dropping <code>.json ({ "English text": "translation" }) into
+# the package's locales/ dir, or into <CONFIG_DIR>/locales/ (user-added, no rebuild).
+LOCALES = {}                      # {"ko": {english: translated, ...}, ...}
+_LANG = threading.local()
+_DEFAULT_LANG = "en"              # overridable via --lang / CCH_LANG
+
+def load_locales():
+    LOCALES.clear()
+    for d in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales"),
+              os.path.join(CONFIG_DIR, "locales")):
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+            code = os.path.basename(f)[:-5]
+            if code == "en":
+                continue
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    LOCALES.setdefault(code, {}).update(
+                        {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)})
+            except Exception:
+                pass
+
+def available_langs():
+    return ["en"] + sorted(LOCALES)
+
+def set_lang(code):
+    _LANG.code = code if code in LOCALES else "en"
+
+def cur_lang():
+    return getattr(_LANG, "code", None) or _DEFAULT_LANG
+
+def tr(s):
+    """Translate an English UI string to the active language (or return it as-is)."""
+    code = cur_lang()
+    return LOCALES.get(code, {}).get(s, s) if code != "en" else s
 
 # Mutable app state; populated by configure(). Import has no side effects.
 ROOT = ""
@@ -123,6 +165,7 @@ def configure(primary_root=None, extra_roots=()):
         if p not in ROOTS:
             ROOTS.append(p)
     ROOT = primary if primary in ROOTS else ROOTS[0]
+    load_locales()
     with _INDEX["lock"]:
         _INDEX["by_root"].clear()
     with _SEARCH["lock"]:
@@ -233,14 +276,14 @@ def parse_channel(text):
         return None
     return dict(_ATTR_RE.findall(m.group(1))), m.group(2)
 
-_CHANNEL_NAMES = [("telegram", "텔레그램"), ("slack", "Slack"), ("discord", "Discord"),
-                  ("whatsapp", "WhatsApp"), ("sms", "SMS"), ("email", "이메일")]
+_CHANNEL_NAMES = [("telegram", "Telegram"), ("slack", "Slack"), ("discord", "Discord"),
+                  ("whatsapp", "WhatsApp"), ("sms", "SMS"), ("email", "Email")]
 
 def channel_label(attrs):
     src = (attrs.get("source") or "").lower()
-    name = next((nm for key, nm in _CHANNEL_NAMES if key in src), "채널")
+    name = next((nm for key, nm in _CHANNEL_NAMES if key in src), "Channel")
     user = attrs.get("user") or attrs.get("user_id") or ""
-    return f"💬 {esc(name)}" + (f" · @{esc(user)}" if user else "")
+    return f"💬 {esc(tr(name))}" + (f" · @{esc(user)}" if user else "")
 
 def classify_line(o, sub=False):
     t = o.get("type")
@@ -268,7 +311,7 @@ def classify_line(o, sub=False):
                 elif bt == "text" and b.get("text", "").strip():
                     segs.append(("text", b["text"]))
                 elif bt == "fallback":
-                    segs.append(("injected", f"모델 전환 {b.get('from',{}).get('model','?')} → {b.get('to',{}).get('model','?')}"))
+                    segs.append(("injected", f"{tr('Model switch')} {b.get('from',{}).get('model','?')} → {b.get('to',{}).get('model','?')}"))
         elif isinstance(content, str) and content.strip():
             segs.append(("text", content))
         return ("assistant", segs) if segs else None
@@ -277,7 +320,7 @@ def classify_line(o, sub=False):
         you_role = "orchestrator" if sub else "you"
         # channel-relayed human message (Telegram/Slack/… plugin). The harness flags
         # these isMeta/promptSource=system, but they are genuine person-authored text —
-        # keep them out of ⓘ 시스템·주입 and show who sent them.
+        # keep them out of the system/injected bucket and show who sent them.
         chan = content if isinstance(content, str) else (
             next((b.get("text", "") for b in content
                   if isinstance(b, dict) and b.get("type") == "text"), "")
@@ -308,7 +351,7 @@ def classify_line(o, sub=False):
                     else:
                         human.append(("text", txt))
                 elif bt == "image":
-                    human.append(("text", "🖼️ [붙여넣은 이미지]"))
+                    human.append(("text", tr("🖼️ [pasted image]")))
             if human:
                 first = next((x[1] for x in human if x[0] == "text"), "").lstrip()
                 if first.startswith(LOOP_PREFIXES) and not sub:
@@ -393,7 +436,7 @@ def subagent_brief(path):
     aid = os.path.basename(path)[len("agent-"):-len(".jsonl")]
     m = re.search(r"/workflows/(wf_[^/]+)/", path.replace(os.sep, "/"))
     return {"path": path, "agentId": aid, "wf": m.group(1) if m else "",
-            "n": len(turns), "brief": (brief or "(지시 없음)")[:120]}
+            "n": len(turns), "brief": (brief or tr("(no instruction)"))[:120]}
 
 # ---- digest + code extraction ----------------------------------------------
 def _toolinput(txt):
@@ -521,7 +564,7 @@ def summarize_file(path):
                 loop = True
         if r[0] == "you" and not first_human:
             first_human = " ".join(x[1] for x in r[1] if x[0] == "text").strip()
-    title = custom_title or ai_title or first_human or last_prompt or "(제목 없음)"
+    title = custom_title or ai_title or first_human or last_prompt or tr("(untitled)")
     return {"title": title.strip()[:120], "preview": (last_prompt or first_human).strip()[:140],
             "n": n, "last_ts": last_ts, "cwd": cwd, "start_cwd": start_cwd, "branch": branch,
             "forked": forked, "loop": loop, "tok": tok, "models": models}
@@ -681,8 +724,8 @@ def model_short(m):
 def tok_badge(tok, cls="tokb"):
     if not tok or not any(tok.values()):
         return ""
-    title = (f"입력 {tok['in']:,} · 출력 {tok['out']:,} · "
-             f"캐시생성 {tok['cw']:,} · 캐시읽기 {tok['cr']:,} (캐시읽기는 재사용분이라 저비용)")
+    title = (f"{tr('Input')} {tok['in']:,} · {tr('Output')} {tok['out']:,} · "
+             f"{tr('Cache write')} {tok['cw']:,} · {tr('Cache read')} {tok['cr']:,} ({tr('cache read is reused context, cheap')})")
     return (f'<span class="{cls}" title="{esc(title)}">'
             f'↑{fmt_tok(tok["in"])} ↓{fmt_tok(tok["out"])}'
             f'<span class=tokc> 💾{fmt_tok(tok["cw"])}</span></span>')
@@ -692,7 +735,7 @@ def models_badge(models):
     for m, c in sorted((models or {}).items(), key=lambda kv: -kv[1]):
         sh = model_short(m)
         if sh:
-            out.append(f'<span class=mdl title="{esc(m)} · {c}개 응답">{esc(sh)}<span class=mdlc> {c}</span></span>')
+            out.append(f'<span class=mdl title="{esc(m)} · {c} {esc(tr('responses'))}">{esc(sh)}<span class=mdlc> {c}</span></span>')
     return " ".join(out)
 
 def agg_stats(items):
@@ -726,11 +769,11 @@ def proj_label(item):
     return short_path(item.get("cwd") or "") or item.get("proj", "")
 
 def counts_html(n, system=False):
-    parts = [f'<span title="내가 직접 보낸 메시지 수">🧑 {n["you"]}</span>',
-             f'<span title="Claude(어시스턴트) 응답 수">✦ {n["assistant"]}</span>',
-             f'<span title="도구 실행 결과 수 (Bash/Edit/Read 등)">⚙ {n["tool-result"]}</span>']
+    parts = [f'<span title="{esc(tr("Messages you sent"))}">🧑 {n["you"]}</span>',
+             f'<span title="{esc(tr("Claude (assistant) replies"))}">✦ {n["assistant"]}</span>',
+             f'<span title="{esc(tr("Tool results (Bash/Edit/Read …)"))}">⚙ {n["tool-result"]}</span>']
     if system:
-        parts.append(f'<span title="시스템·주입 컨텍스트 수 (system-reminder/IDE/명령출력 등)">ⓘ {n["system"]}</span>')
+        parts.append(f'<span title="{esc(tr("System / injected context"))}">ⓘ {n["system"]}</span>')
     return " · ".join(parts)
 
 def parse_query(q):
@@ -1014,32 +1057,34 @@ def md_html(text, q=""):
     except Exception:
         return hl(text, q)
 
-ROLE_LABEL = {"you": "🧑 나", "assistant": "✦ Claude", "tool-result": "⚙ 도구 결과",
-              "system": "ⓘ 시스템·주입", "subagent": "🤖 서브에이전트",
-              "orchestrator": "📋 지시 → 서브에이전트", "channel": "💬 채널"}
+# English values are the translation KEYS; tr() is applied at render time (NOT here —
+# a module-level tr() would freeze to whichever language loaded first).
+ROLE_LABEL = {"you": "🧑 You", "assistant": "✦ Claude", "tool-result": "⚙ Tool result",
+              "system": "ⓘ System / injected", "subagent": "🤖 Subagent",
+              "orchestrator": "📋 Instruction → subagent", "channel": "💬 Channel"}
 ROLE_DESC = {
-    "you": "내가 직접 타이핑하거나 붙여넣은 메시지 — 검증된 규칙으로 이것만 '나'로 표시",
-    "assistant": "Claude(어시스턴트)의 답변",
-    "tool-result": "Claude가 실행한 도구(Bash 명령·Edit/Write·Read 등)의 출력 결과. 사람이 쓴 게 아님",
-    "system": "시스템이 자동으로 끼워 넣은 컨텍스트 — system-reminder·IDE 알림·슬래시명령 출력·task-notification 등. 사람이 쓴 게 아님",
-    "subagent": "Claude가 띄운 하위(서브)에이전트의 대화",
-    "orchestrator": "서브에이전트에게 준 작업 지시문 (사람이 아니라 Claude가 생성)",
-    "channel": "텔레그램 등 외부 채널(플러그인)로 세션에 전달된 사람 메시지. @뒤에 보낸 사람 표시 — 반드시 나라는 보장은 없음"}
+    "you": "Messages you actually typed or pasted — a verified ruleset marks only these as 'You'.",
+    "assistant": "Claude's (the assistant's) replies.",
+    "tool-result": "Output of a tool Claude ran (Bash command, Edit/Write, Read, …). Not written by a human.",
+    "system": "Context the system injected automatically — system-reminder, IDE notices, slash-command output, task-notification, etc. Not written by a human.",
+    "subagent": "Conversation of a sub-agent Claude spawned.",
+    "orchestrator": "The task brief given to a sub-agent (generated by Claude, not a human).",
+    "channel": "A human message relayed into the session through an external channel plugin (Telegram, …). The sender is shown after @ — not necessarily you."}
 
 def legend_html(open_=False):
-    rows = [("🧑 나", ROLE_DESC["you"]),
-            ("💬 텔레그램·채널", ROLE_DESC["channel"]),
+    rows = [("🧑 You", ROLE_DESC["you"]),
+            ("💬 Telegram / channel", ROLE_DESC["channel"]),
             ("✦ Claude", ROLE_DESC["assistant"]),
-            ("💭 추론", "Claude의 사고 과정 — 보통 비공개로 접혀 있음"),
-            ("🔧 도구 호출", "Claude가 도구(Bash 실행·파일 Edit/Write·Read 등)를 부른 호출"),
-            ("⚙ 도구 결과", ROLE_DESC["tool-result"]),
-            ("ⓘ 시스템·주입", ROLE_DESC["system"]),
-            ("📋 지시", ROLE_DESC["orchestrator"]),
-            ("🤖 서브에이전트", ROLE_DESC["subagent"])]
-    body = "".join(f'<div style="margin:3px 0"><b>{esc(e)}</b> — <span class=meta>{esc(d)}</span></div>'
+            ("💭 Thinking", "Claude's reasoning — usually collapsed / private."),
+            ("🔧 Tool call", "Claude calling a tool (run Bash, Edit/Write/Read a file, …)."),
+            ("⚙ Tool result", ROLE_DESC["tool-result"]),
+            ("ⓘ System / injected", ROLE_DESC["system"]),
+            ("📋 Instruction", ROLE_DESC["orchestrator"]),
+            ("🤖 Subagent", ROLE_DESC["subagent"])]
+    body = "".join(f'<div style="margin:3px 0"><b>{esc(tr(e))}</b> — <span class=meta>{esc(tr(d))}</span></div>'
                    for e, d in rows)
     return (f'<details class="card"{" open" if open_ else ""}>'
-            f'<summary style="cursor:pointer;font-weight:650;color:#1f6feb">❓ 메시지 종류 설명 (범례)</summary>'
+            f'<summary style="cursor:pointer;font-weight:650;color:#1f6feb">{esc(tr("❓ Message types (legend)"))}</summary>'
             f'<div style="margin-top:8px">{body}</div></details>')
 TAG_BADGE = {"error": "⚠️", "edit": "✏️", "command": "❯", "commit": "⎇", "test": "🧪", "url": "🔗", "web": "🌐"}
 
@@ -1054,7 +1099,7 @@ def _split_tool(txt):
 
 def _tk_pre(s, cls="tk-out", cap=8000):
     s = str(s)
-    s = s if len(s) <= cap else s[:cap] + "\n… (생략)"
+    s = s if len(s) <= cap else s[:cap] + "\n… (truncated)"
     return f'<pre class="{cls}">{esc(s)}</pre>'
 
 def _diff_line(ln):
@@ -1073,7 +1118,7 @@ def _patch_html(patch, filepath="", cap=800):
                     f' +{h.get("newStart","?")},{h.get("newLines","?")} @@</div>')
         for ln in h.get("lines", []):
             if count >= cap:
-                body.append('<div class="dl d-ctx">… (diff 생략)</div>')
+                body.append('<div class="dl d-ctx">… (diff truncated)</div>')
                 break
             body.append(_diff_line(ln))
             count += 1
@@ -1092,7 +1137,7 @@ def _difflib_html(old, new, filepath="", cap=800):
     for ln in lines[:cap]:
         body.append(f'<div class="dl d-hunk">{esc(ln)}</div>' if ln.startswith("@@") else _diff_line(ln))
     if len(lines) > cap:
-        body.append('<div class="dl d-ctx">… (diff 생략)</div>')
+        body.append('<div class="dl d-ctx">… (diff truncated)</div>')
     rows.append(f'<div class="tk-diff">{"".join(body)}</div>')
     return "".join(rows)
 
@@ -1124,7 +1169,7 @@ def tool_use_html(txt):
         rows.append(_tk_pre(inp.get("command", ""), "tk-cmd"))
         meta = []
         if inp.get("run_in_background"):
-            meta.append("백그라운드")
+            meta.append(tr("background"))
         if inp.get("timeout"):
             meta.append(f'timeout {inp["timeout"]}ms')
         if meta:
@@ -1156,7 +1201,7 @@ def tool_use_html(txt):
     elif name in ("Grep", "Glob"):
         rows.append(_tk_pre(inp.get("pattern", inp.get("query", "")), "tk-cmd"))
         if inp.get("path"):
-            rows.append(f'<div class="tk-meta">경로: {esc(inp["path"])}</div>')
+            rows.append(f'<div class="tk-meta">{esc(tr("path"))}: {esc(inp["path"])}</div>')
     else:
         for k, v in inp.items():
             if isinstance(v, str) and ("\n" in v or len(v) > 80):
@@ -1180,19 +1225,19 @@ def _dict_result_html(d):
             head = f'<div class="tk-file">📄 {esc(fp)}</div>' if fp else ""
             return head + _tk_pre(d["content"], "tk-out tk-add")
         if fp:
-            return f'<div class="tk-file">📄 {esc(fp)}</div><div class="tk-meta">파일 저장됨</div>'
+            return f'<div class="tk-file">📄 {esc(fp)}</div><div class="tk-meta">{esc(tr("file saved"))}</div>'
     if "stdout" in d or "stderr" in d:
         rows = []
         stdout, stderr = d.get("stdout"), d.get("stderr")
         if stdout:
             rows.append(_tk_pre(stdout))
         elif not (stderr and str(stderr).strip()):
-            rows.append('<div class="tk-meta">(출력 없음)</div>')
+            rows.append(f'<div class="tk-meta">{esc(tr("(no output)"))}</div>')
         if stderr and str(stderr).strip():
             rows.append(f'<div class="tk-lbl">stderr</div>{_tk_pre(stderr, "tk-out tk-err")}')
         meta = []
         if d.get("interrupted"):
-            meta.append("⚠️ 중단됨")
+            meta.append(tr("⚠️ interrupted"))
         ec = d.get("exit_code", d.get("exitCode"))
         if isinstance(ec, int) and ec != 0:
             meta.append(f"exit {ec}")
@@ -1239,7 +1284,7 @@ def _result_kind(txt):
 
 def render_turn(gi, t, q="", thread_link=None):
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
-    role_label, role_desc = ROLE_LABEL.get(role, role), ROLE_DESC.get(role, "")
+    role_label, role_desc = tr(ROLE_LABEL.get(role, role)), tr(ROLE_DESC.get(role, ""))
     parts = []
     for kind, txt in segs:
         if kind == "text":
@@ -1258,9 +1303,9 @@ def render_turn(gi, t, q="", thread_link=None):
                 parts.append(f'<div class="seg md">{md_html(txt, q)}</div>')
         elif kind == "thinking":
             if (txt or "").strip():
-                parts.append(f'<details class=fold><summary>💭 추론 과정</summary><div class="seg md">{md_html(txt, q)}</div></details>')
+                parts.append(f'<details class=fold><summary>{tr("💭 Thinking")}</summary><div class="seg md">{md_html(txt, q)}</div></details>')
             else:
-                parts.append('<div class="seg muted">💭 (추론 비공개)</div>')
+                parts.append(tr('<div class="seg muted">💭 (thinking hidden)</div>'))
         elif kind == "tool_use":
             name, prev = _tool_use_summary(txt)
             sm = f"🔧 <b>{esc(name)}</b>" + (f' <span class="tk-sum">{esc(prev)}</span>' if prev else "")
@@ -1269,19 +1314,19 @@ def render_turn(gi, t, q="", thread_link=None):
         elif kind == "tool_result":
             rk = _result_kind(txt)
             if rk == "bash":
-                lbl, op = "⚙ 실행 결과", " open"
+                lbl, op = tr("⚙ Run result"), " open"
             elif rk == "edit":
-                lbl, op = "⚙ 편집 결과 <span class=tk-sum>· 위 편집과 동일 — 펼치면 diff</span>", ""
+                lbl, op = tr("⚙ Edit result") + ' <span class=tk-sum>· ' + tr("same as the edit above — expand for diff") + '</span>', ""
             else:
-                lbl, op = f"⚙ 도구 결과 ({len(txt)}자)", (" open" if len(txt) < 1200 else "")
+                lbl, op = f'{tr("⚙ Tool result")} ({len(txt)} {tr("chars")})', (" open" if len(txt) < 1200 else "")
             parts.append(f'<details class="fold"{op}><summary>{lbl}</summary>'
                          f'<div class="tk-body">{tool_result_html(txt)}</div></details>')
         elif kind == "injected":
-            tt = txt if len(txt) < 4000 else txt[:4000] + "\n… (생략)"
-            parts.append(f'<details class=fold><summary>주입된 컨텍스트 보기</summary><div class="seg mono">{esc(tt)}</div></details>')
+            tt = txt if len(txt) < 4000 else txt[:4000] + "\n… (truncated)"
+            parts.append(f'<details class=fold><summary>{tr("Show injected context")}</summary><div class="seg mono">{esc(tt)}</div></details>')
     badges = "".join(f'<span class=badge title="{c}">{TAG_BADGE[c]}</span>' for c in
                      ("error", "edit", "command", "commit", "test", "url", "web") if c in tags)
-    link = f'<a class=threadlink href="{thread_link}">↳ 답변 스레드</a>' if thread_link else ""
+    link = f'<a class=threadlink href="{thread_link}">{tr("↳ answer thread")}</a>' if thread_link else ""
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
     cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
@@ -1314,6 +1359,10 @@ header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;fon
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
 header button{background:#0b4fc4;color:#fff}
 header .advbtn{background:#1857b8}
+.langsw{color:#fff;font-size:12px;white-space:nowrap;opacity:.9}
+.langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
+.langsw a:hover{text-decoration:underline}
+.langsw b{padding:0 2px}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
@@ -1517,22 +1566,23 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 @media(max-width:760px){#minimap{display:none}}
 </style></head><body>
 <header>
-  <a class=home href="%%HOMEHREF%%">&#9776; Claude Code 기록</a>
+  <a class=home href="%%HOMEHREF%%">&#9776; %%HOMELABEL%%</a>
   <form action="/search" role=search>
-    <input type=search name=q id=qbox placeholder='검색: 단어들 = AND · "정확한 구문"  ( / 키 )' value="%%Q%%">
-    <select name=scope title="검색 범위">%%SCOPEOPTS%%</select>
+    <input type=search name=q id=qbox placeholder='%%QPH%%' value="%%Q%%">
+    <select name=scope title="%%SCOPETITLE%%">%%SCOPEOPTS%%</select>
     %%ROOTHIDDEN%%
-    <button>검색</button>
-    <button type=button id=advtoggle class=advbtn title="기간 등 고급 검색">🔧 도구%%ADVDOT%%</button>
+    <button>%%SEARCHBTN%%</button>
+    <button type=button id=advtoggle class=advbtn title="%%ADVTITLE%%">🔧 %%ADVLABEL%%%%ADVDOT%%</button>
     <div id=advpanel class="adv %%ADVOPEN%%">
-      <span class=advlbl>기간</span>
-      <select name=days title="빠른 기간">%%DAYSOPTS%%</select>
-      <span class=advlbl>또는 직접</span>
-      <input type=date name=from value="%%FROM%%" title="시작일">
+      <span class=advlbl>%%PERIODLBL%%</span>
+      <select name=days title="%%DAYSTITLE%%">%%DAYSOPTS%%</select>
+      <span class=advlbl>%%ORLBL%%</span>
+      <input type=date name=from value="%%FROM%%" title="%%FROMTITLE%%">
       <span class=advlbl>~</span>
-      <input type=date name=to value="%%TO%%" title="종료일">
+      <input type=date name=to value="%%TO%%" title="%%TOTITLE%%">
     </div>
   </form>
+  %%LANGSW%%
 </header>
 %%ROOTBAR%%
 <div class=wrap>%%BODY%%</div>
@@ -1544,7 +1594,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function focusYou(i){var a=ys();if(!a.length)return;cur=((i%a.length)+a.length)%a.length;
     a.forEach(function(e){e.classList.remove('kfocus');});var el=a[cur];
     el.classList.add('kfocus');el.scrollIntoView({block:'center',behavior:'smooth'});}
-  // advanced-search (도구) toggle
+  // advanced-search (Tools) toggle
   var at=document.getElementById('advtoggle');
   if(at){at.addEventListener('click',function(){document.getElementById('advpanel').classList.toggle('open');});}
   document.addEventListener('keydown',function(e){
@@ -1563,7 +1613,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var pre=e.target.closest('.codeart').querySelector('pre.code');
       var txt=pre?pre.textContent:'';
       if(navigator.clipboard){navigator.clipboard.writeText(txt);}
-      var o=e.target.textContent;e.target.textContent='복사됨 ✓';setTimeout(function(){e.target.textContent=o;},1200);
+      var o=e.target.textContent;e.target.textContent='Copied \u2713';setTimeout(function(){e.target.textContent=o;},1200);
     }
   });
   // event/error filter chips
@@ -1616,15 +1666,15 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   }
   window.addEventListener('load',function(){
     var p=document.getElementById('perf');
-    if(p&&window.performance){p.textContent=' · 브라우저 렌더 '+Math.round(performance.now())+'ms';}
+    if(p&&window.performance){p.textContent=' \u00b7 browser render '+Math.round(performance.now())+'ms';}
     buildMinimap();
   });
 })();
 </script>
 </body></html>"""
 
-SCOPES = {"all": "전체", "human": "🧑 내 말만", "claude": "✦ Claude만", "chat": "대화만 (도구·시스템 제외)"}
-DAY_CHOICES = {"": "전체 기간", "7": "최근 7일", "30": "최근 30일", "90": "최근 90일"}
+SCOPES = {"all": "All", "human": "🧑 Only me", "claude": "✦ Only Claude", "chat": "Conversation only (no tools/system)"}
+DAY_CHOICES = {"": "All time", "7": "Last 7 days", "30": "Last 30 days", "90": "Last 90 days"}
 
 def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
     root = root if root in ROOTS else ROOT
@@ -1634,27 +1684,43 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
     links = []
     for r in ROOTS:
         on = "on" if r == root else ""
-        rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="목록에서 제거">✕</a>'
+        rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
         links.append(f'<span class=rootitem><a class="{on}" href="/?root={urllib.parse.quote(r)}">'
                      f'{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
-               '<input name=path placeholder="새 폴더 추가 — 경로 붙여넣기 (…/.claude/projects)">'
-               '<button>➕ 추가</button></form>')
-    rootbar = f'<div class=rootbar><span class=lbl>📁 폴더:</span>{"".join(links)}{addform}</div>'
-    scopeopts = "".join(f'<option value="{k}"{" selected" if k == scope else ""}>{v}</option>'
+               f'<input name=path placeholder="{esc(tr("Add a folder — paste a path (…/.claude/projects)"))}">'
+               f'<button>{tr("➕ Add")}</button></form>')
+    rootbar = f'<div class=rootbar><span class=lbl>📁 {tr("Folders")}:</span>{"".join(links)}{addform}</div>'
+    scopeopts = "".join(f'<option value="{k}"{" selected" if k == scope else ""}>{esc(tr(v))}</option>'
                         for k, v in SCOPES.items())
-    daysopts = "".join(f'<option value="{k}"{" selected" if k == days else ""}>{v}</option>'
+    daysopts = "".join(f'<option value="{k}"{" selected" if k == days else ""}>{esc(tr(v))}</option>'
                        for k, v in DAY_CHOICES.items())
     adv_active = bool(days or from_ or to)
-    return (SHELL.replace("%%TITLE%%", esc(title)).replace("%%BODY%%", body)
-            .replace("%%Q%%", esc(q))
-            .replace("%%SCOPEOPTS%%", scopeopts).replace("%%DAYSOPTS%%", daysopts)
-            .replace("%%FROM%%", esc(from_)).replace("%%TO%%", esc(to))
-            .replace("%%ADVOPEN%%", "open" if adv_active else "")
-            .replace("%%ADVDOT%%", " ●" if adv_active else "")
-            .replace("%%HOMEHREF%%", home).replace("%%ROOTHIDDEN%%", hidden)
-            .replace("%%ROOTBAR%%", rootbar))
+    langs = available_langs()
+    langsw = ""
+    if len(langs) > 1:
+        cur = cur_lang()
+        parts = [(f'<b>{c}</b>' if c == cur else f'<a href="?lang={c}">{c}</a>') for c in langs]
+        langsw = f'<span class=langsw title="{esc(tr("language"))}">🌐 ' + " ".join(parts) + '</span>'
+    repl = {
+        "%%TITLE%%": esc(title), "%%BODY%%": body, "%%Q%%": esc(q),
+        "%%SCOPEOPTS%%": scopeopts, "%%DAYSOPTS%%": daysopts,
+        "%%FROM%%": esc(from_), "%%TO%%": esc(to),
+        "%%ADVOPEN%%": "open" if adv_active else "", "%%ADVDOT%%": " ●" if adv_active else "",
+        "%%HOMEHREF%%": home, "%%ROOTHIDDEN%%": hidden, "%%ROOTBAR%%": rootbar,
+        "%%HOMELABEL%%": esc(tr("Claude Code History")),
+        "%%QPH%%": esc(tr('Search: words = AND · "exact phrase"  ( / key )')),
+        "%%SCOPETITLE%%": esc(tr("search scope")), "%%SEARCHBTN%%": esc(tr("Search")),
+        "%%ADVTITLE%%": esc(tr("advanced search (date range, …)")), "%%ADVLABEL%%": esc(tr("Tools")),
+        "%%PERIODLBL%%": esc(tr("Period")), "%%DAYSTITLE%%": esc(tr("quick period")),
+        "%%ORLBL%%": esc(tr("or exact")), "%%FROMTITLE%%": esc(tr("start date")),
+        "%%TOTITLE%%": esc(tr("end date")), "%%LANGSW%%": langsw,
+    }
+    out = SHELL
+    for k, v in repl.items():
+        out = out.replace(k, v)
+    return out
 
 # ---- handlers ---------------------------------------------------------------
 class H(BaseHTTPRequestHandler):
@@ -1684,6 +1750,20 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(u.query)
         g = lambda k, d="": qs.get(k, [d])[0]
+
+        # language: ?lang=xx sets a cookie then redirects clean; else cookie → default.
+        if "lang" in qs:
+            code = re.sub(r"[^a-zA-Z_-]", "", g("lang"))[:12]
+            rest = {k: v for k, v in qs.items() if k != "lang"}
+            loc = u.path + ("?" + urllib.parse.urlencode(rest, doseq=True) if rest else "")
+            self.send_response(302)
+            self.send_header("Location", loc or "/")
+            self.send_header("Set-Cookie", f"cchlang={code}; Path=/; Max-Age=31536000; SameSite=Lax")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        cm = re.search(r"cchlang=([a-zA-Z_-]+)", self.headers.get("Cookie", "") or "")
+        set_lang(cm.group(1) if cm else _DEFAULT_LANG)
 
         def gint(k, d=0):
             try:
@@ -1732,13 +1812,13 @@ class H(BaseHTTPRequestHandler):
                     SAVED_ROOTS.append(np)
                     _save_saved(SAVED_ROOTS)
             return self._redirect("/?root=" + urllib.parse.quote(np))
-        body = (f'<div class=card><b>폴더를 추가할 수 없습니다.</b>'
-                f'<p class=meta>입력: <code class=sid>{esc(path)}</code></p>'
-                f'<p>그 경로가 존재하고, 안에 <code>*/*.jsonl</code> 세션이 있는 <b>projects</b> 폴더여야 해요. '
-                f'(<code>.claude</code> 폴더나 그 부모를 줘도 자동으로 <code>projects</code>를 찾습니다.)<br>'
-                f'예: <code>/Volumes/backup/.claude/projects</code></p>'
-                f'<p><a href="/">← 돌아가기</a></p></div>')
-        return self._send(shell("폴더 추가 실패", body))
+        body = (f'<div class=card><b>{tr("Could not add that folder.")}</b>'
+                f'<p class=meta>{tr("Input")}: <code class=sid>{esc(path)}</code></p>'
+                f'<p>{tr("It must be a <b>projects</b> folder that exists and contains <code>*/*.jsonl</code> sessions. ")}'
+                f'{tr("(Giving the <code>.claude</code> folder or its parent also works — it finds <code>projects</code> automatically.)")}<br>'
+                f'{tr("e.g.")} <code>/Volumes/backup/.claude/projects</code></p>'
+                f'<p><a href="/">{tr("← Back")}</a></p></div>')
+        return self._send(shell(tr("Add folder failed"), body))
 
     def delroot(self, path):
         p = os.path.abspath(os.path.expanduser(path or ""))
@@ -1762,7 +1842,7 @@ class H(BaseHTTPRequestHandler):
         items = [it for it in all_items if it["proj"] == proj_filter] if proj_filter else list(all_items)
 
         # sort: field + direction
-        SORTF = {"date": "날짜", "mine": "내 메시지", "title": "제목", "size": "용량"}
+        SORTF = {"date": "Date", "mine": "My messages", "title": "Title", "size": "Size"}
         SORTKEY = {"date": lambda x: x["mtime"], "mine": lambda x: x["n"]["you"],
                    "title": lambda x: x["title"].lower(), "size": lambda x: x["size"]}
         DEFDIR = {"date": "desc", "mine": "desc", "title": "asc", "size": "desc"}
@@ -1780,26 +1860,26 @@ class H(BaseHTTPRequestHandler):
 
         # ---- project insight ----
         def _toktip(tk):
-            return (f'입력 {tk["in"]:,} · 출력 {tk["out"]:,} · 캐시생성 {tk["cw"]:,} · '
-                    f'캐시읽기 {tk["cr"]:,} (캐시읽기는 재사용분이라 저비용)')
+            return (f'{tr("Input")} {tk["in"]:,} · {tr("Output")} {tk["out"]:,} · {tr("Cache write")} {tk["cw"]:,} · '
+                    f'{tr("Cache read")} {tk["cr"]:,} ({tr("cache read is reused context, cheap")})')
         if proj_filter:
             st = agg_stats(items)
             label = proj_cwd.get(proj_filter, proj_filter)
-            loopline = (f' · <span class=loopchip>🔁 자율 빌드루프 {st["loop"]}개</span>') if st["loop"] else ""
+            loopline = (f' · <span class=loopchip>🔁 {tr("autonomous build-loop")} {st["loop"]}</span>') if st["loop"] else ""
             hidden_root = f'<input type=hidden name=root value="{esc(root)}">' if len(ROOTS) > 1 else ""
             statsblock = (
                 f'<div class="card digest"><b>📁 {esc(label)}</b>{loopline}'
-                f'<div style="margin-top:6px">총 <b>{st["sessions"]}</b>개 세션 · '
-                f'🧑 내가 참여한 세션 <b>{st["my_sessions"]}</b>개 · 내가 쓴 메시지 <b>{st["my_msgs"]}</b>개</div>'
-                f'<div>총 용량 <b>{fmt_size(st["size"])}</b> · 🧑 내가 참여한 세션 용량 합 <b>{fmt_size(st["my_size"])}</b></div>'
-                f'<div style="margin-top:6px" title="{esc(_toktip(st["tok"]))}"><b>토큰</b> {tok_badge(st["tok"])} '
-                f'<span class=meta>입력 {st["tok"]["in"]:,} · 출력 {st["tok"]["out"]:,} · '
-                f'캐시 {st["tok"]["cw"]+st["tok"]["cr"]:,}</span></div>'
-                + (f'<div style="margin-top:4px"><b>모델</b> {models_badge(st["models"])}</div>' if st["models"] else "")
-                + f'<div class=meta>✦ Claude {st["asst"]} · ⚙ 도구결과 {st["tool"]}</div>'
+                f'<div style="margin-top:6px">{tr("Total")} <b>{st["sessions"]}</b> {tr("sessions")} · '
+                f'🧑 {tr("sessions I joined")} <b>{st["my_sessions"]}</b> · {tr("my messages")} <b>{st["my_msgs"]}</b></div>'
+                f'<div>{tr("Total size")} <b>{fmt_size(st["size"])}</b> · 🧑 {tr("size of sessions I joined")} <b>{fmt_size(st["my_size"])}</b></div>'
+                f'<div style="margin-top:6px" title="{esc(_toktip(st["tok"]))}"><b>{tr("Tokens")}</b> {tok_badge(st["tok"])} '
+                f'<span class=meta>{tr("Input")} {st["tok"]["in"]:,} · {tr("Output")} {st["tok"]["out"]:,} · '
+                f'{tr("Cache")} {st["tok"]["cw"]+st["tok"]["cr"]:,}</span></div>'
+                + (f'<div style="margin-top:4px"><b>{tr("Models")}</b> {models_badge(st["models"])}</div>' if st["models"] else "")
+                + f'<div class=meta>✦ Claude {st["asst"]} · ⚙ {tr("tool results")} {st["tool"]}</div>'
                 f'<form class=ssearch method=get action=/search style="margin-top:8px">'
                 f'<input type=hidden name=proj value="{esc(proj_filter)}">{hidden_root}'
-                f'<input type=search name=q placeholder="🔎 이 폴더에서만 검색…"><button>검색</button></form></div>')
+                f'<input type=search name=q placeholder="🔎 {tr("Search this folder only…")}"><button>{tr("Search")}</button></form></div>')
         else:
             by = {}
             for it in all_items:
@@ -1814,34 +1894,34 @@ class H(BaseHTTPRequestHandler):
                           f'<td class=mdlcell>{models_badge(s["models"])}</td>'
                           f'<td>{fmt_size(s["size"])}</td><td>{lc}</td></tr>')
             tot = agg_stats(all_items)
-            table = ('<table class=stab><thead><tr><th>프로젝트(폴더)</th><th title="세션 수">세션</th>'
-                     '<th title="내가(사람이) 참여한 세션 수">내 참여</th><th title="내가 쓴 총 메시지 수">내 메시지</th>'
-                     '<th title="출력(생성) 토큰. 마우스오버=입력·출력·캐시 전체 분해">출력토큰</th>'
-                     '<th title="이 폴더에서 쓰인 모델과 응답 수">모델</th>'
-                     '<th title="모든 세션 용량 합">용량</th>'
-                     '<th title="자율 빌드루프 세션 수">🔁</th></tr></thead><tbody>' + "".join(ov)
-                     + f'<tr class=tot><td>합계 {len(by)}개 폴더</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
+            table = (f'<table class=stab><thead><tr><th>{tr("Project (folder)")}</th><th title="{esc(tr("session count"))}">{tr("Sessions")}</th>'
+                     f'<th title="{esc(tr("sessions a human joined"))}">{tr("My part")}</th><th title="{esc(tr("my total messages"))}">{tr("My msgs")}</th>'
+                     f'<th title="{esc(tr("output (generated) tokens. hover = full input/output/cache breakdown"))}">{tr("Out tokens")}</th>'
+                     f'<th title="{esc(tr("models used in this folder and response counts"))}">{tr("Models")}</th>'
+                     f'<th title="{esc(tr("total size of all sessions"))}">{tr("Size")}</th>'
+                     f'<th title="{esc(tr("autonomous build-loop sessions"))}">🔁</th></tr></thead><tbody>' + "".join(ov)
+                     + f'<tr class=tot><td>{tr("Total")} {len(by)} {tr("folders")}</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
                      f'<td>{tot["my_msgs"]}</td><td title="{esc(_toktip(tot["tok"]))}">{fmt_tok(tot["tok"]["out"])}</td>'
                      f'<td class=mdlcell>{models_badge(tot["models"])}</td><td>{fmt_size(tot["size"])}</td>'
                      f'<td>{tot["loop"] or ""}</td></tr></tbody></table>')
             statsblock = (f'<details class="card" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
-                          f'📊 프로젝트별 통계 ({len(by)}개 폴더) · 출력토큰순</summary>{table}'
-                          f'<p class=meta style="padding:0 4px">💡 캐시읽기 토큰은 매 턴 재사용분이라 저비용 — '
-                          f'"많이 쓴 정도"는 출력·입력·캐시생성으로 보세요.</p></details>')
+                          f'📊 {tr("Project stats")} ({len(by)} {tr("folders")}) · {tr("by output tokens")}</summary>{table}'
+                          f'<p class=meta style="padding:0 4px">💡 {tr("Cache-read tokens are reused each turn (cheap) — ")}'
+                          f'{tr("gauge real usage by output/input/cache-write.")}</p></details>')
 
         arrow = "▼" if dir_ == "desc" else "▲"
-        sortbar = ['<div class=bar><span class=meta>정렬:</span>']
+        sortbar = [f'<div class=bar><span class=meta>{tr("Sort")}:</span>']
         for k, lbl in SORTF.items():
             if k == sort:
                 nd = "asc" if dir_ == "desc" else "desc"
                 sortbar.append(f'<a class=on href="{q(proj=proj_filter, sort=k, dir=nd)}" '
-                               f'title="클릭하면 방향 전환">{lbl} {arrow}</a>')
+                               f'title="{esc(tr("click to flip direction"))}">{tr(lbl)} {arrow}</a>')
             else:
-                sortbar.append(f'<a href="{q(proj=proj_filter, sort=k, dir=DEFDIR[k])}">{lbl}</a>')
+                sortbar.append(f'<a href="{q(proj=proj_filter, sort=k, dir=DEFDIR[k])}">{tr(lbl)}</a>')
         sortbar.append("</div>")
 
-        projbar = ['<div class=bar><span class=meta>프로젝트:</span>',
-                   f'<a class="{"" if proj_filter else "on"}" href="{q(sort=sort, dir=dir_)}">전체</a>']
+        projbar = [f'<div class=bar><span class=meta>{tr("Projects")}:</span>',
+                   f'<a class="{"" if proj_filter else "on"}" href="{q(sort=sort, dir=dir_)}">{tr("All")}</a>']
         for p in projs:
             projbar.append(f'<a class="{"on" if p==proj_filter else ""}" '
                            f'href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a>')
@@ -1849,7 +1929,7 @@ class H(BaseHTTPRequestHandler):
         rows = []
         for it in items:
             link = "/session?p=" + urllib.parse.quote(it["path"])
-            loopchip = ' <span class=loopchip>🔁 자율 빌드루프</span>' if it.get("loop") else ""
+            loopchip = f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if it.get("loop") else ""
             tk = it.get("tok")
             tokbit = f' · {tok_badge(tk)}' if (tk and any(tk.values())) else ""
             mdlbit = ""
@@ -1864,16 +1944,16 @@ class H(BaseHTTPRequestHandler):
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
                 + (f'<div class=preview>{esc(it["preview"])}</div>' if it["preview"] else "") + '</div>')
-        head = (f'<p class=meta>{len(items)}개 세션 · <b>🧑 나</b>는 검증된 규칙으로 '
-                f'<b>실제 네가 타이핑한 메시지만</b> 표시 · {esc(root)}</p>'
-                f'<p class=meta>범례: 🧑 나(내 메시지) · ✦ Claude 응답 · ⚙ 도구 결과 · ⓘ 시스템·주입 '
-                f'<span class=hint>(숫자에 마우스 올리면 설명, 아래 ❓ 펼치면 전체 설명)</span></p>'
+        head = (f'<p class=meta>{len(items)} {tr("sessions")} · <b>🧑 {tr("You")}</b> {tr("marks — by a verified ruleset —")} '
+                f'<b>{tr("only what you actually typed")}</b> · {esc(root)}</p>'
+                f'<p class=meta>{tr("Legend")}: 🧑 {tr("You")} · ✦ Claude · ⚙ {tr("Tool result")} · ⓘ {tr("System / injected")} '
+                f'<span class=hint>{tr("(hover a number for its meaning; expand ❓ below for the full legend)")}</span></p>'
                 + legend_html())
         if not items and not proj_filter:
-            head += ('<div class=card><b>세션이 없습니다.</b>'
-                     f'<p class=meta>{esc(root)} 아래에 <code>&lt;프로젝트&gt;/&lt;uuid&gt;.jsonl</code> 파일이 보이지 않아요. '
-                     'Claude Code를 한 번이라도 실행한 폴더인지 확인하거나, 위의 ➕ 추가로 다른 폴더를 불러오세요.</p></div>')
-        return shell("Claude Code 기록", head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+            head += (f'<div class=card><b>{tr("No sessions.")}</b>'
+                     f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(root)}. '
+                     + tr('Make sure this is a folder where Claude Code has run at least once, or add another folder with ➕ above.') + '</p></div>')
+        return shell(tr("Claude Code History"), head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
@@ -1884,9 +1964,9 @@ class H(BaseHTTPRequestHandler):
             days = ""
         terms = parse_query(q)
         if not terms:
-            return shell("검색", '<p class=meta>검색어를 입력하세요. 여러 단어 = 모두 포함(AND), '
-                                 '"따옴표" = 정확한 구문. 각 단어는 색으로 구분됩니다. '
-                                 '(<kbd>/</kbd> 로 검색창 포커스)</p>',
+            return shell(tr("Search"), f'<p class=meta>{tr("Enter a query. Multiple words = all must match (AND), ")}'
+                                 f'{tr("&quot;quotes&quot; = exact phrase. Each word gets its own color. ")}'
+                                 f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>',
                          q, scope, root, days, from_, to)
         t0 = time.perf_counter()
         index = get_index(root)
@@ -1951,7 +2031,7 @@ class H(BaseHTTPRequestHandler):
                     score += 3000
                 elif meta_hit and not hits:   # path/title-only meta match → modest
                     score += 5
-                results.append({"path": path, "title": titles.get(path, "(제목 없음)"),
+                results.append({"path": path, "title": titles.get(path, tr("(untitled)")),
                                 "proj": os.path.basename(os.path.dirname(path)),
                                 "n": len(hits), "score": score, "all_word": all_word, "hits": hits[:6],
                                 "meta_hit": meta_hit, "sid": sid, "forked": forked,
@@ -1973,11 +2053,11 @@ class H(BaseHTTPRequestHandler):
         matched_projs = sorted({r["proj"] for r in results} | ({proj} if proj else set()),
                                key=lambda p: proj_cwd.get(p, p).lower())
         if matched_projs and (len(matched_projs) > 1 or proj):
-            chips = [f'<a class="{"on" if not proj else ""}" href="{searchurl()}">전체</a>']
+            chips = [f'<a class="{"on" if not proj else ""}" href="{searchurl()}">{tr("All")}</a>']
             for p in matched_projs:
                 chips.append(f'<a class="{"on" if p == proj else ""}" href="{searchurl(proj=p)}">'
                              f'{esc(proj_cwd.get(p, p))}</a>')
-            projbar = '<div class=bar><span class=meta>프로젝트:</span>' + "".join(chips) + '</div>'
+            projbar = f'<div class=bar><span class=meta>{tr("Projects")}:</span>' + "".join(chips) + '</div>'
 
         rows = []
         for r in results:
@@ -1986,7 +2066,7 @@ class H(BaseHTTPRequestHandler):
                         + f"&goto={gi}")
             openurl = jump(r["hits"][0][0]) if r["hits"] else (
                 "/session?p=" + urllib.parse.quote(r["path"]) + (("&q=" + urllib.parse.quote(q)) if q else ""))
-            exact = "" if (r["all_word"] or not r["hits"]) else ' <span class=hint title="일부 단어가 부분일치(다른 단어의 조각)로만 매치됨">≈ 부분일치</span>'
+            exact = "" if (r["all_word"] or not r["hits"]) else f' <span class=hint title="{esc(tr("some words matched only as a substring of another word"))}">≈ {tr("partial")}</span>'
             metaline = ""
             if r.get("meta_hit"):
                 bits = [f'🔗 <code class=sid>{hl(r["sid"], q)}</code>']
@@ -1994,12 +2074,12 @@ class H(BaseHTTPRequestHandler):
                     bits.append(f'📂 {hl(short_path(r["cwd"]), q)}')
                 if r.get("forked"):
                     bits.append(f'⑂ <code class=sid>{hl(r["forked"], q)}</code>')
-                metaline = f'<div class=snip><span class=chip>참조</span> ' + " · ".join(bits) + '</div>'
+                metaline = f'<div class=snip><span class=chip>{tr("ref")}</span> ' + " · ".join(bits) + '</div>'
             snips = "".join(
                 f'<div class=snip><a class=snipjump href="{jump(gi)}">'
                 f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, q)}</div>'
                 for gi, role, s in r["hits"])
-            cnt = f'({r["n"]}건)' if r["hits"] else '참조 일치'
+            cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
             rows.append(f'<div class=card><a class=t href="{openurl}">{esc(r["title"])}</a> '
                         f'<span class=meta>{cnt}</span>{exact}'
@@ -2008,17 +2088,17 @@ class H(BaseHTTPRequestHandler):
         # color key: which color = which term
         keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(terms))
         when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
-                (" · " + DAY_CHOICES[days] if days else ""))
-        head = (f'<p class=meta>{keys} — {len(results)}개 세션에서 매치 (관련도순) · {SCOPES[scope]}{when} · {ms}ms · '
-                f'📁 {esc(short_path(root))} · <span class=hint>스니펫 클릭 = 그 위치로 점프</span></p>')
-        return shell(f"검색: {q}", head + projbar + ("".join(rows) or "<p class=meta>결과 없음.</p>"),
+                (" · " + tr(DAY_CHOICES[days]) if days else ""))
+        head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms · '
+                f'📁 {esc(short_path(root))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>')
+        return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
                      q, scope, root, days, from_, to)
 
     # ---- session ----
     def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
-            return shell("?", "<p>세션을 찾을 수 없습니다.</p>")
+            return shell("?", f"<p>{tr('Session not found.')}</p>")
         t0 = time.perf_counter()
         turns = classify_turns(path)
         meta = summarize_file(path)
@@ -2049,21 +2129,21 @@ class H(BaseHTTPRequestHandler):
         if started and started != workspace:
             mrows.append(_srow("Started in",
                                f'<code class=spath>{esc(started)}</code>'
-                               ' <span class=hint>· 세션이 시작된 폴더 (파일은 다른 워크스페이스로 이동됨)</span>'))
-        mrows.append(_srow("세션 파일", f'<code class=spath>{esc(path)}</code>'))
+                               f' <span class=hint>· {tr("folder the session started in (the file moved to a different workspace)")}</span>'))
+        mrows.append(_srow(tr("Session file"), f'<code class=spath>{esc(path)}</code>'))
         mrows.append(_srow("session-id", f'<code class=sid>{esc(sid)}</code>'))
         if forked:
             pf = find_session_by_sid(rt, forked)
             fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>'
-                  if pf else f'<code class=sid>{esc(forked)}</code> <span class=hint>· 이 폴더엔 없음</span>')
+                  if pf else f'<code class=sid>{esc(forked)}</code> <span class=hint>· {tr("not in this folder")}</span>')
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
             mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>'))
-        mrows.append(_srow("복귀", f'<code class=sid>claude --resume {esc(sid)}</code>'))
-        mrows.append(_srow("저장 위치", f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
-        refcard = f'<details class="card srefcard" open><summary>📍 세션 정보 (Session Reference)</summary><div class=srefbody>{"".join(mrows)}</div></details>'
+        mrows.append(_srow(tr("Resume"), f'<code class=sid>claude --resume {esc(sid)}</code>'))
+        mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
+        refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         head = (f'<h3 style="margin:4px 0 8px">{esc(meta["title"])}'
-                + (' <span class=loopchip>🔁 자율 빌드루프</span>' if meta.get("loop") else "") + '</h3>'
+                + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>'
                 + refcard + legend_html())
 
         # subagent banner
@@ -2073,12 +2153,12 @@ class H(BaseHTTPRequestHandler):
                 f'<div class=card style="margin:6px 0"><a class=t '
                 f'href="/subagent?p={urllib.parse.quote(sb["path"])}&parent={urllib.parse.quote(path)}'
                 f'{("&q="+urllib.parse.quote(q)) if q else ""}">🤖 {esc(sb["brief"])}</a>'
-                f'<div class=meta>{("워크플로 "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
-                f'{sb["n"]}개 메시지 · agent {esc(sb["agentId"][:10])}</div></div>'
+                f'<div class=meta>{(tr("workflow")+" "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
+                f'{sb["n"]} {tr("messages")} · agent {esc(sb["agentId"][:10])}</div></div>'
                 for sb in subs)
             head += (f'<details class=fold style="margin:10px 0;border:1px solid #d9c8f5;border-radius:11px" open>'
                      f'<summary style="padding:9px 14px;color:#6b3fb5;font-weight:600">'
-                     f'🤖 이 세션이 띄운 서브에이전트 {len(subs)}개 — 펼쳐보기</summary>'
+                     f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)} — {tr("expand")}</summary>'
                      f'<div style="padding:0 12px 8px">{sub_items}</div></details>')
 
         # extracted-fact digest
@@ -2086,33 +2166,33 @@ class H(BaseHTTPRequestHandler):
         dl = []
         if any(meta["tok"].values()):
             tk = meta["tok"]
-            dl.append(f'<div style="margin-bottom:6px"><b>토큰</b> {tok_badge(tk)} '
-                      f'<span class=meta>입력 {tk["in"]:,} · 출력 {tk["out"]:,} · '
-                      f'캐시생성 {tk["cw"]:,} · 캐시읽기 {tk["cr"]:,}</span></div>')
+            dl.append(f'<div style="margin-bottom:6px"><b>{tr("Tokens")}</b> {tok_badge(tk)} '
+                      f'<span class=meta>{tr("Input")} {tk["in"]:,} · {tr("Output")} {tk["out"]:,} · '
+                      f'{tr("Cache write")} {tk["cw"]:,} · {tr("Cache read")} {tk["cr"]:,}</span></div>')
         if meta["models"]:
-            dl.append(f'<div style="margin-bottom:6px"><b>모델</b> {models_badge(meta["models"])}</div>')
-        dl.append(f'✏️ 편집 {d["edits"]}회 ({len(d["files"])}개 파일) · ❯ 명령 {d["cmds"]} · '
-                  f'🧪 테스트 {d["tests"]} · ⚠️ 에러 {d["errors"]} · ⎇ 커밋 {len(d["commits"])} · 🌐 웹 {d["webs"]}')
+            dl.append(f'<div style="margin-bottom:6px"><b>{tr("Models")}</b> {models_badge(meta["models"])}</div>')
+        dl.append(f'✏️ {tr("edits")} {d["edits"]} ({len(d["files"])} {tr("files")}) · ❯ {tr("commands")} {d["cmds"]} · '
+                  f'🧪 {tr("tests")} {d["tests"]} · ⚠️ {tr("errors")} {d["errors"]} · ⎇ {tr("commits")} {len(d["commits"])} · 🌐 {tr("web")} {d["webs"]}')
         if d["files"]:
-            dl.append('<div style="margin-top:7px"><b>건드린 파일</b> ' +
+            dl.append(f'<div style="margin-top:7px"><b>{tr("Files touched")}</b> ' +
                       "".join(f'<span class=dfile>{esc(short_path(f))}</span>' for f in d["files"][:25]) +
-                      (f'<span class=meta>… 외 {len(d["files"])-25}개</span>' if len(d["files"]) > 25 else "") + '</div>')
+                      (f'<span class=meta>… +{len(d["files"])-25} {tr("more")}</span>' if len(d["files"]) > 25 else "") + '</div>')
         if d["commits"]:
-            dl.append('<div style="margin-top:7px"><b>커밋</b> ' +
+            dl.append(f'<div style="margin-top:7px"><b>{tr("Commits")}</b> ' +
                       "".join(f'<span class=dfile>⎇ {esc(c)}</span>' for c in d["commits"][:12]) + '</div>')
         if d["prs"]:
-            dl.append('<div style="margin-top:7px"><b>PR/이슈</b> ' +
+            dl.append(f'<div style="margin-top:7px"><b>{tr("PRs / issues")}</b> ' +
                       "".join(f'<a class=dfile href="{esc(u)}" target=_blank>{esc(u)}</a>' for u in d["prs"][:10]) + '</div>')
         digest = (f'<details class="card digest" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
-                  f'📊 이 세션 요약 (추출된 사실)</summary><div style="margin-top:8px">{"".join(dl)}</div></details>')
+                  f'📊 {tr("Session summary (extracted facts)")}</summary><div style="margin-top:8px">{"".join(dl)}</div></details>')
         head += digest
 
         # in-session search box (always available)
         head += (f'<form class=ssearch method=get action=/session>'
                  f'<input type=hidden name=p value="{esc(path)}">'
-                 f'<input type=search name=sq value="{esc(sq)}" placeholder="🔎 이 세션에서 검색… (단어들=AND, \"구문\")">'
-                 f'<button>검색</button>'
-                 + (f'<a class=ssclear href="{url()}">✕ 지우기</a>' if sq else "") + '</form>')
+                 f'<input type=search name=sq value="{esc(sq)}" placeholder="🔎 {tr("Search this session… (words=AND, &quot;phrase&quot;)")}">'
+                 f'<button>{tr("Search")}</button>'
+                 + (f'<a class=ssclear href="{url()}">✕ {tr("clear")}</a>' if sq else "") + '</form>')
 
         # ---- in-session search (sq) ----
         if sq.strip():
@@ -2122,26 +2202,26 @@ class H(BaseHTTPRequestHandler):
             body = [render_turn(gi, turns[gi], sq, url(thread=gi) if turns[gi]["role"] == "you" else None)
                     for gi in match_gis]
             ms = int((time.perf_counter() - t0) * 1000)
-            bar = (f'<div class=bar><a href="{url()}">← 전체 대화</a>'
-                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — 이 세션에서 {len(match_gis)}개 메시지 매치 · {ms}ms'
+            bar = (f'<div class=bar><a href="{url()}">← {tr("full conversation")}</a>'
+                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(match_gis)} {tr("messages matched in this session")} · {ms}ms'
                    f'<span id=perf></span></span></div>')
             return shell(meta["title"][:50], head + bar
-                         + ("".join(body) or "<p class=meta>이 세션에서 결과가 없어요.</p>"), q, root=rt)
+                         + ("".join(body) or f"<p class=meta>{tr('No matches in this session.')}</p>"), q, root=rt)
 
         # ---- CODE view ----
         if view == "code":
             arts = extract_code(turns)
-            bar = (f'<div class=bar><a href="{url(q=q)}">← 대화로</a>'
-                   f'<a class=on href="{url(view="code", q=q)}">🧩 코드만</a>'
-                   f'<span class=meta>{len(arts)}개 코드/편집 · 서버 {int((time.perf_counter()-t0)*1000)}ms<span id=perf></span></span></div>')
+            bar = (f'<div class=bar><a href="{url(q=q)}">← {tr("to conversation")}</a>'
+                   f'<a class=on href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
+                   f'<span class=meta>{len(arts)} {tr("code/edit blocks")} · {tr("server")} {int((time.perf_counter()-t0)*1000)}ms<span id=perf></span></span></div>')
             body = []
             for a in arts:
                 lbl = ("✏️ " + short_path(a["label"])) if a["kind"] == "edit" else ("``` " + a["label"])
                 body.append(
                     f'<div class=codeart><div class=codehead><span><a href="{url(q=q)}#t{a["gi"]}" '
                     f'style="text-decoration:none">{esc(lbl)}</a> <span class=time>{fmt_ts_short(a["ts"])}</span></span>'
-                    f'<button class=copy>복사</button></div><pre class=code>{esc(a["body"])}</pre></div>')
-            return shell(meta["title"][:50], head + bar + ("".join(body) or "<p class=meta>코드/편집이 없습니다.</p>"), q, root=rt)
+                    f'<button class=copy>{tr("Copy")}</button></div><pre class=code>{esc(a["body"])}</pre></div>')
+            return shell(meta["title"][:50], head + bar + ("".join(body) or f"<p class=meta>{tr('No code/edits.')}</p>"), q, root=rt)
 
         # ---- thread mode ----
         if thread != "":
@@ -2150,15 +2230,15 @@ class H(BaseHTTPRequestHandler):
             except ValueError:
                 gi = -1
             if gi < 0 or gi >= len(turns) or turns[gi]["role"] != "you":
-                return shell("?", head + "<p class=meta>스레드를 찾을 수 없습니다.</p>", q, root=rt)
+                return shell("?", head + f"<p class=meta>{tr('Thread not found.')}</p>", q, root=rt)
             nxt = next((i for i in you_idx if i > gi), len(turns))
             body = [render_turn(i, turns[i], q, url(thread=i, q=q) if turns[i]["role"] == "you" else None)
                     for i in range(gi, nxt)]
             ms = int((time.perf_counter() - t0) * 1000)
             bar = ('<div class=bar>'
-                   f'<a href="{url(filter="human", q=q)}">← 내 말만 목록</a>'
-                   f'<a href="{url(q=q)}#t{gi}">전체에서 보기</a>'
-                   f'<span class=meta>🧑 질문 → 답변 스레드 ({nxt-gi}개) · 서버 {ms}ms<span id=perf></span></span></div>')
+                   f'<a href="{url(filter="human", q=q)}">← {tr("Only-me list")}</a>'
+                   f'<a href="{url(q=q)}#t{gi}">{tr("see in full")}</a>'
+                   f'<span class=meta>🧑 {tr("question → answer thread")} ({nxt-gi}) · {tr("server")} {ms}ms<span id=perf></span></span></div>')
             return shell(meta["title"][:50], head + bar + "".join(body), q, root=rt)
 
         # ---- normal / human-filtered + pagination ----
@@ -2196,9 +2276,9 @@ class H(BaseHTTPRequestHandler):
 
         n = meta["n"]
         toggles = ('<div class=bar>'
-                   f'<a class="{"on" if filt=="all" else ""}" href="{url(q=q, lim=lim_raw)}">전체 보기</a>'
-                   f'<a class="{"on" if filt=="human" else ""}" href="{url(filter="human", q=q, lim=lim_raw)}">🧑 내 말만</a>'
-                   f'<a href="{url(view="code", q=q)}">🧩 코드만</a>'
+                   f'<a class="{"on" if filt=="all" else ""}" href="{url(q=q, lim=lim_raw)}">{tr("Show all")}</a>'
+                   f'<a class="{"on" if filt=="human" else ""}" href="{url(filter="human", q=q, lim=lim_raw)}">🧑 {tr("Only me")}</a>'
+                   f'<a href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
                    f'<span class=meta>{counts_html(n, system=True)}</span>'
                    '</div>')
         # event-filter chips (counts over ALL turns)
@@ -2209,32 +2289,32 @@ class H(BaseHTTPRequestHandler):
             for c in t["tags"]:
                 if c in cc:
                     cc[c] += 1
-        CHIP_LBL = {"you": "🧑 내 메시지", "error": "⚠️ 에러", "edit": "✏️ 편집", "command": "❯ 명령",
-                    "commit": "⎇ 커밋", "test": "🧪 테스트", "url": "🔗 URL"}
-        chips = ['<div class=chips><button class=chip-f data-cat="*">전체</button>']
+        CHIP_LBL = {"you": "🧑 My messages", "error": "⚠️ Errors", "edit": "✏️ Edits", "command": "❯ Commands",
+                    "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
+        chips = [f'<div class=chips><button class=chip-f data-cat="*">{tr("All")}</button>']
         for c, lbl in CHIP_LBL.items():
             if cc[c]:
-                chips.append(f'<button class=chip-f data-cat="{c}">{lbl}<span class=cnt>{cc[c]}</span></button>')
+                chips.append(f'<button class=chip-f data-cat="{c}">{tr(lbl)}<span class=cnt>{cc[c]}</span></button>')
         chips.append('</div>')
 
         opts = []
         for v in LIM_OPTIONS:
-            opts.append(f'<option value="{v}"{" selected" if (lim is not None and lim == v) else ""}>{v}개</option>')
-        opts.append(f'<option value="all"{" selected" if lim is None else ""}>전체({total})</option>')
+            opts.append(f'<option value="{v}"{" selected" if (lim is not None and lim == v) else ""}>{v}</option>')
+        opts.append(f'<option value="all"{" selected" if lim is None else ""}>{tr("all")}({total})</option>')
         sizeform = ('<form class=psize method=get action=/session>'
                     f'<input type=hidden name=p value="{esc(path)}">'
                     + (f'<input type=hidden name=q value="{esc(q)}">' if q else "")
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
-                    + '페이지당 <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
-                    + f'<span class=hint>· 서버 {ms}ms<span id=perf></span> · 표시 {len(page)}/{total} · '
-                      f'<kbd>j</kbd>/<kbd>k</kbd> 내 메시지, <kbd>Enter</kbd> 답변 스레드 · 칩/미니맵은 현재 페이지 기준</span>'
+                    + f'{tr("per page")} <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
+                    + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · {tr("showing")} {len(page)}/{total} · '
+                      f'<kbd>j</kbd>/<kbd>k</kbd> {tr("my messages")}, <kbd>Enter</kbd> {tr("answer thread")} · {tr("chips/minimap reflect the current page")}</span>'
                     + '</form>')
         pg = []
         if lim is not None:
             if off > 0:
-                pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim))}">← 이전</a>')
+                pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim))}">← {tr("Prev")}</a>')
             if off + lim < total:
-                pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim)}">다음 {min(lim, total-off-lim)}개 →</a>')
+                pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim)}">{tr("Next")} {min(lim, total-off-lim)} →</a>')
         pgbar = f'<div class=pg>{"".join(pg)}</div>' if pg else ""
         return shell(meta["title"][:50], head + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
 
@@ -2242,7 +2322,7 @@ class H(BaseHTTPRequestHandler):
     def subagent(self, path, parent="", q=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
-            return shell("?", "<p>서브에이전트 기록을 찾을 수 없습니다.</p>")
+            return shell("?", f"<p>{tr('Sub-agent transcript not found.')}</p>")
         t0 = time.perf_counter()
         turns = classify_turns(path, sub=True)
         sb = subagent_brief(path)
@@ -2250,12 +2330,12 @@ class H(BaseHTTPRequestHandler):
         ms = int((time.perf_counter() - t0) * 1000)
         back = ""
         if parent and os.path.exists(parent):
-            back = f'<a href="/session?p={urllib.parse.quote(parent)}{("&q="+urllib.parse.quote(q)) if q else ""}">← 부모 세션으로</a>'
+            back = f'<a href="/session?p={urllib.parse.quote(parent)}{("&q="+urllib.parse.quote(q)) if q else ""}">← {tr("to parent session")}</a>'
         bar = ('<div class=bar>' + back
-               + f'<span class=meta>🤖 서브에이전트 · {("워크플로 "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
-               f'agent {esc(sb["agentId"][:12])} · {len(turns)}개 메시지 · 서버 {ms}ms<span id=perf></span></span></div>')
-        head = (f'<p class=meta>📋 지시: {esc(sb["brief"])}</p><h3 style="margin:4px 0">🤖 서브에이전트 대화</h3>')
-        return shell("서브에이전트", head + bar + "".join(body), q, root=rt)
+               + f'<span class=meta>🤖 {tr("Sub-agent")} · {(tr("workflow")+" "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
+               f'agent {esc(sb["agentId"][:12])} · {len(turns)} {tr("messages")} · {tr("server")} {ms}ms<span id=perf></span></span></div>')
+        head = (f'<p class=meta>📋 {tr("Instruction")}: {esc(sb["brief"])}</p><h3 style="margin:4px 0">🤖 {tr("Sub-agent conversation")}</h3>')
+        return shell(tr("Sub-agent"), head + bar + "".join(body), q, root=rt)
 
 # ---- main -------------------------------------------------------------------
 def make_server(host="127.0.0.1", port=DEFAULT_PORT):
@@ -2274,10 +2354,15 @@ def main(argv=None):
     ap.add_argument("--roots", default="", metavar="DIR[,DIR...]",
                     help="extra project roots to offer in the in-app folder switcher")
     ap.add_argument("--open", action="store_true", help="open the browser after starting")
+    ap.add_argument("--lang", default=os.environ.get("CCH_LANG", "en"),
+                    help="default UI language code (e.g. en, ko); needs locales/<code>.json. "
+                         "Also via CCH_LANG; switch live in the header. Default: en")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = ap.parse_args(argv)
+    global _DEFAULT_LANG
+    _DEFAULT_LANG = (args.lang or "en").strip() or "en"
 
-    # Windows: redirected stdout defaults to cp1252 and crashes on 한글/emoji
+    # Windows: redirected stdout defaults to cp1252 and crashes on non-Latin text/emoji
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
@@ -2292,17 +2377,17 @@ def main(argv=None):
     if not os.path.isdir(ROOT):
         ap.exit(2, f"projects dir not found: {ROOT}\n")
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"  ⚠️  {args.host} 바인딩: 대화 기록이 네트워크에 노출됩니다. 신뢰된 망에서만 쓰세요.")
+        print(f"  \u26a0\ufe0f  Binding {args.host}: your transcripts are exposed on the network. Use only on a trusted network.")
 
     try:
         srv = make_server(args.host, args.port)
     except OSError:
-        print(f"  ⚠️  포트 {args.port}가 사용 중입니다 — 임시 포트로 대신 엽니다. (--port 로 지정 가능)")
+        print(f"  \u26a0\ufe0f  Port {args.port} is in use — opening on a temporary port instead. (set one with --port)")
         srv = make_server(args.host, 0)
     url = f"http://{args.host}:{srv.server_address[1]}"
     print(f"\n  Claude Code History v{__version__} → {url}")
-    print(f"  보는 폴더: {ROOT}" + (f"  (+{len(ROOTS)-1}개 전환 가능)" if len(ROOTS) > 1 else ""))
-    print("  (이 창을 닫거나 Ctrl-C 로 종료)\n")
+    print(f"  Browsing: {ROOT}" + (f"  (+{len(ROOTS)-1} more, switchable)" if len(ROOTS) > 1 else ""))
+    print("  (close this window or press Ctrl-C to stop)\n")
     if args.open:
         threading.Timer(0.8, webbrowser.open, [url]).start()
     try:

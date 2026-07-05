@@ -109,7 +109,7 @@ class ClassifyLine(unittest.TestCase):
         attrs, body = app.parse_channel(content)
         self.assertEqual(body, "본문")
         self.assertEqual(attrs["user"], "kdr11")
-        self.assertIn("텔레그램", app.channel_label(attrs))
+        self.assertIn("Telegram", app.channel_label(attrs))
         self.assertIn("@kdr11", app.channel_label(attrs))
         self.assertIsNone(app.parse_channel("<system-reminder>hi</system-reminder>"))
 
@@ -238,6 +238,21 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.parse_query('foo bar "exact phrase"'), ["foo", "bar", "exact phrase"])
         self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
         self.assertEqual(app.parse_query("  "), [])
+
+    def test_i18n(self):
+        app.load_locales()
+        self.assertIn("ko", app.available_langs())        # shipped Korean locale loads
+        app.set_lang("en")
+        self.assertEqual(app.tr("Search"), "Search")      # English is the identity/base
+        self.assertEqual(app.tr("__no_such_key__"), "__no_such_key__")
+        app.set_lang("ko")
+        self.assertEqual(app.tr("Search"), "검색")         # translated
+        self.assertEqual(app.tr("Tokens"), "토큰")
+        self.assertEqual(app.tr("__no_such_key__"), "__no_such_key__")  # missing → English fallback
+        app.set_lang("zz")                                # unknown code → English
+        self.assertEqual(app.cur_lang(), "en")
+        self.assertEqual(app.tr("Search"), "Search")
+        app.set_lang("en")
 
     def test_hl_multi_color(self):
         out = app.hl("foo and bar", "foo bar")
@@ -467,7 +482,7 @@ class ToolRender(unittest.TestCase):
         self.assertIn('<details class="fold" open>', use)
         res = app.render_turn(1, self._turn("tool-result", [("tool_result", '{"stdout":"x","stderr":""}')]))
         self.assertIn('<details class="fold" open>', res)
-        self.assertIn("실행 결과", res)
+        self.assertIn("Run result", res)
 
     def test_edit_call_opens_but_edit_result_stays_folded(self):
         use = app.render_turn(0, self._turn("assistant",
@@ -477,7 +492,7 @@ class ToolRender(unittest.TestCase):
             {"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2, "lines": [" a", "-b", "+c"]}]})
         res = app.render_turn(1, self._turn("tool-result", [("tool_result", result_json)]))
         self.assertNotIn(' open>', res)                       # paired result folded
-        self.assertIn("편집 결과", res)
+        self.assertIn("Edit result", res)
 
     def test_thinking_stays_folded(self):
         h = app.render_turn(0, self._turn("assistant", [("thinking", "some reasoning")]))
