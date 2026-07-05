@@ -8,8 +8,7 @@ It exists to answer one question reliably: **who actually said what?** In Claude
 transcript format, ~95% of `type:"user"` lines are *not* the human — they are tool
 results, system reminders, IDE notices, slash-command output, task-notifications,
 autonomous-loop prompts, or subagent briefs. This viewer uses an empirically audited +
-adversarially verified ruleset so only genuinely human-typed text is labelled **🧑 나
-(You)**; everything else gets its own category, folded by default.
+adversarially verified ruleset so only genuinely human-typed text is labelled **🧑 You**; everything else gets its own category, folded by default.
 
 ## Install & run
 
@@ -75,8 +74,8 @@ it never writes to your transcripts.
 
 ## Features
 
-- **Correct attribution** — 🧑 나 / ✦ Claude / 💭 추론 / 🔧 도구 호출 / ⚙ 도구 결과 /
-  ⓘ 시스템·주입 / 📋 지시 / 🤖 서브에이전트; tooltips + an in-app legend (❓) explain
+- **Correct attribution** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call / ⚙ Tool result /
+  ⓘ System / 📋 Instruction / 🤖 Subagent; tooltips + an in-app legend (❓) explain
   each; technical blocks folded by default.
 - **Markdown rendering** — message text renders as Markdown: GFM tables (with
   alignment), fenced/inline code, headings, nested lists, blockquotes, bold/italic,
@@ -87,23 +86,23 @@ it never writes to your transcripts.
   file/pattern; a tool result splits `stdout`/`stderr` (stderr in red) instead of raw
   JSON. Each fold summary previews the command/file so you can scan without expanding.
 - **Index** — real titles (`ai-title`/`custom-title`), project filter (by real `cwd`),
-  sort by 날짜/내 메시지/제목/용량 with direction toggle, per-session counts,
-  **session-id** per row, **🔁 자율 빌드루프 chips** for autonomous-loop sessions.
+  sort by date/my-messages/title/size (with direction toggle), per-session counts,
+  output-token totals + model mix, **session-id** per row, **🔁 build-loop chips**.
 - **Per-project stats** — sessions, my-participated sessions, my message count, total
   size, my-session size, loop count; overview table + per-folder detail card.
 - **Full-text search** across all sessions — relevance-ranked, multi-term AND +
-  `"phrases"`, per-term colors, scope 전체 ↔ 내 말만, tool-call args (Bash commands,
+  `"phrases"`, per-term colors, scope all ↔ only-me, tool-call args (Bash commands,
   file paths) included, highlighted snippets. **Search by session-id / reference** too
   (UUID, branched-from id, workspace path) — exact id matches rank to the top.
-- **Session view** — per-message timestamps, 🧑 내 말만 filter, **답변 스레드** links,
-  page size 100…10000/전체 with render timing, dark mode, and a **📍 Session
+- **Session view** — per-message timestamps + per-turn tokens/model, 🧑 only-me filter,
+  **answer-thread** links, page size 100…10000/all, dark mode, and a **📍 Session
   Reference card**: Workspace / Started-in (when moved) / file path / session-id /
   Branched-from (linked) / `claude --resume`.
-- **Event/error chips** — ⚠️ 에러 / ✏️ 편집 / ❯ 명령 / ⎇ 커밋 / 🧪 테스트 / 🔗 URL filters.
+- **Event/error chips** — ⚠️ errors / ✏️ edits / ❯ commands / ⎇ commits / 🧪 tests / 🔗 URL filters.
 - **Structure minimap** — right-edge rail (you/error/edit/command density), click to jump.
 - **Extracted-fact digest** — files touched, commands, tests, commits, PR links.
   Deterministic, no LLM.
-- **Code/diff extraction** (`🧩 코드만`) — all generated code blocks + file edits with
+- **Code/diff extraction** (`🧩 Code only`) — all generated code blocks + file edits with
   one-click copy.
 - **Subagent threads** — sidechain/Task transcripts (incl. workflow agents) listed per
   session and openable, orchestrator briefs clearly labelled 📋 (never "you").
@@ -114,15 +113,32 @@ it never writes to your transcripts.
 - `j` / `k` (or `n` / `p`) jump between **my** messages · `Enter` open that question's
   answer thread
 
+## Language
+
+The UI is **English by default** and fully translatable — switch live with the 🌐 picker
+in the header (it remembers your choice via a cookie). A **Korean (한국어)** locale ships
+built in.
+
+**Add your own language** (no rebuild): copy `src/claude_code_history/locales/ko.json` to
+`<code>.json` (e.g. `ja.json`, `fr.json`) and translate the values — the keys are the
+English UI strings; leave a value unchanged or omit a key to fall back to English. Drop
+the file into either:
+
+- the package's `locales/` directory, or
+- your config dir — `~/.config/claude-code-history/locales/` (macOS/Linux) or
+  `%APPDATA%\claude-code-history\locales\` (Windows).
+
+Pick a default with `--lang ja` or `CCH_LANG=ja`. PRs adding locales are welcome.
+
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 62 tests: attribution + markdown/tools + HTTP smoke
+python3 -m unittest discover -s tests -v   # 86 tests: attribution + markdown/tools + i18n + HTTP smoke
 ```
 
 CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package
 and checks the `claude-code-history` entry point. The attribution tests are the contract:
-**no machine-authored line may ever be classified as 🧑 나.**
+**no machine-authored line may ever be classified as 🧑 You.**
 
 Layout: the whole app is one module (`src/claude_code_history/app.py`) by design — stdlib
 only, no framework. `claude-code-history.py` at the repo root is a thin shim for
@@ -143,3 +159,16 @@ actual text still renders.
 No embeddings/semantic search, no LLM summarization, no heavy client-side syntax
 highlighters (they freeze on 20k-line sessions), no database. Bookmarks/aliases, if
 added, will use `localStorage` only.
+
+## Contributing
+
+Issues and PRs welcome — especially new UI locales (see [Language](#language)) and
+attribution edge cases (attach a redacted JSONL line). Keep it **stdlib-only**: no runtime
+dependencies, ever. Run `python3 -m unittest discover -s tests` before opening a PR.
+
+## License
+
+[GPL-3.0-or-later](LICENSE). This is a finished end-user tool, distributed free — copyleft
+keeps every fork and derivative open too (you can use, modify, sell, and self-host it, but
+if you distribute a modified version you must share its source under the GPL). Ideas and
+algorithms aren't covered by copyright — only the code is.

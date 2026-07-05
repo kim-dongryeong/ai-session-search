@@ -13,6 +13,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from claude_code_history import app  # noqa: E402
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None  # don't follow — so we can inspect the 302 + Set-Cookie
+
+
 def build_fixture_root():
     root = tempfile.mkdtemp()
     proj = os.path.join(root, "-Users-x-demo")
@@ -63,48 +68,48 @@ class HttpSmoke(unittest.TestCase):
         status, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn("데모 세션", body)
-        self.assertIn("프로젝트별 통계", body)
+        self.assertIn("Project stats", body)
 
     def test_session_attribution(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
         self.assertEqual(status, 200)
-        self.assertEqual(body.count("🧑 나"), 2)          # header count chip + the one human bubble
-        self.assertIn("⚙ 도구 결과", body)
-        self.assertIn("ⓘ 시스템·주입", body)              # task-notification never rendered as 나
+        self.assertEqual(body.count("🧑 You"), 2)          # header count chip + the one human bubble
+        self.assertIn("⚙ Tool result", body)
+        self.assertIn("ⓘ System / injected", body)              # task-notification never rendered as 나
         self.assertIn("&lt;b&gt;계획&lt;/b&gt;", body)     # user HTML is escaped
         self.assertIn("session-id", body)
 
     def test_search_scopes(self):
         status, body = self.get("/search?q=" + urllib.parse.quote("계획"))
         self.assertEqual(status, 200)
-        self.assertIn("1개 세션에서 매치", body)
+        self.assertIn("1 sessions matched", body)
         status, body = self.get("/search?q=Traceback&scope=human")
         self.assertEqual(status, 200)
-        self.assertIn("결과 없음", body)                   # tool output is not "my words"
+        self.assertIn("No results.", body)                   # tool output is not "my words"
 
     def test_search_multi_term_and(self):
         # both words in the same turn → match
         status, body = self.get("/search?q=" + urllib.parse.quote("안녕 계획"))
         self.assertEqual(status, 200)
-        self.assertIn("1개 세션에서 매치", body)
+        self.assertIn("1 sessions matched", body)
         # one word matches, the other doesn't → no result (AND semantics)
         status, body = self.get("/search?q=" + urllib.parse.quote("안녕 없는단어졸라"))
         self.assertEqual(status, 200)
-        self.assertIn("결과 없음", body)
+        self.assertIn("No results.", body)
 
     def test_search_phrase(self):
         # fixture text: "안녕 <b>계획</b> 알려줘" — exact contiguous phrase matches
         status, body = self.get("/search?q=" + urllib.parse.quote('"<b>계획</b> 알려줘"'))
         self.assertEqual(status, 200)
-        self.assertIn("1개 세션에서 매치", body)
+        self.assertIn("1 sessions matched", body)
         status, body = self.get("/search?q=" + urllib.parse.quote('"알려줘 계획"'))  # wrong order
         self.assertEqual(status, 200)
-        self.assertIn("결과 없음", body)
+        self.assertIn("No results.", body)
 
     def test_search_scope_claude(self):
         status, body = self.get("/search?q=" + urllib.parse.quote("커밋했습니다") + "&scope=claude")
         self.assertEqual(status, 200)
-        self.assertIn("1개 세션에서 매치", body)
+        self.assertIn("1 sessions matched", body)
 
     def test_search_result_links_carry_goto(self):
         status, body = self.get("/search?q=" + urllib.parse.quote("계획"))
@@ -121,12 +126,37 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("<svg", body)
 
+    def test_language_switch(self):
+        # default is English UI, with a 🌐 language switcher
+        status, en = self.get("/")
+        self.assertIn("Project stats", en)
+        self.assertNotIn("프로젝트별 통계", en)
+        self.assertIn("langsw", en)
+        # a Korean cookie flips the UI to Korean (data like "데모 세션" is unchanged either way)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/")
+        req.add_header("Cookie", "cchlang=ko")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ko = r.read().decode("utf-8")
+        self.assertIn("프로젝트별 통계", ko)
+        self.assertNotIn("Project stats", ko)
+
+    def test_lang_query_sets_cookie_and_redirects(self):
+        try:
+            urllib.request.build_opener(_NoRedirect()).open(
+                f"http://127.0.0.1:{self.port}/?lang=ko", timeout=10)
+            self.fail("expected a 302 redirect")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 302)
+            self.assertIn("cchlang=ko", e.headers.get("Set-Cookie", ""))
+            self.assertEqual(e.headers.get("Location"), "/")   # clean redirect, lang param stripped
+            e.close()
+
     def test_search_by_session_id(self):
         sid = "11111111-2222-3333-4444-555555555555"
         status, body = self.get("/search?q=" + sid + "&scope=all")
         self.assertEqual(status, 200)
         self.assertIn("데모 세션", body)        # the session is found by its own id
-        self.assertIn("참조", body)             # reference-match chip / label
+        self.assertIn(">ref<", body)             # reference-match chip / label
 
     def test_search_by_branched_from_id(self):
         status, body = self.get("/search?q=99999999-8888-7777-6666-555555555555&scope=all")
@@ -141,29 +171,29 @@ class HttpSmoke(unittest.TestCase):
     def test_token_and_model_in_session(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
         self.assertEqual(status, 200)
-        self.assertIn("<b>토큰</b>", body)          # session token summary
+        self.assertIn("<b>Tokens</b>", body)          # session token summary
         self.assertIn("Opus 4.8", body)              # model badge (claude-opus-4-8 → Opus 4.8)
         self.assertIn("tokb qtok", body)             # per-question token badge on the 🧑 turn
 
     def test_token_column_in_index(self):
         status, body = self.get("/")
         self.assertEqual(status, 200)
-        self.assertIn("출력토큰", body)              # project-stats token column
+        self.assertIn("Out tokens", body)              # project-stats token column
         self.assertIn("class=mdlcell", body)         # model-mix column
 
     def test_in_session_search(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path)
                                 + "&sq=" + urllib.parse.quote("계획"))
         self.assertEqual(status, 200)
-        self.assertIn("이 세션에서", body)           # in-session result bar
-        self.assertIn("1개 메시지 매치", body)        # the one human turn matches "계획"
-        self.assertIn("← 전체 대화", body)
+        self.assertIn("messages matched in this session", body)           # in-session result bar
+        self.assertIn("1 messages matched in this session", body)        # the one human turn matches "계획"
+        self.assertIn("← full conversation", body)
 
     def test_in_session_search_bash_command(self):
         # tool-call text is searchable in-session too (git commit lives in a tool_use)
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path)
                                 + "&sq=" + urllib.parse.quote("git commit"))
-        self.assertIn("1개 메시지 매치", body)
+        self.assertIn("1 messages matched in this session", body)
 
     def test_session_metadata_card(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
@@ -186,7 +216,7 @@ class HttpSmoke(unittest.TestCase):
         # fixture session mtime is "now"; a past-only window must exclude it
         status, body = self.get("/search?q=" + urllib.parse.quote("계획") + "&from=2000-01-01&to=2000-12-31")
         self.assertEqual(status, 200)
-        self.assertIn("결과 없음", body)
+        self.assertIn("No results.", body)
 
     def test_code_view(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&view=code")
@@ -196,12 +226,12 @@ class HttpSmoke(unittest.TestCase):
     def test_path_traversal_rejected(self):
         status, body = self.get("/session?p=/etc/hosts")
         self.assertEqual(status, 200)
-        self.assertIn("세션을 찾을 수 없습니다", body)
+        self.assertIn("Session not found.", body)
 
     def test_addroot_rejects_garbage(self):
         status, body = self.get("/addroot?path=/definitely-not-real")
         self.assertEqual(status, 200)
-        self.assertIn("폴더를 추가할 수 없습니다", body)
+        self.assertIn("Could not add that folder.", body)
 
     def test_404(self):
         try:

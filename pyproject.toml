@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]   # PEP 639 SPDX license expression + license-files
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +7,18 @@ name = "claude-code-history"
 description = "Read-only local web viewer for Claude Code session transcripts (JSONL), with verified human-vs-machine message attribution"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Proprietary" }
-authors = [{ name = "kdr", email = "kdr@namouli.com" }]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Kim Dongryeong (kdr)", email = "kdr@namouli.com" }]
+keywords = ["claude", "claude-code", "transcript", "viewer", "history", "search", "llm"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
 dynamic = ["version"]
 dependencies = []  # stdlib only, by design
 
@@ -17,11 +27,17 @@ claude-code-history = "claude_code_history.app:main"
 cch = "claude_code_history.app:main"
 
 [project.urls]
+Homepage = "https://github.com/kim-dongryeong/claude-code-history"
 Repository = "https://github.com/kim-dongryeong/claude-code-history"
+Issues = "https://github.com/kim-dongryeong/claude-code-history/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["claude_code_history"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+claude_code_history = ["locales/*.json"]
 
 [tool.setuptools.dynamic]
 version = { attr = "claude_code_history.app.__version__" }
