@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1.0 — 2026-07-06
+
+Search 2.0, session UX, and downloadable app bundles (from Codex's review playbook).
+
+- **Search across turns, not just within one.** Same-turn matches still rank highest,
+  but when your terms are spread over a session the search now finds them too —
+  labelled **nearby** (a tight window of turns, via a min-span proximity scan) or
+  **in session**. Recovering "the session where I fixed X and ran the Y test" works
+  even though X and Y were different turns.
+- **Code & command search (closes a real gap).** The search corpus now includes the
+  code bodies that the `🧩 Code only` view extracts (a `Write`'s `content`, an `Edit`'s
+  `new_string`) — previously visible there but *unfindable*. New scopes **🧩 Code/edits**
+  and **🔧 Commands/files**.
+- **Field-aware queries:** `file:app.py`, `cmd:pytest`, `code:SearchRow`, `error:Traceback`,
+  `role:me`, `id:<uuid>`, plus `-exclude` and `"exact phrase"`. Beginners keep the scope
+  dropdown; power users get syntax. Ranking gained field/phrase/proximity/recency boosts.
+- **Session UX:** ⭐ **star** sessions (browser-local, transcripts stay read-only),
+  **◄ prev / next ►** session in the same project, and a 🔗 **permalink** on every message
+  (copies a deep link to `#t<n>`).
+- **Perf & hardening:** `load_session()` does one cached pass instead of parsing each
+  session twice for `/session`; added `X-Content-Type-Options: nosniff` + `Referrer-Policy`,
+  a query-length cap, and a results cap. Search rows are structured (kind bitmask) —
+  groundwork the review calls for, without a database.
+- **Downloadable app bundles.** A `release` GitHub Actions workflow builds double-click
+  bundles with **PyInstaller** on tag push — `.dmg` (macOS arm64 + Intel), `.exe` (zip,
+  Windows), and a Linux binary (tar.gz) — and attaches them to the Release. macOS builds
+  are signed + notarized when the signing secrets are set, else ad-hoc-signed. Locally
+  verified: the frozen `.app` serves and loads the bundled Korean locale.
+- 97 tests (added search-engine, field-grammar, proximity, code-scope, session-nav,
+  header, and i18n coverage).
+
 ## 2.0.0 — 2026-07-05
 
 First public release. 🎉

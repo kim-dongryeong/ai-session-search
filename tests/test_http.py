@@ -126,6 +126,44 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("<svg", body)
 
+    def test_search_code_scope(self):
+        # fixture assistant text has a ```python\nprint(1)\n``` fence → a CODE row
+        status, body = self.get("/search?q=" + urllib.parse.quote("print(1)") + "&scope=code")
+        self.assertEqual(status, 200)
+        self.assertIn("1 sessions matched", body)
+
+    def test_search_cross_turn_session_level(self):
+        # '안녕' is in the human turn, '커밋했습니다' in the later assistant turn (different turns)
+        status, body = self.get("/search?q=" + urllib.parse.quote("안녕 커밋했습니다"))
+        self.assertEqual(status, 200)
+        self.assertIn("1 sessions matched", body)         # same-turn AND would have missed this
+        self.assertTrue(("nearby" in body) or ("in session" in body))
+
+    def test_search_neg_excludes(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("안녕 -커밋했습니다"))
+        self.assertEqual(status, 200)
+        self.assertIn("No results.", body)                # session has 커밋했습니다 → excluded
+
+    def test_search_field_cmd(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote("cmd:commit"))
+        self.assertEqual(status, 200)
+        self.assertIn("1 sessions matched", body)         # git commit is a Bash command
+
+    def test_query_length_cap_no_crash(self):
+        status, _ = self.get("/search?q=" + ("a" * 500))
+        self.assertEqual(status, 200)
+
+    def test_permalink_and_star_present(self):
+        _, sv = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
+        self.assertIn("class=permalink", sv)
+        self.assertIn("class=starbtn", sv)                # star on the session header
+        _, idx = self.get("/")
+        self.assertIn("class=starbtn", idx)               # and on index rows
+
+    def test_nosniff_header(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
+            self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+
     def test_language_switch(self):
         # default is English UI, with a 🌐 language switcher
         status, en = self.get("/")

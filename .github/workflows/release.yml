@@ -1,0 +1,138 @@
+name: release
+
+# Build double-click bundles (.dmg / .exe / AppImage-style binary) and attach them to
+# the GitHub Release for a pushed tag. Developers still use pip/pipx (see README); this
+# is for everyone else: download, double-click, it opens in the browser.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build & attach to (e.g. v2.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure a release exists for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+            --notes "Download a bundle for your OS below (double-click → opens in your browser). Or install with pipx: \`pipx install claude-code-history\`. See CHANGELOG.md for details."
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            asset: claude-code-history-macos-arm64.dmg
+          - os: macos-13
+            asset: claude-code-history-macos-x86_64.dmg
+          - os: windows-latest
+            asset: claude-code-history-windows-x64.zip
+          - os: ubuntu-latest
+            asset: claude-code-history-linux-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip pyinstaller
+
+      # ---- macOS: .app → (sign) → .dmg → (notarize) ----
+      - name: Build macOS .app
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --clean --windowed \
+            --name "Claude Code History" \
+            --icon assets/icon.icns \
+            --paths src \
+            --add-data "src/claude_code_history/locales:claude_code_history/locales" \
+            --hidden-import claude_code_history.app \
+            --osx-bundle-identifier com.kimdongryeong.claude-code-history \
+            packaging/launch.py
+
+      - name: Sign macOS app (Developer ID if configured, else ad-hoc)
+        if: runner.os == 'macOS'
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERT_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          APP="dist/Claude Code History.app"
+          if [ -n "$CERT_B64" ]; then
+            echo "$CERT_B64" | base64 --decode > cert.p12
+            KEYCHAIN=build.keychain
+            security create-keychain -p actions "$KEYCHAIN"
+            security default-keychain -s "$KEYCHAIN"
+            security unlock-keychain -p actions "$KEYCHAIN"
+            security import cert.p12 -k "$KEYCHAIN" -P "$CERT_PWD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k actions "$KEYCHAIN"
+            rm -f cert.p12
+            codesign --deep --force --options runtime --timestamp \
+              --entitlements packaging/entitlements.plist --sign "$SIGN_ID" "$APP"
+            codesign --verify --strict --verbose=2 "$APP"
+          else
+            echo "No signing cert — ad-hoc signing (runs on this machine; Gatekeeper will warn others)."
+            codesign --deep --force --sign - "$APP"
+          fi
+
+      - name: Make .dmg
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -volname "Claude Code History" \
+            -srcfolder "dist/Claude Code History.app" -ov -format UDZO "${{ matrix.asset }}"
+
+      - name: Notarize & staple .dmg
+        if: runner.os == 'macOS' && env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          xcrun notarytool submit "${{ matrix.asset }}" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "${{ matrix.asset }}"
+
+      # ---- Windows: .exe → .zip ----
+      - name: Build Windows .exe
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install pillow
+          python -c "from PIL import Image; Image.open('assets/icon-256.png').save('assets/icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+          pyinstaller --noconfirm --clean --onefile --name claude-code-history `
+            --icon assets/icon.ico --paths src `
+            --add-data "src/claude_code_history/locales;claude_code_history/locales" `
+            --hidden-import claude_code_history.app packaging/launch.py
+          Compress-Archive -Path dist/claude-code-history.exe -DestinationPath "${{ matrix.asset }}" -Force
+
+      # ---- Linux: single binary → .tar.gz ----
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name claude-code-history \
+            --paths src --add-data "src/claude_code_history/locales:claude_code_history/locales" \
+            --hidden-import claude_code_history.app packaging/launch.py
+          tar czf "${{ matrix.asset }}" -C dist claude-code-history
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "${{ matrix.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
+        shell: bash
