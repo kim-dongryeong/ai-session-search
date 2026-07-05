@@ -12,3 +12,10 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+*.spec
+assets/icon.ico
+*.dmg
+*.AppImage
+
+# editor
+.vscode/

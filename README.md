@@ -10,7 +10,20 @@ results, system reminders, IDE notices, slash-command output, task-notifications
 autonomous-loop prompts, or subagent briefs. This viewer uses an empirically audited +
 adversarially verified ruleset so only genuinely human-typed text is labelled **🧑 You**; everything else gets its own category, folded by default.
 
-## Install & run
+## Download (no Python needed)
+
+Grab a double-click bundle from the [**latest release**](https://github.com/kim-dongryeong/claude-code-history/releases/latest) — it starts the local server and opens the app in your browser. Nothing is uploaded; it reads your transcripts on your machine.
+
+| OS | File | Notes |
+|---|---|---|
+| macOS (Apple Silicon) | `…-macos-arm64.dmg` | open the dmg, drag to Applications |
+| macOS (Intel) | `…-macos-x86_64.dmg` | |
+| Windows | `…-windows-x64.zip` | unzip, run `claude-code-history.exe` |
+| Linux | `…-linux-x86_64.tar.gz` | `tar xzf …`, run `./claude-code-history` |
+
+> Unsigned builds trip Gatekeeper/SmartScreen: on macOS right-click → **Open** the first time; on Windows click **More info → Run anyway**. (Signed/notarized macOS builds ship once the signing cert is configured.)
+
+## Install & run (with Python)
 
 **Run from a checkout (no install):**
 
@@ -59,11 +72,11 @@ macOS only ships `python3` (3.9) if the Xcode Command Line Tools are installed. 
 machine, install Python once (`brew install python`, python.org, or `xcode-select
 --install`) before `pipx`.
 
-A `.dmg` here is just the thin `.app` (≈90 KB), **not** a self-contained binary. A full
-PyInstaller/py2app bundle (to run with zero Python) is intentionally avoided: it needs
-per-OS builds and macOS code-signing/notarization for a tool that only opens a local
-`127.0.0.1` page. If you truly need Python-free distribution, that's the tradeoff to
-revisit.
+The `scripts/make-macos-app.sh` `.dmg` above is a thin `.app` (≈90 KB) that execs an
+*installed* `claude-code-history` — it needs Python. For **zero-Python, double-click**
+distribution, use the self-contained bundles from [Releases](#download-no-python-needed)
+instead — built with PyInstaller by the `release` workflow on tag push (per-OS,
+macOS signed/notarized when the signing secrets are configured).
 
 Defaults: binds `127.0.0.1` only (never exposed to the network; `--host` warns if you
 change it), reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, and
@@ -90,13 +103,18 @@ it never writes to your transcripts.
   output-token totals + model mix, **session-id** per row, **🔁 build-loop chips**.
 - **Per-project stats** — sessions, my-participated sessions, my message count, total
   size, my-session size, loop count; overview table + per-folder detail card.
-- **Full-text search** across all sessions — relevance-ranked, multi-term AND +
-  `"phrases"`, per-term colors, scope all ↔ only-me, tool-call args (Bash commands,
-  file paths) included, highlighted snippets. **Search by session-id / reference** too
-  (UUID, branched-from id, workspace path) — exact id matches rank to the top.
+- **Full-text search** across all sessions — relevance-ranked, per-term colors,
+  highlighted snippets. Matches **within a turn**, **nearby turns** (proximity), or
+  **anywhere in a session** — so clues spread across turns are still found. Searches
+  message text, tool-call args (Bash commands, file paths), and **code bodies** (a
+  `Write`'s content, an `Edit`'s diff). Scopes: all / only-me / Claude / chat /
+  🧩 code / 🔧 commands. **Field queries** `file: cmd: code: error: role: id:`, plus
+  `-exclude` and `"exact phrase"`. **Search by session-id / reference** (UUID,
+  branched-from id, workspace path) too — exact id matches rank to the top.
 - **Session view** — per-message timestamps + per-turn tokens/model, 🧑 only-me filter,
-  **answer-thread** links, page size 100…10000/all, dark mode, and a **📍 Session
-  Reference card**: Workspace / Started-in (when moved) / file path / session-id /
+  in-session search, ⭐ star (browser-local), ◄ prev/next session, 🔗 per-message
+  permalink, **answer-thread** links, page size 100…10000/all, dark mode, and a
+  **📍 Session Reference card**: Workspace / Started-in / file / session-id /
   Branched-from (linked) / `claude --resume`.
 - **Event/error chips** — ⚠️ errors / ✏️ edits / ❯ commands / ⎇ commits / 🧪 tests / 🔗 URL filters.
 - **Structure minimap** — right-edge rail (you/error/edit/command density), click to jump.
@@ -133,7 +151,7 @@ Pick a default with `--lang ja` or `CCH_LANG=ja`. PRs adding locales are welcome
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 86 tests: attribution + markdown/tools + i18n + HTTP smoke
+python3 -m unittest discover -s tests -v   # 97 tests: attribution + markdown/tools + i18n + HTTP smoke
 ```
 
 CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package

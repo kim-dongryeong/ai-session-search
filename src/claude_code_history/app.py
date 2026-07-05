@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -65,8 +65,12 @@ _DEFAULT_LANG = "en"              # overridable via --lang / CCH_LANG
 
 def load_locales():
     LOCALES.clear()
-    for d in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales"),
-              os.path.join(CONFIG_DIR, "locales")):
+    dirs = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales")]
+    mp = getattr(sys, "_MEIPASS", None)           # PyInstaller bundle
+    if mp:
+        dirs += [os.path.join(mp, "claude_code_history", "locales"), os.path.join(mp, "locales")]
+    dirs.append(os.path.join(CONFIG_DIR, "locales"))
+    for d in dirs:
         if not os.path.isdir(d):
             continue
         for f in sorted(glob.glob(os.path.join(d, "*.json"))):
@@ -170,6 +174,8 @@ def configure(primary_root=None, extra_roots=()):
         _INDEX["by_root"].clear()
     with _SEARCH["lock"]:
         _SEARCH["by_path"].clear()
+    with _SESSION["lock"]:
+        _SESSION["by_path"].clear()
     return ROOT
 
 def root_for_path(p):
@@ -569,6 +575,94 @@ def summarize_file(path):
             "n": n, "last_ts": last_ts, "cwd": cwd, "start_cwd": start_cwd, "branch": branch,
             "forked": forked, "loop": loop, "tok": tok, "models": models}
 
+# ---- combined session load (one pass: turns + meta) — kills the /session double-parse
+_SESSION = {"by_path": {}, "lock": threading.Lock()}
+
+def _load_session_uncached(path):
+    ai_title = custom_title = last_prompt = first_human = ""
+    n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
+    last_ts = cwd = start_cwd = branch = forked = ""
+    tok = {"in": 0, "out": 0, "cw": 0, "cr": 0}
+    models = {}
+    loop = False
+    turns = []
+    for o in iter_lines(path):
+        t = o.get("type")
+        if t == "assistant":
+            m = o.get("message") or {}
+            add_tok(tok, usage_tok(m.get("usage")))
+            if m.get("model"):
+                models[m["model"]] = models.get(m["model"], 0) + 1
+        if t == "ai-title":
+            ai_title = o.get("aiTitle", ai_title) or ai_title; continue
+        if t == "custom-title":
+            custom_title = o.get("customTitle", custom_title) or custom_title; continue
+        if t == "last-prompt":
+            last_prompt = o.get("lastPrompt", last_prompt) or last_prompt; continue
+        c = o.get("cwd")
+        if c:
+            cwd = c
+            if not start_cwd:
+                start_cwd = c
+        branch = o.get("gitBranch", branch) or branch
+        if not forked:
+            ff = o.get("forkedFrom")
+            if isinstance(ff, dict) and ff.get("sessionId"):
+                forked = ff["sessionId"]
+        if o.get("timestamp"):
+            last_ts = o["timestamp"]
+        r = classify_line(o)
+        if not r:
+            continue
+        role, segs = r
+        turn = {"role": role, "segs": segs, "ts": o.get("timestamp", ""), "tags": turn_tags(o, role, segs)}
+        if t == "assistant":
+            m = o.get("message") or {}
+            turn["model"] = m.get("model", "")
+            turn["tok"] = usage_tok(m.get("usage"))
+        turns.append(turn)
+        if role in n:
+            n[role] += 1
+        if role == "system" and not loop and any(
+                x[0] == "injected" and x[1].lstrip().startswith(LOOP_PREFIXES) for x in segs):
+            loop = True
+        if role == "you" and not first_human:
+            first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
+    title = custom_title or ai_title or first_human or last_prompt or tr("(untitled)")
+    meta = {"title": title.strip()[:120], "preview": (last_prompt or first_human).strip()[:140],
+            "n": n, "last_ts": last_ts, "cwd": cwd, "start_cwd": start_cwd, "branch": branch,
+            "forked": forked, "loop": loop, "tok": tok, "models": models}
+    for i, tt in enumerate(turns):        # per-question token cost (answer block until next 🧑)
+        if tt["role"] == "you":
+            qsum = {"in": 0, "out": 0, "cw": 0, "cr": 0}
+            j = i + 1
+            while j < len(turns) and turns[j]["role"] != "you":
+                add_tok(qsum, turns[j].get("tok"))
+                j += 1
+            if any(qsum.values()):
+                tt["qtok"] = qsum
+    return {"turns": turns, "meta": meta}
+
+def load_session(path):
+    """Cached one-pass load of a session (turns + meta), keyed on (mtime_ns, size)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    with _SESSION["lock"]:
+        hit = _SESSION["by_path"].get(path)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+    data = _load_session_uncached(path)
+    with _SESSION["lock"]:
+        cache = _SESSION["by_path"]
+        cache[path] = (key, data)
+        if len(cache) > 64:                # bounded: drop oldest-inserted
+            for k in list(cache)[:len(cache) - 64]:
+                del cache[k]
+    return data
+
 # ---- index cache (per root, incrementally refreshed) -------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
 def session_files(root):
@@ -586,6 +680,18 @@ def find_session_by_sid(root, sid):
     for p in sorted(glob.glob(os.path.join(root, "*", sid + ".jsonl"))):
         return p
     return None
+
+def adjacent_sessions(root, current_path):
+    """Prev/next session in the SAME project, chronological (by mtime). Work spans sessions."""
+    index = get_index(root)
+    cur = next((it for it in index if it["path"] == current_path), None)
+    if not cur:
+        return None, None
+    same = sorted((it for it in index if it["proj"] == cur["proj"]), key=lambda it: it["mtime"])
+    pos = next((i for i, it in enumerate(same) if it["path"] == current_path), None)
+    if pos is None:
+        return None, None
+    return (same[pos - 1] if pos > 0 else None), (same[pos + 1] if pos + 1 < len(same) else None)
 
 def _index_item(path, st):
     s = summarize_file(path)
@@ -622,9 +728,44 @@ def get_index(root):
 _SEARCH = {"by_path": {}, "lock": threading.Lock()}
 _SEARCH_KINDS = ("text", "tool_result", "thinking", "injected")
 
-def search_turns(path):
-    """[(gi, role, text)] for a session file — cached so repeat searches skip
-    re-parsing unchanged files entirely."""
+# search-row kind flags (bitmask), for scope/field filtering
+K_TEXT, K_TOOL, K_RESULT, K_CODE = 1, 2, 4, 8
+K_FILE, K_CMD, K_ERROR, K_THINK, K_SYS = 16, 32, 64, 128, 256
+_CODE_CAP = 20000   # cap a single code body's searchable length (bloat guard)
+
+def _rows_from_turns(turns):
+    """Structured search rows for one session's turns: {gi, role, text, kind, label}.
+    Includes CODE rows from extract_code() so the '🧩 Code only' content is searchable."""
+    out = []
+    for gi, t in enumerate(turns):
+        role, tags = t["role"], t["tags"]
+        err = K_ERROR if "error" in tags else 0
+        for k, v in t["segs"]:
+            if k == "text":
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_TEXT, "label": ""})
+            elif k == "channel":
+                pc = parse_channel(v)
+                out.append({"gi": gi, "role": role, "text": pc[1] if pc else v, "kind": K_TEXT, "label": ""})
+            elif k == "thinking":
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_THINK, "label": ""})
+            elif k == "injected":
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_SYS, "label": ""})
+            elif k == "tool_use":
+                name, inp = _toolinput(v)
+                kind = K_TOOL | (K_CMD if name == "Bash" else 0)
+                if isinstance(inp, dict) and (inp.get("file_path") or inp.get("path") or inp.get("notebook_path")):
+                    kind |= K_FILE
+                out.append({"gi": gi, "role": role, "text": _tool_use_search_text(v), "kind": kind, "label": name})
+            elif k == "tool_result":
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_RESULT | err, "label": ""})
+    for art in extract_code(turns):
+        body = str(art["body"])
+        out.append({"gi": art["gi"], "role": "assistant", "text": body[:_CODE_CAP],
+                    "kind": K_CODE | (K_FILE if art["kind"] == "edit" else 0), "label": art.get("label", "")})
+    return [r for r in out if r["text"].strip()]
+
+def search_rows(path):
+    """Cached structured search rows for a session file (keyed on mtime_ns+size)."""
     try:
         st = os.stat(path)
     except OSError:
@@ -634,23 +775,145 @@ def search_turns(path):
         hit = _SEARCH["by_path"].get(path)
         if hit is not None and hit[0] == key:
             return hit[1]
-    rows = []
-    for gi, t in enumerate(classify_turns(path)):
-        parts = []
-        for k, v in t["segs"]:
-            if k == "channel":
-                pc = parse_channel(v)
-                parts.append(pc[1] if pc else v)
-            elif k == "tool_use":
-                parts.append(_tool_use_search_text(v))
-            elif k in _SEARCH_KINDS:
-                parts.append(v)
-        txt = " ".join(parts)
-        if txt.strip():
-            rows.append((gi, t["role"], txt))
+    rows = _rows_from_turns(classify_turns(path))
     with _SEARCH["lock"]:
         _SEARCH["by_path"][path] = (key, rows)
     return rows
+
+def search_turns(path):
+    """Back-compat: one (gi, role, text) per turn over the default (non-code) corpus."""
+    by = {}
+    for r in search_rows(path):
+        if r["kind"] & K_CODE:
+            continue
+        e = by.get(r["gi"])
+        if e is None:
+            by[r["gi"]] = (r["role"], [r["text"]])
+        else:
+            e[1].append(r["text"])
+    return [(gi, role, " ".join(parts)) for gi, (role, parts) in by.items()]
+
+# ---- query grammar + matching ----------------------------------------------
+FIELD_ALIASES = {"file": "file", "path": "file", "cmd": "cmd", "command": "cmd",
+                 "code": "code", "error": "error", "err": "error",
+                 "role": "role", "id": "id", "session": "id", "sid": "id"}
+FIELD_KIND = {"file": K_FILE, "cmd": K_CMD, "code": K_CODE, "error": K_ERROR | K_RESULT}
+_SQ_TOK = re.compile(r'(-?)(?:(\w+):)?("[^"]*"|“[^”]*”|\S+)')
+
+def parse_search_query(q):
+    """'file:app.py -flaky "exact" foo' → {terms, phrases, fields, neg}.
+    Unknown `word:` prefixes (e.g. http://) stay plain terms."""
+    terms, phrases, neg, fields = [], [], [], {}
+    for neg_s, field, raw in _SQ_TOK.findall(q or ""):
+        is_phrase = raw[:1] in ('"', '“')
+        val = raw.strip('"“”').strip().lower()
+        if not val:
+            continue
+        f = FIELD_ALIASES.get((field or "").lower()) if field else None
+        if field and not f:                       # unrecognized field → keep token whole
+            val = f"{field}:{val}".lower()
+        if f:
+            fields.setdefault(f, []).append(val)
+        elif neg_s:
+            neg.append(val)
+        elif is_phrase:
+            phrases.append(val)
+        else:
+            terms.append(val)
+    return {"terms": terms, "phrases": phrases, "fields": fields, "neg": neg}
+
+def _scope_ok(r, scope):
+    kind, role = r["kind"], r["role"]
+    if scope == "human":
+        return role == "you"
+    if scope == "claude":
+        return role == "assistant" and not (kind & K_CODE)
+    if scope == "chat":
+        return role in ("you", "assistant") and not (kind & (K_TOOL | K_RESULT | K_SYS | K_CODE))
+    if scope == "code":
+        return bool(kind & K_CODE)
+    if scope == "tool":
+        return bool(kind & (K_TOOL | K_RESULT | K_CMD | K_FILE))
+    return True                                    # all (includes code rows)
+
+def _fields_ok(active, field_terms):
+    for f, vals in field_terms.items():
+        mask = FIELD_KIND[f]
+        for val in vals:
+            if not any((r["kind"] & mask) and val in r["text"].lower() for r in active):
+                return False
+    return True
+
+def _best_window(term_gis, need):
+    """Smallest turn-span window covering at least one occurrence of every term."""
+    events = sorted((gi, ti) for ti in range(len(need)) for gi in term_gis[need[ti]])
+    if not events:
+        return None
+    have, left, distinct, best = {}, 0, 0, None
+    for right in range(len(events)):
+        gi, ti = events[right]
+        have[ti] = have.get(ti, 0) + 1
+        if have[ti] == 1:
+            distinct += 1
+        while distinct == len(need):
+            span = gi - events[left][0]
+            if best is None or span < best[0]:
+                best = (span, sorted({events[k][0] for k in range(left, right + 1)}))
+            lti = events[left][1]
+            have[lti] -= 1
+            if have[lti] == 0:
+                distinct -= 1
+            left += 1
+    return best
+
+def match_session(active, terms, phrases):
+    """Return the best hit for one session: row (same-turn) → cluster (nearby turns)
+    → session (anywhere). None if not all terms/phrases are present."""
+    need = terms + phrases
+    if not need:
+        return None
+    by_gi = {}
+    for r in active:
+        by_gi.setdefault(r["gi"], []).append(r)
+    joined = {gi: " ".join(x["text"] for x in rs).lower() for gi, rs in by_gi.items()}
+    ww, all_word = [], True
+    for t in terms:
+        wr = word_re(t)
+        c = sum(len(wr.findall(r["text"])) for r in active)
+        ww.append(c)
+        all_word = all_word and c > 0
+    row_gis = [gi for gi in sorted(by_gi) if all(t in joined[gi] for t in need)]
+    if row_gis:
+        return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
+    term_gis = {t: [gi for gi in sorted(by_gi) if t in joined[gi]] for t in need}
+    if not all(term_gis[t] for t in need):
+        return None
+    win = _best_window(term_gis, need)
+    if win is not None:
+        span, gis = win
+        return {"kind": "cluster" if span <= 12 else "session", "gis": gis,
+                "ww": ww, "all_word": False, "span": span}
+    return {"kind": "session", "gis": [term_gis[t][0] for t in need], "ww": ww,
+            "all_word": False, "span": 99}
+
+def _snippet(text, terms):
+    """A ~150-char window centered on the first (whole-word, else substring) match."""
+    pos = None
+    for t in terms:
+        m = word_re(t).search(text)
+        if m:
+            pos = m.start()
+            break
+    if pos is None:
+        low = text.lower()
+        for t in terms:
+            j = low.find(t)
+            if j >= 0:
+                pos = j
+                break
+    if pos is None:
+        pos = 0
+    return text[max(0, pos - 55):pos + 95].replace("\n", " ")
 
 # ---- render helpers ---------------------------------------------------------
 def esc(s):
@@ -1338,8 +1601,9 @@ def render_turn(gi, t, q="", thread_link=None):
         extra += tok_badge(t.get("tok"))
     elif role == "you" and t.get("qtok"):
         extra += tok_badge(t["qtok"], "tokb qtok")
+    plink = f'<a class=permalink href="#t{gi}" title="{esc(tr("copy link to this message"))}">🔗</a>'
     who = (f'<div class=who><span title="{esc(role_desc)}">{role_label} {badges}</span>'
-           f'<span class=whoR>{extra}{tstr}{link}</span></div>')
+           f'<span class=whoR>{extra}{tstr}{plink}{link}</span></div>')
     return f'<div class="msg {role}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
@@ -1549,6 +1813,15 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .snip{color:#666;font-size:12.5px;margin:4px 0 0;padding-left:10px;border-left:2px solid #d9dde2}
 .snip a.snipjump{text-decoration:none}
 .snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
+.chip.kindchip{background:#fff3cd;color:#8a6d00}
+@media(prefers-color-scheme:dark){.chip.kindchip{background:#3a3115;color:#f0d68a}}
+.starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
+.starbtn.on{color:#e6b800}
+.permalink{text-decoration:none;font-size:11px;opacity:.35;cursor:pointer}
+.permalink:hover{opacity:1}
+.sessnav{justify-content:space-between;font-size:12.5px}
+.sessnav a{text-decoration:none;background:#e9edf2;color:#333;padding:6px 12px;border-radius:8px;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(prefers-color-scheme:dark){.sessnav a{background:#242830;color:#cfd4db}}
 kbd{background:#e7e9ec;border-radius:4px;padding:0 5px;font-size:11px;border:1px solid #c7ccd2;color:#333}
 .codeart{margin:12px 0;border:1px solid #e4e7eb;border-radius:10px;overflow:hidden}
 @media(prefers-color-scheme:dark){.codeart{border-color:#2a2e35}}
@@ -1616,6 +1889,21 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var o=e.target.textContent;e.target.textContent='Copied \u2713';setTimeout(function(){e.target.textContent=o;},1200);
     }
   });
+  // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
+  function starred(sid){try{return localStorage.getItem('cch:star:'+sid)==='1';}catch(_){return false;}}
+  function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest&&e.target.closest('.starbtn');
+    if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
+      try{if(starred(sid))localStorage.removeItem('cch:star:'+sid);else localStorage.setItem('cch:star:'+sid,'1');}catch(_){}
+      document.querySelectorAll('.starbtn[data-sid="'+sid+'"]').forEach(paintStar);return;}
+    // message permalink \u2192 copy full URL with #tN
+    var pl=e.target.closest&&e.target.closest('.permalink');
+    if(pl){e.preventDefault();var url=location.href.split('#')[0]+pl.getAttribute('href');
+      if(navigator.clipboard){navigator.clipboard.writeText(url);}
+      history.replaceState(null,'',pl.getAttribute('href'));
+      var o=pl.textContent;pl.textContent='\u2713';setTimeout(function(){pl.textContent=o;},1000);return;}
+  });
   // event/error filter chips
   var active={};
   function applyFilter(){
@@ -1667,13 +1955,15 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   window.addEventListener('load',function(){
     var p=document.getElementById('perf');
     if(p&&window.performance){p.textContent=' \u00b7 browser render '+Math.round(performance.now())+'ms';}
+    document.querySelectorAll('.starbtn').forEach(paintStar);
     buildMinimap();
   });
 })();
 </script>
 </body></html>"""
 
-SCOPES = {"all": "All", "human": "🧑 Only me", "claude": "✦ Only Claude", "chat": "Conversation only (no tools/system)"}
+SCOPES = {"all": "All", "human": "🧑 Only me", "claude": "✦ Only Claude",
+          "chat": "Conversation only (no tools/system)", "code": "🧩 Code/edits", "tool": "🔧 Commands/files"}
 DAY_CHOICES = {"": "All time", "7": "Last 7 days", "30": "Last 30 days", "90": "Last 90 days"}
 
 def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
@@ -1731,6 +2021,8 @@ class H(BaseHTTPRequestHandler):
         b = body.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
@@ -1938,7 +2230,9 @@ class H(BaseHTTPRequestHandler):
                 if sh:
                     mdlbit = f' · <span class=mdl>{esc(sh)}</span>'
             rows.append(
-                f'<div class=card><a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
+                f'<div class=card data-sid="{esc(it["sid"])}">'
+                f'<button class=starbtn data-sid="{esc(it["sid"])}">☆</button> '
+                f'<a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
                 f'<div class=meta><span class=chip>{esc(proj_label(it))}</span>'
                 f'{counts_html(it["n"])}{tokbit}{mdlbit} · '
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
@@ -1962,8 +2256,17 @@ class H(BaseHTTPRequestHandler):
             scope = "all"
         if days not in DAY_CHOICES:
             days = ""
-        terms = parse_query(q)
-        if not terms:
+        q = (q or "")[:200]                                # query length cap (CPU/output guard)
+        sq = parse_search_query(q)
+        terms, phrases, fields, neg = sq["terms"], sq["phrases"], sq["fields"], sq["neg"]
+        if fields.get("role"):                             # role:me / role:claude override scope
+            scope = {"me": "human", "i": "human", "you": "human", "human": "human",
+                     "claude": "claude", "assistant": "claude"}.get(fields["role"][0], scope)
+        id_vals = fields.get("id", [])
+        field_terms = {k: v for k, v in fields.items() if k in FIELD_KIND}
+        hl_terms = terms + phrases + [v for k, vals in field_terms.items() for v in vals]
+        hlq = " ".join([f'"{t}"' for t in hl_terms])
+        if not (terms or phrases or fields or neg):
             return shell(tr("Search"), f'<p class=meta>{tr("Enter a query. Multiple words = all must match (AND), ")}'
                                  f'{tr("&quot;quotes&quot; = exact phrase. Each word gets its own color. ")}'
                                  f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>',
@@ -1984,9 +2287,7 @@ class H(BaseHTTPRequestHandler):
         if lo is None and hi is None and days:
             lo = time.time() - int(days) * 86400
 
-        wres = [word_re(t) for t in terms]
-        ROLE_OK = {"all": None, "human": {"you"}, "claude": {"assistant"},
-                   "chat": {"you", "assistant"}}[scope]
+        RESULT_CAP = 300
         results = []
         for path in session_files(root):
             mt = mtimes.get(path, 0)
@@ -1994,49 +2295,68 @@ class H(BaseHTTPRequestHandler):
                 continue
             if proj and os.path.basename(os.path.dirname(path)) != proj:
                 continue
-            # session-level metadata match: session-id / branched-from id / workspace
-            # / launch dir / file path / title — findable regardless of scope.
             it = metas.get(path, {})
             sid = os.path.basename(path)[:-6]
             forked = it.get("forked", "")
+            # session-level metadata match: session-id / branched-from / workspace / path / title
+            meta_terms = terms + id_vals
             meta_blob = " ".join(filter(None, [sid, forked, it.get("cwd", ""),
                                                it.get("start_cwd", ""), path, titles.get(path, "")])).lower()
-            meta_hit = all(t in meta_blob for t in terms)
-            is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in terms)
-            hits, ww = [], [0] * len(terms)
-            for gi, role, txt in search_turns(path):
-                if ROLE_OK is not None and role not in ROLE_OK:
-                    continue
-                low = txt.lower()
-                if not all(t in low for t in terms):    # AND: all terms in the same turn
-                    continue
-                pos, plen = None, len(terms[0])
-                for ti, t in enumerate(terms):
-                    m = wres[ti].search(txt)             # count + locate whole-word matches
-                    if m:
-                        ww[ti] += len(wres[ti].findall(txt))
-                        if pos is None:
-                            pos, plen = m.start(), len(t)
-                if pos is None:
-                    pos = low.find(terms[0])
-                snip = txt[max(0, pos - 55):pos + plen + 90].replace("\n", " ")
-                hits.append((gi, role, snip))
-            if hits or meta_hit:
-                all_word = bool(hits) and all(c > 0 for c in ww)
-                # relevance: exact whole-word matches dominate substring pollution;
-                # docs matching every term as a real word get the big bonus, so a
-                # doc with the literal word "oss" outranks one that only has "ossean".
-                score = (1000 if all_word else 0) + sum(10 * min(c, 5) for c in ww) + min(len(hits), 20) * 0.1
-                if is_ref:                    # exact id/reference → top of the list
-                    score += 3000
-                elif meta_hit and not hits:   # path/title-only meta match → modest
-                    score += 5
-                results.append({"path": path, "title": titles.get(path, tr("(untitled)")),
-                                "proj": os.path.basename(os.path.dirname(path)),
-                                "n": len(hits), "score": score, "all_word": all_word, "hits": hits[:6],
-                                "meta_hit": meta_hit, "sid": sid, "forked": forked,
-                                "cwd": it.get("cwd", ""), "start_cwd": it.get("start_cwd", "")})
-        results.sort(key=lambda x: (x["score"], x["n"]), reverse=True)
+            meta_hit = bool(meta_terms) and all(t in meta_blob for t in meta_terms)
+            is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in meta_terms)
+
+            active = [r for r in search_rows(path) if _scope_ok(r, scope)]
+            sess_low = " ".join(r["text"] for r in active).lower()
+            if neg and any(nt in sess_low for nt in neg):
+                continue
+            fields_ok = (not field_terms) or _fields_ok(active, field_terms)
+            hit = match_session(active, terms, phrases) if (fields_ok and (terms or phrases)) else None
+            field_only = fields_ok and bool(field_terms) and not (terms or phrases)
+            if not hit and not field_only and not meta_hit:
+                continue
+
+            # highlight/snippet terms: plain terms/phrases, plus field values for a field-only query
+            fvals = [v for vals in field_terms.values() for v in vals]
+            snip_terms = (terms + phrases) or fvals
+            by_gi = {}
+            for r in active:
+                by_gi.setdefault(r["gi"], []).append(r)
+            hit_gis = hit["gis"][:6] if hit else (
+                [r["gi"] for r in active if any(v in r["text"].lower() for v in fvals)][:6] if field_only else [])
+            hits = []
+            for gi in hit_gis:
+                rs = by_gi.get(gi, [])
+                row = next((r for r in rs if any(t in r["text"].lower() for t in snip_terms)), rs[0] if rs else None)
+                if row:
+                    hits.append((gi, row["role"], _snippet(row["text"], snip_terms)))
+
+            score = 0.0
+            if is_ref:
+                score += 3000
+            if meta_hit:
+                score += 20
+            if hit:
+                ww = hit["ww"]
+                if hit["kind"] == "row":
+                    score += 1000 + (200 if hit["all_word"] else 0) + sum(10 * min(c, 5) for c in ww)
+                elif hit["kind"] == "cluster":
+                    score += (400 if hit["span"] <= 3 else 250) + sum(5 * min(c, 5) for c in ww)
+                else:
+                    score += 100
+                if phrases:
+                    score += 300
+            elif field_only:
+                score += 500
+            score += 300 * bool(fields.get("file")) + 200 * bool(fields.get("code")) + 200 * bool(fields.get("cmd"))
+            results.append({"path": path, "title": titles.get(path, tr("(untitled)")),
+                            "proj": os.path.basename(os.path.dirname(path)),
+                            "n": len(hits), "score": score, "mtime": mt,
+                            "all_word": bool(hit) and hit.get("all_word"),
+                            "hit_kind": hit["kind"] if hit else "", "hits": hits,
+                            "meta_hit": meta_hit, "sid": sid, "forked": forked, "cwd": it.get("cwd", "")})
+        results.sort(key=lambda x: (x["score"], x["mtime"]), reverse=True)
+        truncated = len(results) - RESULT_CAP
+        results = results[:RESULT_CAP]
         ms = int((time.perf_counter() - t0) * 1000)
 
         def searchurl(**kw):
@@ -2059,37 +2379,39 @@ class H(BaseHTTPRequestHandler):
                              f'{esc(proj_cwd.get(p, p))}</a>')
             projbar = f'<div class=bar><span class=meta>{tr("Projects")}:</span>' + "".join(chips) + '</div>'
 
+        KIND_CHIP = {"cluster": tr("nearby"), "session": tr("in session")}
         rows = []
         for r in results:
             def jump(gi):
-                return ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(q)
+                return ("/session?p=" + urllib.parse.quote(r["path"]) + "&q=" + urllib.parse.quote(hlq)
                         + f"&goto={gi}")
             openurl = jump(r["hits"][0][0]) if r["hits"] else (
-                "/session?p=" + urllib.parse.quote(r["path"]) + (("&q=" + urllib.parse.quote(q)) if q else ""))
+                "/session?p=" + urllib.parse.quote(r["path"]) + (("&q=" + urllib.parse.quote(hlq)) if hlq else ""))
             exact = "" if (r["all_word"] or not r["hits"]) else f' <span class=hint title="{esc(tr("some words matched only as a substring of another word"))}">≈ {tr("partial")}</span>'
+            kchip = f' <span class="chip kindchip">{KIND_CHIP[r["hit_kind"]]}</span>' if r["hit_kind"] in KIND_CHIP else ""
             metaline = ""
             if r.get("meta_hit"):
-                bits = [f'🔗 <code class=sid>{hl(r["sid"], q)}</code>']
+                bits = [f'🔗 <code class=sid>{hl(r["sid"], hlq)}</code>']
                 if r.get("cwd"):
-                    bits.append(f'📂 {hl(short_path(r["cwd"]), q)}')
+                    bits.append(f'📂 {hl(short_path(r["cwd"]), hlq)}')
                 if r.get("forked"):
-                    bits.append(f'⑂ <code class=sid>{hl(r["forked"], q)}</code>')
+                    bits.append(f'⑂ <code class=sid>{hl(r["forked"], hlq)}</code>')
                 metaline = f'<div class=snip><span class=chip>{tr("ref")}</span> ' + " · ".join(bits) + '</div>'
             snips = "".join(
                 f'<div class=snip><a class=snipjump href="{jump(gi)}">'
-                f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, q)}</div>'
+                f'<span class=chip>{ROLE_LABEL.get(role, role)}</span></a>{hl(s, hlq)}</div>'
                 for gi, role, s in r["hits"])
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
             rows.append(f'<div class=card><a class=t href="{openurl}">{esc(r["title"])}</a> '
-                        f'<span class=meta>{cnt}</span>{exact}'
+                        f'<span class=meta>{cnt}</span>{exact}{kchip}'
                         f'<div class=meta><span class=chip>{esc(short)}</span></div>{metaline}{snips}</div>')
 
-        # color key: which color = which term
-        keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(terms))
+        keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(hl_terms))
         when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
                 (" · " + tr(DAY_CHOICES[days]) if days else ""))
-        head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms · '
+        more = f' · <span class=hint>(+{truncated} {tr("more, refine to narrow")})</span>' if truncated > 0 else ""
+        head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{more} · '
                 f'📁 {esc(short_path(root))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>')
         return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
                      q, scope, root, days, from_, to)
@@ -2100,20 +2422,10 @@ class H(BaseHTTPRequestHandler):
         if not path or not os.path.exists(path) or rt is None:
             return shell("?", f"<p>{tr('Session not found.')}</p>")
         t0 = time.perf_counter()
-        turns = classify_turns(path)
-        meta = summarize_file(path)
+        loaded = load_session(path)          # one cached pass (turns + meta + per-question tokens)
+        turns, meta = loaded["turns"], loaded["meta"]
         sid = os.path.basename(path)[:-6]
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
-        # per-question token cost: sum each 🧑 turn's answer block (until the next 🧑)
-        for i, tt in enumerate(turns):
-            if tt["role"] == "you":
-                qsum = {"in": 0, "out": 0, "cw": 0, "cr": 0}
-                j = i + 1
-                while j < len(turns) and turns[j]["role"] != "you":
-                    add_tok(qsum, turns[j].get("tok"))
-                    j += 1
-                if any(qsum.values()):
-                    tt["qtok"] = qsum
 
         def url(**kw):
             params = {"p": path}
@@ -2142,9 +2454,18 @@ class H(BaseHTTPRequestHandler):
         mrows.append(_srow(tr("Resume"), f'<code class=sid>claude --resume {esc(sid)}</code>'))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
-        head = (f'<h3 style="margin:4px 0 8px">{esc(meta["title"])}'
-                + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>'
-                + refcard + legend_html())
+        star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
+        head = (f'<h3 style="margin:4px 0 8px">{star} {esc(meta["title"])}'
+                + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>')
+        # prev/next session in the same project (work spans sessions)
+        prev, nxt = adjacent_sessions(rt, path)
+        if prev or nxt:
+            pl = (f'<a href="/session?p={urllib.parse.quote(prev["path"])}">← {tr("prev")}: {esc(prev["title"][:38])}</a>'
+                  if prev else "<span></span>")
+            nl = (f'<a href="/session?p={urllib.parse.quote(nxt["path"])}">{tr("next")}: {esc(nxt["title"][:38])} →</a>'
+                  if nxt else "")
+            head += f'<div class="bar sessnav">{pl}{nl}</div>'
+        head += refcard + legend_html()
 
         # subagent banner
         subs = [subagent_brief(s) for s in subagent_files(path)]

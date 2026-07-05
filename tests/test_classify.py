@@ -239,6 +239,63 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
         self.assertEqual(app.parse_query("  "), [])
 
+    def test_adjacent_sessions(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        proj = os.path.join(root, "-p")
+        os.makedirs(proj)
+        paths = []
+        for i in range(3):
+            p = os.path.join(proj, f"{i:08d}-0000-0000-0000-000000000000.jsonl")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "ai-title", "aiTitle": f"S{i}"}) + "\n")
+                fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+            os.utime(p, (1000 + i, 1000 + i))       # chronological by mtime
+            paths.append(p)
+        app.configure(root)
+        prev, nxt = app.adjacent_sessions(root, paths[1])
+        self.assertEqual(prev["path"], paths[0])
+        self.assertEqual(nxt["path"], paths[2])
+        prev0, nxt0 = app.adjacent_sessions(root, paths[0])
+        self.assertIsNone(prev0)
+        self.assertEqual(nxt0["path"], paths[1])
+
+    def test_parse_search_query(self):
+        sq = app.parse_search_query('file:app.py -flaky "exact one" foo')
+        self.assertEqual(sq["terms"], ["foo"])
+        self.assertEqual(sq["phrases"], ["exact one"])
+        self.assertEqual(sq["fields"], {"file": ["app.py"]})
+        self.assertEqual(sq["neg"], ["flaky"])
+        # unknown field prefix (URL) stays a plain term
+        self.assertIn("http://x.com/a", app.parse_search_query("http://x.com/a")["terms"])
+        self.assertEqual(app.parse_search_query("cmd:pytest role:me")["fields"],
+                         {"cmd": ["pytest"], "role": ["me"]})
+
+    def test_best_window_proximity(self):
+        # term A at turns [2], term B at turns [5, 30] → smallest window spans 2..5 (=3)
+        span, gis = app._best_window({"a": [2], "b": [5, 30]}, ["a", "b"])
+        self.assertEqual(span, 3)
+        self.assertEqual(gis, [2, 5])
+
+    def test_search_rows_include_code_body(self):
+        turns = app.classify_turns  # sanity: build rows from a Write with content
+        import tempfile
+        lines = [{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w", "name": "Write",
+             "input": {"file_path": "/a.py", "content": "def ZZNEEDLE(): pass"}}]}}]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o) + "\n")
+            path = fh.name
+        try:
+            rows = app.search_rows(path)
+            code = [r for r in rows if r["kind"] & app.K_CODE]
+            self.assertTrue(any("ZZNEEDLE" in r["text"] for r in code))
+            # back-compat search_turns EXCLUDES code rows (preserves old default corpus)
+            self.assertFalse(any("ZZNEEDLE" in txt for _, _, txt in app.search_turns(path)))
+        finally:
+            os.unlink(path)
+
     def test_i18n(self):
         app.load_locales()
         self.assertIn("ko", app.available_langs())        # shipped Korean locale loads
