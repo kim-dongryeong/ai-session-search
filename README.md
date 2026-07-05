@@ -38,13 +38,21 @@ Dock/Finder, double-click, no lingering terminal); add `--dmg` for a draggable
 `dist/claude-code-history.dmg`. It doesn't bundle Python — it just launches the installed
 `claude-code-history`. Or use the plain `claude-code-history.command` (starts server + opens browser).
 
+**Windows:** everything is stdlib-only and cross-platform (config lives in
+`%APPDATA%\claude-code-history`, the default root is `%USERPROFILE%\.claude\projects`).
+Install with `pip install .` (or pipx) and run `claude-code-history --open`, **or**
+double-click **`claude-code-history.cmd`** in a checkout — it uses the installed command if
+present, else falls back to `python`/`py` on the repo shim, and passes an optional port
+(`claude-code-history.cmd 9000`). The Windows build is covered by CI (`windows-latest`).
+
 ### Which distribution form?
 
 | Form | Command | When |
 |---|---|---|
 | **pipx / uvx** (recommended) | `pipx install git+ssh://…/claude-code-history.git` | Any OS with Python 3.9+ and git. One command, `pipx upgrade` to update. |
 | **macOS .app / .dmg** | `./scripts/make-macos-app.sh --dmg` | Want a Dock icon + double-click on a Mac. Thin wrapper over the installed CLI. |
-| **`.command` double-click** | ship `claude-code-history.py` + `.command` | Zero-build, copy the folder. |
+| **`.command` double-click** (macOS) | ship `claude-code-history.py` + `.command` | Zero-build, copy the folder. |
+| **`.cmd` double-click** (Windows) | ship `claude-code-history.py` + `.cmd` | Zero-build on Windows; falls back to `python`/`py`. |
 
 **Requirement:** Python **3.9+**. Note Claude Code itself is a *Node* app, so a machine
 with transcripts does **not** necessarily have Python — Windows has none by default, and

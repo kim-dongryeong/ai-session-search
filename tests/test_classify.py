@@ -259,6 +259,42 @@ class Helpers(unittest.TestCase):
         b = app._date_ts("2026-07-01", end=True)
         self.assertAlmostEqual(b - a, 86400, delta=3700)   # ~1 day (DST tolerance)
 
+    def test_token_helpers(self):
+        self.assertEqual(app.fmt_tok(842), "842")
+        self.assertEqual(app.fmt_tok(2500), "2.5k")
+        self.assertEqual(app.fmt_tok(2_186_900), "2.2M")
+        self.assertEqual(app.model_short("claude-opus-4-8"), "Opus 4.8")
+        self.assertEqual(app.model_short("claude-sonnet-4-6"), "Sonnet 4.6")
+        self.assertEqual(app.model_short("<synthetic>"), "")     # skipped
+        u = app.usage_tok({"input_tokens": 10, "output_tokens": 5,
+                           "cache_creation_input_tokens": 2, "cache_read_input_tokens": 99})
+        self.assertEqual(u, {"in": 10, "out": 5, "cw": 2, "cr": 99})
+        self.assertIsNone(app.usage_tok({"input_tokens": 0}))     # all-zero → None
+
+    def test_summarize_tokens_and_models(self):
+        import tempfile
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-4-8",
+                "usage": {"input_tokens": 100, "output_tokens": 50,
+                          "cache_creation_input_tokens": 10, "cache_read_input_tokens": 900},
+                "content": [{"type": "text", "text": "a"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-fable-5",
+                "usage": {"input_tokens": 20, "output_tokens": 8,
+                          "cache_creation_input_tokens": 0, "cache_read_input_tokens": 100},
+                "content": [{"type": "text", "text": "b"}]}},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+            path = fh.name
+        try:
+            s = app.summarize_file(path)
+            self.assertEqual(s["tok"], {"in": 120, "out": 58, "cw": 10, "cr": 1000})
+            self.assertEqual(s["models"], {"claude-opus-4-8": 1, "claude-fable-5": 1})
+        finally:
+            os.unlink(path)
+
     def test_looks_ref(self):
         self.assertTrue(app._looks_ref("40b92137-2ff9-4461-90c3-21729c2b3bee"))
         self.assertTrue(app._looks_ref("606730d3"))        # hex fragment
