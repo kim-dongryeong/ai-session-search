@@ -164,6 +164,15 @@ class HttpSmoke(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
             self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
 
+    def test_webmanifest_for_install_as_app(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/manifest.webmanifest", timeout=10) as r:
+            self.assertEqual(r.status, 200)
+            man = json.loads(r.read().decode())
+        self.assertEqual(man["display"], "standalone")     # opens as its own window
+        self.assertEqual(man["name"], "Claude Code History")
+        _, body = self.get("/")
+        self.assertIn('rel="manifest"', body)
+
     def test_language_switch(self):
         # default is English UI, with a 🌐 language switcher
         status, en = self.get("/")

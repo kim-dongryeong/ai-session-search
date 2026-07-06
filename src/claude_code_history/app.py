@@ -1610,6 +1610,11 @@ def render_turn(gi, t, q="", thread_link=None):
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#1f6feb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Claude Code History">
 <title>%%TITLE%%</title>
 <style>
 :root{color-scheme:light dark}
@@ -2071,6 +2076,21 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             return self.wfile.write(b)
+        if u.path == "/manifest.webmanifest":
+            # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
+            man = json.dumps({
+                "name": "Claude Code History", "short_name": "CC History",
+                "start_url": "/", "scope": "/", "display": "standalone",
+                "background_color": "#13151a", "theme_color": "#1f6feb",
+                "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml",
+                           "purpose": "any maskable"}],
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json")
+            self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("Content-Length", str(len(man)))
+            self.end_headers()
+            return self.wfile.write(man)
         root = active_root(g("root"))
         if u.path == "/":
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
