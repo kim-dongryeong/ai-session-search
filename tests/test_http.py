@@ -172,6 +172,7 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(man["name"], "Claude Code History")
         _, body = self.get("/")
         self.assertIn('rel="manifest"', body)
+        self.assertIn('id=installbtn', body)                # one-click install button
 
     def test_language_switch(self):
         # default is English UI, with a 🌐 language switcher
