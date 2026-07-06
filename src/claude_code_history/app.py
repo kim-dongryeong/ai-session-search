@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -43,6 +43,36 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <path d="M14 16h36a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30l-11 9v-9h-5a6 6 0 0 1-6-6V22a6 6 0 0 1 6-6z" fill="#fff"/>
 <circle cx="32" cy="29" r="6" fill="#1f6feb"/>
 <path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
+</svg>"""
+
+# Illustration: macOS ⌘-Tab switcher with OUR app highlighted (shown in the install modal)
+SVG_CMDTAB = """<svg viewBox="0 0 360 142" class=illsvg xmlns="http://www.w3.org/2000/svg" role=img aria-label="Command-Tab app switcher">
+<rect x="8" y="20" width="344" height="74" rx="18" fill="#33363e"/>
+<rect x="30" y="38" width="40" height="40" rx="9" fill="#71767f"/>
+<rect x="94" y="38" width="40" height="40" rx="9" fill="#71767f"/>
+<rect x="152" y="31" width="56" height="56" rx="14" fill="none" stroke="#fff" stroke-width="2.5"/>
+<rect x="160" y="38" width="40" height="40" rx="9" fill="#1f6feb"/>
+<path d="M167 49h26a3 3 0 0 1 3 3v11a3 3 0 0 1-3 3h-11l-7 5v-5h-8a3 3 0 0 1-3-3V52a3 3 0 0 1 3-3z" fill="#fff"/>
+<rect x="226" y="38" width="40" height="40" rx="9" fill="#71767f"/>
+<rect x="290" y="38" width="40" height="40" rx="9" fill="#71767f"/>
+<rect x="116" y="110" width="50" height="24" rx="6" fill="#e7e9ec" stroke="#c7ccd2"/>
+<text x="141" y="127" text-anchor="middle" font-size="14" fill="#333">&#8984;</text>
+<rect x="172" y="110" width="66" height="24" rx="6" fill="#e7e9ec" stroke="#c7ccd2"/>
+<text x="205" y="127" text-anchor="middle" font-size="12" fill="#333">tab &#8677;</text>
+</svg>"""
+
+# Illustration: a browser window with the extensions (puzzle) button — extensions still work
+SVG_EXT = """<svg viewBox="0 0 360 116" class=illsvg xmlns="http://www.w3.org/2000/svg" role=img aria-label="Chrome extensions still work">
+<rect x="14" y="10" width="332" height="96" rx="12" fill="#fff" stroke="#d7dbe0"/>
+<circle cx="36" cy="32" r="5" fill="#ff5f57"/><circle cx="52" cy="32" r="5" fill="#febc2e"/><circle cx="68" cy="32" r="5" fill="#28c840"/>
+<rect x="88" y="22" width="176" height="20" rx="10" fill="#eef1f4"/>
+<text x="99" y="36" font-size="11" fill="#8a8f98">127.0.0.1</text>
+<rect x="278" y="20" width="28" height="24" rx="6" fill="#dbe5ff" stroke="#1f6feb"/>
+<text x="292" y="38" text-anchor="middle" font-size="15">&#129513;</text>
+<circle cx="324" cy="32" r="9" fill="#34a853"/>
+<rect x="30" y="60" width="150" height="10" rx="5" fill="#dfe3e8"/>
+<rect x="30" y="78" width="256" height="8" rx="4" fill="#eef1f4"/>
+<rect x="30" y="92" width="196" height="8" rx="4" fill="#eef1f4"/>
 </svg>"""
 
 # ---- config -----------------------------------------------------------------
@@ -888,6 +918,17 @@ def is_codex_root(root):
 def is_gemini_root(root):
     q = (root or "").replace(os.sep, "/")
     return "/.gemini/" in q or q.rstrip("/").endswith("/.gemini/tmp")
+
+def root_glyph(root):
+    """Provider glyph for a folder — by kind or by 'codex'/'gemini'/'claude' in its path."""
+    q = (root or "").lower().replace(os.sep, "/")
+    if is_codex_root(root) or "codex" in q:
+        return "🌀 "
+    if is_gemini_root(root) or "gemini" in q:
+        return "✨ "
+    if "claude" in q:
+        return "✴️ "
+    return ""
 
 def session_files(root):
     if is_codex_root(root):
@@ -1888,6 +1929,23 @@ header .advbtn{background:#1857b8}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
+.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.5);align-items:center;justify-content:center;padding:16px}
+.modal-ov.open{display:flex}
+.modal{background:#fff;color:#1a1a1a;border-radius:16px;max-width:440px;width:100%;padding:22px 22px 18px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.35);max-height:92vh;overflow:auto}
+@media(prefers-color-scheme:dark){.modal{background:#1b1e24;color:#e7e9ec}}
+.modal-x{position:absolute;top:8px;right:12px;border:0;background:transparent;font-size:26px;line-height:1;color:#8a8f98;cursor:pointer}
+.modal-h{margin:2px 0 4px;font-size:19px}
+.modal-sub{margin:0 0 14px;color:#8a8f98;font-size:13px}
+.modal-ill{margin:0 0 12px}
+.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:10px;background:#f7f9fc}
+@media(prefers-color-scheme:dark){.illsvg{border-color:#2a2e35;background:#141720}}
+.modal-cap{font-size:12.5px;color:#444;margin-top:6px}
+@media(prefers-color-scheme:dark){.modal-cap{color:#cfd4db}}
+.modal-actions{display:flex;gap:8px;margin-top:16px}
+.modal-primary{flex:1;padding:10px;border:0;border-radius:9px;background:#1f6feb;color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+.modal-secondary{padding:10px 14px;border:1px solid #cfd4db;border-radius:9px;background:transparent;color:#555;font-size:13px;cursor:pointer}
+@media(prefers-color-scheme:dark){.modal-secondary{border-color:#3a3f47;color:#cfd4db}}
+.modal-note{font-size:11.5px;color:#8a8f98;margin:10px 0 0;line-height:1.5}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
@@ -2126,6 +2184,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 </header>
 %%ROOTBAR%%
 <div class=wrap>%%BODY%%</div>
+%%INSTALLMODAL%%
 <div id=minimap></div>
 <script>
 (function(){
@@ -2137,6 +2196,12 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   // advanced-search (Tools) toggle
   var at=document.getElementById('advtoggle');
   if(at){at.addEventListener('click',function(){document.getElementById('advpanel').classList.toggle('open');});}
+  // language switch: set the cookie and reload the SAME url (keeps your search/query intact)
+  document.querySelectorAll('.langsw a[data-lang]').forEach(function(a){
+    a.addEventListener('click',function(e){e.preventDefault();
+      document.cookie='cchlang='+a.getAttribute('data-lang')+';path=/;max-age=31536000;samesite=lax';
+      location.reload();});
+  });
   // Enter submits the search even mid-IME-composition (Korean/CJK: the first Enter would
   // otherwise only commit the character, so it took two presses).
   var qb=document.getElementById('qbox');
@@ -2148,11 +2213,13 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
-    if(e.key==='/'&&!typing){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
+    // use e.code (physical key) so shortcuts work under non-Latin keyboard layouts (Korean/…)
+    var C=e.code;
+    if((C==='Slash'||e.key==='/')&&!typing){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
     if(e.key==='Escape'&&typing){e.target.blur();return;}
     if(typing)return;
-    if(e.key==='j'||e.key==='n'){if(ys().length){e.preventDefault();focusYou(cur+1);}}
-    else if(e.key==='k'||e.key==='p'){if(ys().length){e.preventDefault();focusYou(cur-1);}}
+    if(C==='KeyJ'||C==='KeyN'){if(ys().length){e.preventDefault();focusYou(cur+1);}}
+    else if(C==='KeyK'||C==='KeyP'){if(ys().length){e.preventDefault();focusYou(cur-1);}}
     else if(e.key==='Enter'&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;}
   });
   // copy buttons (code view)
@@ -2164,11 +2231,28 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var o=e.target.textContent;e.target.textContent='Copied \u2713';setTimeout(function(){e.target.textContent=o;},1200);
     }
   });
-  // one-click "Install as app" — reveal the button when the browser says it's installable
+  // "Install as app" — a big explainer modal (⌘-Tab + extensions still work), then the native prompt
   var deferredPrompt=null, ibtn=document.getElementById('installbtn');
-  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;if(ibtn)ibtn.style.display='';});
-  if(ibtn)ibtn.addEventListener('click',function(){if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;ibtn.style.display='none';}});
-  window.addEventListener('appinstalled',function(){if(ibtn)ibtn.style.display='none';});
+  var mov=document.getElementById('installmodal');
+  var standalone=window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches;
+  function openInstall(){if(mov)mov.classList.add('open');}
+  function closeInstall(){if(mov)mov.classList.remove('open');}
+  if(ibtn)ibtn.addEventListener('click',openInstall);
+  var ic=document.getElementById('installclose'); if(ic)ic.addEventListener('click',closeInstall);
+  var il=document.getElementById('installlater'); if(il)il.addEventListener('click',closeInstall);
+  if(mov)mov.addEventListener('click',function(e){if(e.target===mov)closeInstall();});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mov&&mov.classList.contains('open'))closeInstall();});
+  var inow=document.getElementById('installnow');
+  if(inow)inow.addEventListener('click',function(){
+    if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;if(ibtn)ibtn.style.display='none';closeInstall();}
+    else{var h=document.getElementById('installhow');if(h)h.style.display='';}
+  });
+  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;
+    if(ibtn)ibtn.style.display='';
+    try{if(!standalone&&!localStorage.getItem('cch:installtip')){localStorage.setItem('cch:installtip','1');openInstall();}}catch(_){}
+  });
+  window.addEventListener('appinstalled',function(){if(ibtn)ibtn.style.display='none';closeInstall();});
+  if(standalone&&ibtn)ibtn.style.display='none';
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
   function starred(sid){try{return localStorage.getItem('cch:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
@@ -2265,7 +2349,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         on = "on" if r == root else ""
         rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
-        glyph = "🤖 " if is_codex_root(r) else ("♊ " if is_gemini_root(r) else "")
+        glyph = root_glyph(r)
         links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(r)}">'
                      f'{glyph}{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
@@ -2281,9 +2365,21 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
     langsw = ""
     if len(langs) > 1:
         cur = cur_lang()
-        parts = [(f'<b>{c}</b>' if c == cur else f'<a href="?lang={c}">{c}</a>') for c in langs]
+        parts = [(f'<b>{c}</b>' if c == cur else f'<a href="?lang={c}" data-lang="{c}">{c}</a>') for c in langs]
         langsw = f'<span class=langsw title="{esc(tr("language"))}">🌐 ' + " ".join(parts) + '</span>'
+    install_modal = (
+        '<div id=installmodal class=modal-ov><div class=modal role=dialog aria-modal=true>'
+        f'<button class=modal-x id=installclose aria-label="close">&times;</button>'
+        f'<h2 class=modal-h>{esc(tr("Install as an app"))}</h2>'
+        f'<p class=modal-sub>{esc(tr("Runs in its own window — no browser tab, no address bar. It stays a local, read-only viewer."))}</p>'
+        f'<div class=modal-ill>{SVG_CMDTAB}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app — most people never realize a web app can do this."))}</div></div>'
+        f'<div class=modal-ill>{SVG_EXT}<div class=modal-cap>✓ {esc(tr("Your Chrome extensions still work inside it (it is still Chrome under the hood)."))}</div></div>'
+        f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("⬇ Install now"))}</button>'
+        f'<button id=installlater class=modal-secondary>{esc(tr("Maybe later"))}</button></div>'
+        f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
+        '</div></div>')
     repl = {
+        "%%INSTALLMODAL%%": install_modal,
         "%%TITLE%%": esc(title), "%%BODY%%": body, "%%Q%%": esc(q),
         "%%SCOPEOPTS%%": scopeopts, "%%DAYSOPTS%%": daysopts,
         "%%FROM%%": esc(from_), "%%TO%%": esc(to),
@@ -2776,7 +2872,7 @@ class H(BaseHTTPRequestHandler):
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
-        PROV_LABEL = {"codex": "🤖 Codex", "gemini": "♊ Gemini", "claude": "✦ Claude Code"}
+        PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code"}
         pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
         head = (f'<h3 style="margin:4px 0 8px">{star} {pbadge}{esc(meta["title"])}'
                 + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>')
