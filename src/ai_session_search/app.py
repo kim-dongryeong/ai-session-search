@@ -2092,10 +2092,10 @@ header .advbtn{background:#1857b8}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
-.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:rgba(16,18,24,.94);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);align-items:center;justify-content:center;padding:16px}
+.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:#fff;color:#1a1a1a;align-items:center;justify-content:center;padding:28px 16px}
 .modal-ov.open{display:flex}
-.modal{background:#fff;color:#1a1a1a;border-radius:18px;max-width:500px;width:100%;padding:26px 26px 20px;position:relative;box-shadow:0 24px 70px rgba(0,0,0,.5);max-height:94vh;overflow:auto;text-align:center}
-@media(prefers-color-scheme:dark){.modal{background:#1b1e24;color:#e7e9ec}}
+@media(prefers-color-scheme:dark){.modal-ov{background:#15181d;color:#e7e9ec}}
+.modal{background:transparent;max-width:500px;width:100%;padding:8px;position:relative;max-height:100%;overflow:auto;text-align:center}
 .modal-h{margin:2px 0 6px;font-size:22px;font-weight:700}
 .modal-sub{margin:0 0 18px;color:#8a8f98;font-size:13.5px}
 .modal-ill{margin:0 0 14px}
