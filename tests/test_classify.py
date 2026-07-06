@@ -1,4 +1,4 @@
-"""Attribution ruleset regression tests — the core guarantee of claude-code-history:
+"""Attribution ruleset regression tests — the core guarantee of ai-session-search:
 nothing machine-authored may ever be classified as the human ("you")."""
 import json
 import os
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-from claude_code_history import app  # noqa: E402
+from ai_session_search import app  # noqa: E402
 
 
 def user_line(content, **extra):

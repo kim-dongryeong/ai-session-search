@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0 — 2026-07-06
+
+- **Renamed to `ai-session-search` (command `aiss`, short alias `ass`).** Now that it
+  reads Claude Code + Codex + Gemini, "Claude Code History" was too narrow — the name is
+  provider-neutral and says what it does: search your AI coding-session history. The
+  Python package is `ai_session_search`; the UI title, repo, PyPI name, launchers, and
+  bundle artifacts all follow. (References to **Claude Code** the *agent* are unchanged.)
+  Config moved to `~/.config/ai-session-search/` — folders are auto-discovered, so you
+  don't lose anything; re-add any custom folders once.
+
 ## 2.4.0 — 2026-07-06
 
 - **Per-provider folder glyphs** in the switcher: ✴️ Claude, 🌀 Codex, ✨ Gemini — by
@@ -91,7 +101,7 @@ First public release. 🎉
   Switch language live with a 🌐 header picker (remembered via a cookie); set a default
   with `--lang` / `CCH_LANG`. A **Korean (한국어)** locale ships built in.
 - **Add a language with no rebuild**: drop `<code>.json` (e.g. `ja.json`) into the
-  package's `locales/` or `~/.config/claude-code-history/locales/` (or `%APPDATA%\…` on
+  package's `locales/` or `~/.config/ai-session-search/locales/` (or `%APPDATA%\…` on
   Windows) — keys are the English strings; missing keys fall back to English.
 - 86 tests (added i18n + language-switch coverage).
 
@@ -116,7 +126,7 @@ First public release. 🎉
   paths are findable in-session too).
 - **Windows.** Confirmed cross-platform (config in `%APPDATA%`, root under
   `%USERPROFILE%\.claude\projects`, utf-8 stdout) and covered by CI on `windows-latest`;
-  added a double-click **`claude-code-history.cmd`** launcher (installed command → else
+  added a double-click **`ai-session-search.cmd`** launcher (installed command → else
   `python`/`py` on the shim).
 
 ## 1.6.0 — 2026-07-05
@@ -203,10 +213,10 @@ Rich rendering — messages and tool blocks now read like the real conversation.
 
 ## 1.3.0 — 2026-07-03
 
-- **Renamed `claude-viewer` → `claude-code-history`** (repo, package
-  `claude_code_history`, command). The tool views specifically *Claude Code* session
-  transcripts, not claude.ai/API — the name now says so. A short **`cch`** console alias
-  is installed alongside `claude-code-history`. GitHub redirects the old repo URL; update
+- **Renamed `claude-viewer` → `ai-session-search`** (repo, package
+  `ai_session_search`, command). The tool views specifically *Claude Code* session
+  transcripts, not claude.ai/API — the name now says so. A short **`aiss`** console alias
+  is installed alongside `ai-session-search`. GitHub redirects the old repo URL; update
   local remotes and reinstall from the new URL.
 
 ## 1.2.1 — 2026-07-03
@@ -235,7 +245,7 @@ Search relevance + colors + custom dates; app icon & favicon; macOS app/dmg.
 - **Icon & favicon**: an SVG app icon (speech bubble + person = 🧑) served at
   `/favicon.svg`; `assets/` ships PNG sizes + `icon.icns`.
 - **macOS app / dmg**: `scripts/make-macos-app.sh [--dmg]` builds a lightweight
-  `Claude Code History.app` (no bundled Python — execs the installed `claude-code-history`) and
+  `AI Session Search.app` (no bundled Python — execs the installed `ai-session-search`) and
   an optional `.dmg`.
 
 ## 1.1.0 — 2026-07-02
@@ -259,9 +269,9 @@ Search overhaul.
 
 First packaged release.
 
-- **Packaging**: proper Python package (`src/claude_code_history/`), `pyproject.toml`,
-  `claude-code-history` console entry point, `python -m claude_code_history`, pipx/uvx installable
-  from the private git repo. Root `claude-code-history.py` kept as a compatibility shim.
+- **Packaging**: proper Python package (`src/ai_session_search/`), `pyproject.toml`,
+  `ai-session-search` console entry point, `python -m ai_session_search`, pipx/uvx installable
+  from the private git repo. Root `ai-session-search.py` kept as a compatibility shim.
 - **CLI**: argparse — positional projects dir, `--port`, `--host` (with network-exposure
   warning), `--roots`, `--open` (auto-open browser, cross-platform via `webbrowser`),
   `--version`, `--help`.

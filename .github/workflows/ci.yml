@@ -23,6 +23,6 @@ jobs:
       - name: Install package and check entry point
         run: |
           python -m pip install --quiet .
-          claude-code-history --version
+          ai-session-search --version
       - name: Shim still runs
-        run: python claude-code-history.py --version
+        run: python ai-session-search.py --version

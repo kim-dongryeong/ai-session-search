@@ -5,7 +5,7 @@ local server and open the browser. Extra args still pass through (e.g. a port).
 """
 import sys
 
-from claude_code_history.app import main
+from ai_session_search.app import main
 
 if __name__ == "__main__":
     argv = sys.argv[1:]

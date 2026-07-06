@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-from claude_code_history import app  # noqa: E402
+from ai_session_search import app  # noqa: E402
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -169,7 +169,7 @@ class HttpSmoke(unittest.TestCase):
             self.assertEqual(r.status, 200)
             man = json.loads(r.read().decode())
         self.assertEqual(man["display"], "standalone")     # opens as its own window
-        self.assertEqual(man["name"], "Claude Code History")
+        self.assertEqual(man["name"], "AI Session Search")
         _, body = self.get("/")
         self.assertIn('rel="manifest"', body)
         self.assertIn('id=installbtn', body)                # one-click install button
