@@ -2056,17 +2056,21 @@ header .advbtn{background:#1857b8}
 .langsw b{padding:0 2px}
 .modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;color:#fff;align-items:center;justify-content:center;padding:30px 20px;background:
 radial-gradient(1100px 650px at 10% -12%,rgba(255,96,210,.30),rgba(255,96,210,0) 62%),
-radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.32),rgba(56,224,255,0) 62%),
-radial-gradient(800px 520px at 92% -6%,rgba(255,170,96,.14),rgba(255,170,96,0) 64%),
-radial-gradient(700px 480px at -6% 104%,rgba(150,110,255,.22),rgba(150,110,255,0) 62%),
-linear-gradient(158deg,#3d6ff0 0%,#2b4fd8 46%,#0d8ec6 100%)}
+radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.30),rgba(56,224,255,0) 62%),
+radial-gradient(900px 580px at 94% -8%,rgba(255,158,92,.28),rgba(255,158,92,0) 64%),
+radial-gradient(900px 620px at -8% 106%,rgba(150,110,255,.36),rgba(150,110,255,0) 63%),
+radial-gradient(760px 460px at 50% -18%,rgba(124,58,237,.20),rgba(124,58,237,0) 62%),
+radial-gradient(820px 480px at 55% 118%,rgba(110,255,200,.12),rgba(110,255,200,0) 62%),
+linear-gradient(158deg,#4667ec 0%,#2b4fd8 46%,#0d8ec6 100%)}
 .modal-ov.open{display:flex}
 @media(prefers-color-scheme:dark){.modal-ov{background:
 radial-gradient(1100px 650px at 10% -12%,rgba(255,96,210,.22),rgba(255,96,210,0) 62%),
-radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.24),rgba(56,224,255,0) 62%),
-radial-gradient(800px 520px at 92% -6%,rgba(255,170,96,.1),rgba(255,170,96,0) 64%),
-radial-gradient(700px 480px at -6% 104%,rgba(150,110,255,.17),rgba(150,110,255,0) 62%),
-linear-gradient(158deg,#2c4dbb 0%,#20369b 46%,#0a6d9d 100%)}}
+radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.22),rgba(56,224,255,0) 62%),
+radial-gradient(900px 580px at 94% -8%,rgba(255,158,92,.2),rgba(255,158,92,0) 64%),
+radial-gradient(900px 620px at -8% 106%,rgba(150,110,255,.28),rgba(150,110,255,0) 63%),
+radial-gradient(760px 460px at 50% -18%,rgba(124,58,237,.16),rgba(124,58,237,0) 62%),
+radial-gradient(820px 480px at 55% 118%,rgba(110,255,200,.09),rgba(110,255,200,0) 62%),
+linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .modal{position:relative;z-index:1;background:transparent;max-width:1020px;width:100%;padding:12px 8px;max-height:100%;overflow:auto;text-align:center}
 .modal-h{margin:0 0 12px;font-size:34px;font-weight:700;letter-spacing:-.02em;text-shadow:0 2px 14px rgba(10,25,80,.25)}
 .modal-sub{margin:0 0 42px;color:rgba(255,255,255,.8);font-size:16px}
