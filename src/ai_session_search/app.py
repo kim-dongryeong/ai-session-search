@@ -2397,7 +2397,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mov&&mov.classList.contains('open'))closeInstall();});
   var inow=document.getElementById('installnow');
   if(inow)inow.addEventListener('click',function(){
-    if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;if(ibtn)ibtn.style.display='none';closeInstall();}
+    if(deferredPrompt){
+      var dp=deferredPrompt;deferredPrompt=null;dp.prompt();
+      // keep our full-screen behind the native prompt; close only AFTER the user chooses,
+      // so the real app never shows through the browser's install dialog.
+      if(dp.userChoice&&dp.userChoice.then){
+        dp.userChoice.then(function(res){if(ibtn&&res&&res.outcome==='accepted')ibtn.style.display='none';closeInstall();});
+      }
+    }
     else{var h=document.getElementById('installhow');if(h)h.style.display='';}
   });
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;
