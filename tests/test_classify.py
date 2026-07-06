@@ -239,6 +239,16 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
         self.assertEqual(app.parse_query("  "), [])
 
+    def test_search_folder_link_preserves_query(self):
+        import tempfile
+        r1 = tempfile.mkdtemp(); os.makedirs(os.path.join(r1, "-a"))
+        r2 = tempfile.mkdtemp(); os.makedirs(os.path.join(r2, "-b"))
+        app.configure(r1, [r2])                       # >1 root → folder switcher shown
+        html = app.shell("t", "body", q="hello world", scope="claude", root=r1)
+        self.assertIn("/search?", html)              # folder links keep the search
+        self.assertIn("q=hello", html)
+        self.assertIn("scope=claude", html)
+
     def test_adjacent_sessions(self):
         import tempfile
         root = tempfile.mkdtemp()

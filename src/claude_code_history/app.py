@@ -762,23 +762,35 @@ def _rows_from_turns(turns):
         body = str(art["body"])
         out.append({"gi": art["gi"], "role": "assistant", "text": body[:_CODE_CAP],
                     "kind": K_CODE | (K_FILE if art["kind"] == "edit" else 0), "label": art.get("label", "")})
-    return [r for r in out if r["text"].strip()]
+    out = [r for r in out if r["text"].strip()]
+    for r in out:
+        r["low"] = r["text"].lower()          # precompute once (matching never re-lowers)
+    return out
 
-def search_rows(path):
-    """Cached structured search rows for a session file (keyed on mtime_ns+size)."""
+_WORD_RE = re.compile(r"\w+")
+
+def _rows_blob(path):
+    """(rows, blob, tokens) for a session — cached. blob = all lowercased text (cheap
+    substring pre-filter); tokens = its whole-word set (O(1) whole-word test in scoring)."""
     try:
         st = os.stat(path)
     except OSError:
-        return []
+        return [], "", frozenset()
     key = (st.st_mtime_ns, st.st_size)
     with _SEARCH["lock"]:
         hit = _SEARCH["by_path"].get(path)
         if hit is not None and hit[0] == key:
-            return hit[1]
+            return hit[1], hit[2], hit[3]
     rows = _rows_from_turns(classify_turns(path))
+    blob = "\n".join(r["low"] for r in rows)
+    tokens = frozenset(_WORD_RE.findall(blob))
     with _SEARCH["lock"]:
-        _SEARCH["by_path"][path] = (key, rows)
-    return rows
+        _SEARCH["by_path"][path] = (key, rows, blob, tokens)
+    return rows, blob, tokens
+
+def search_rows(path):
+    """Cached structured search rows for a session file (keyed on mtime_ns+size)."""
+    return _rows_blob(path)[0]
 
 def search_turns(path):
     """Back-compat: one (gi, role, text) per turn over the default (non-code) corpus."""
@@ -840,7 +852,7 @@ def _fields_ok(active, field_terms):
     for f, vals in field_terms.items():
         mask = FIELD_KIND[f]
         for val in vals:
-            if not any((r["kind"] & mask) and val in r["text"].lower() for r in active):
+            if not any((r["kind"] & mask) and val in r["low"] for r in active):
                 return False
     return True
 
@@ -866,26 +878,28 @@ def _best_window(term_gis, need):
             left += 1
     return best
 
-def match_session(active, terms, phrases):
+def match_session(active, terms, phrases, blob="", tokens=frozenset()):
     """Return the best hit for one session: row (same-turn) → cluster (nearby turns)
-    → session (anywhere). None if not all terms/phrases are present."""
+    → session (anywhere). None if not all terms/phrases are present. `blob`/`tokens` (the
+    file's cached lowercased text and whole-word set) are used only for cheap score counts."""
     need = terms + phrases
     if not need:
         return None
-    by_gi = {}
+    # which terms appear in each turn — one pass over rows' precomputed lowercase text,
+    # no big per-turn string joins (that was the hot spot on large sessions).
+    gi_terms = {}
     for r in active:
-        by_gi.setdefault(r["gi"], []).append(r)
-    joined = {gi: " ".join(x["text"] for x in rs).lower() for gi, rs in by_gi.items()}
-    ww, all_word = [], True
-    for t in terms:
-        wr = word_re(t)
-        c = sum(len(wr.findall(r["text"])) for r in active)
-        ww.append(c)
-        all_word = all_word and c > 0
-    row_gis = [gi for gi in sorted(by_gi) if all(t in joined[gi] for t in need)]
+        low = r["low"]
+        for t in need:
+            if t in low:
+                gi_terms.setdefault(r["gi"], set()).add(t)
+    ntot = len(need)
+    ww = [blob.count(t) for t in terms]
+    all_word = bool(terms) and all(t in tokens for t in terms)   # O(1) whole-word test
+    row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == ntot)
     if row_gis:
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
-    term_gis = {t: [gi for gi in sorted(by_gi) if t in joined[gi]] for t in need}
+    term_gis = {t: sorted(gi for gi, s in gi_terms.items() if t in s) for t in need}
     if not all(term_gis[t] for t in need):
         return None
     win = _best_window(term_gis, need)
@@ -1876,6 +1890,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   // advanced-search (Tools) toggle
   var at=document.getElementById('advtoggle');
   if(at){at.addEventListener('click',function(){document.getElementById('advpanel').classList.toggle('open');});}
+  // Enter submits the search even mid-IME-composition (Korean/CJK: the first Enter would
+  // otherwise only commit the character, so it took two presses).
+  var qb=document.getElementById('qbox');
+  if(qb)qb.addEventListener('keydown',function(e){
+    if(e.key==='Enter'&&(e.isComposing||e.keyCode===229)&&qb.form){
+      var f=qb.form;setTimeout(function(){f.requestSubmit?f.requestSubmit():f.submit();},0);
+    }
+  });
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
@@ -1982,12 +2004,21 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
     multi = len(ROOTS) > 1
     home = ("/?root=" + urllib.parse.quote(root)) if multi else "/"
     hidden = f'<input type=hidden name=root value="{esc(root)}">' if multi else ""
+    def _rootlink(r):
+        # on a search page, keep the query when switching folders (re-run search there)
+        if q:
+            params = {"q": q, "scope": scope, "root": r}
+            for k, v in (("days", days), ("from", from_), ("to", to)):
+                if v:
+                    params[k] = v
+            return "/search?" + urllib.parse.urlencode(params)
+        return "/?root=" + urllib.parse.quote(r)
     links = []
     for r in ROOTS:
         on = "on" if r == root else ""
         rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
-        links.append(f'<span class=rootitem><a class="{on}" href="/?root={urllib.parse.quote(r)}">'
+        links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(r)}">'
                      f'{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
                f'<input name=path placeholder="{esc(tr("Add a folder — paste a path (…/.claude/projects)"))}">'
@@ -2333,12 +2364,19 @@ class H(BaseHTTPRequestHandler):
             meta_hit = bool(meta_terms) and all(t in meta_blob for t in meta_terms)
             is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in meta_terms)
 
-            active = [r for r in search_rows(path) if _scope_ok(r, scope)]
-            sess_low = " ".join(r["text"] for r in active).lower()
-            if neg and any(nt in sess_low for nt in neg):
+            rows, blob, tokens = _rows_blob(path)
+            need = terms + phrases
+            # cheap pre-filter (substring over the cached blob, ~C-speed): a match needs
+            # every term somewhere in the body or metadata — skip the expensive work otherwise.
+            if need and not is_ref and not field_terms and not meta_hit:
+                if any((t not in blob) and (t not in meta_blob) for t in need):
+                    continue
+
+            active = [r for r in rows if _scope_ok(r, scope)]
+            if neg and any(nt in blob for nt in neg):
                 continue
             fields_ok = (not field_terms) or _fields_ok(active, field_terms)
-            hit = match_session(active, terms, phrases) if (fields_ok and (terms or phrases)) else None
+            hit = match_session(active, terms, phrases, blob, tokens) if (fields_ok and (terms or phrases)) else None
             field_only = fields_ok and bool(field_terms) and not (terms or phrases)
             if not hit and not field_only and not meta_hit:
                 continue
@@ -2695,6 +2733,15 @@ def make_server(host="127.0.0.1", port=DEFAULT_PORT):
     """Build the HTTP server (port 0 → ephemeral; used by tests)."""
     return ThreadingHTTPServer((host, port), H)
 
+def _warm_cache(root):
+    """Pre-parse index + search rows so the first request isn't cold. Best-effort."""
+    try:
+        get_index(root)
+        for p in session_files(root):
+            _rows_blob(p)
+    except Exception:
+        pass
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="claude-code-history",
@@ -2743,6 +2790,9 @@ def main(argv=None):
     print("  (close this window or press Ctrl-C to stop)\n")
     if args.open:
         threading.Timer(0.8, webbrowser.open, [url]).start()
+    # warm the index + search cache for every root in the background, so the FIRST
+    # search is fast too (even after switching folders).
+    threading.Thread(target=lambda: [_warm_cache(r) for r in ROOTS], daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
