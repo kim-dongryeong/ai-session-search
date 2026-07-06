@@ -2033,7 +2033,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/favicon.svg">
-<meta name="theme-color" content="#1061b7">
+<meta name="theme-color" content="#8a9dff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="AI Session Search">
 <title>%%TITLE%%</title>
@@ -2042,7 +2042,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 *{box-sizing:border-box}
 body{font:14.5px/1.65 -apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;margin:0;background:#f5f6f8;color:#1a1a1a}
 @media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
-header{position:sticky;top:0;z-index:9;background:#1061b7;color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 /* Installed-app window chrome (no effect in a normal browser tab) */
 .titlebar{display:none}
 @media(display-mode:window-controls-overlay){
@@ -2054,10 +2054,11 @@ header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;whi
 header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
 header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
-header button{background:#0b4fc4;color:#fff}
-header .advbtn{background:#1857b8}
-.langsw{color:#fff;font-size:12px;white-space:nowrap;opacity:.9}
-.langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
+header button{background:#fff;color:#0d4ea6;font-weight:600}
+header .advbtn{background:rgba(255,255,255,.18);color:#fff;font-weight:500;border:1px solid rgba(255,255,255,.34);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
+.langsw{color:#fff;font-size:12px;white-space:nowrap;opacity:.95;text-shadow:0 1px 5px rgba(8,25,80,.4)}
+.langsw a{color:#fff;text-decoration:none;padding:0 2px;opacity:.85}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
 .modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;color:#fff;align-items:center;justify-content:center;padding:30px 20px;background:
@@ -2680,7 +2681,7 @@ class H(BaseHTTPRequestHandler):
                 "name": "AI Session Search", "short_name": "AI Search",
                 "start_url": "/", "scope": "/", "display": "standalone",
                 "display_override": ["window-controls-overlay"],
-                "background_color": "#0b1220", "theme_color": "#1061b7",
+                "background_color": "#0b1220", "theme_color": "#8a9dff",
                 "icons": [
                     {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
                     {"src": "/icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any"},
