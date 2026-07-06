@@ -2054,12 +2054,19 @@ header .advbtn{background:#1857b8}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
-.modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;background:linear-gradient(158deg,#3d6ff0 0%,#2b4fd8 46%,#0d8ec6 100%);color:#fff;align-items:center;justify-content:center;padding:30px 20px}
+.modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;color:#fff;align-items:center;justify-content:center;padding:30px 20px;background:
+radial-gradient(1100px 650px at 10% -12%,rgba(255,96,210,.30),rgba(255,96,210,0) 62%),
+radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.32),rgba(56,224,255,0) 62%),
+radial-gradient(800px 520px at 92% -6%,rgba(255,170,96,.14),rgba(255,170,96,0) 64%),
+radial-gradient(700px 480px at -6% 104%,rgba(150,110,255,.22),rgba(150,110,255,0) 62%),
+linear-gradient(158deg,#3d6ff0 0%,#2b4fd8 46%,#0d8ec6 100%)}
 .modal-ov.open{display:flex}
-.modal-ov::before,.modal-ov::after{content:"";position:absolute;border-radius:50%;pointer-events:none;z-index:0}
-.modal-ov::before{width:480px;height:480px;top:-150px;left:5%;background:radial-gradient(circle at 35% 35%,rgba(255,255,255,.4),rgba(255,255,255,0) 68%)}
-.modal-ov::after{width:560px;height:560px;right:-140px;bottom:-200px;background:radial-gradient(circle at 60% 40%,rgba(94,234,212,.38),rgba(94,234,212,0) 70%)}
-@media(prefers-color-scheme:dark){.modal-ov{background:linear-gradient(158deg,#2c4dbb 0%,#20369b 46%,#0a6d9d 100%)}}
+@media(prefers-color-scheme:dark){.modal-ov{background:
+radial-gradient(1100px 650px at 10% -12%,rgba(255,96,210,.22),rgba(255,96,210,0) 62%),
+radial-gradient(1200px 750px at 106% 110%,rgba(56,224,255,.24),rgba(56,224,255,0) 62%),
+radial-gradient(800px 520px at 92% -6%,rgba(255,170,96,.1),rgba(255,170,96,0) 64%),
+radial-gradient(700px 480px at -6% 104%,rgba(150,110,255,.17),rgba(150,110,255,0) 62%),
+linear-gradient(158deg,#2c4dbb 0%,#20369b 46%,#0a6d9d 100%)}}
 .modal{position:relative;z-index:1;background:transparent;max-width:1020px;width:100%;padding:12px 8px;max-height:100%;overflow:auto;text-align:center}
 .modal-h{margin:0 0 12px;font-size:34px;font-weight:700;letter-spacing:-.02em;text-shadow:0 2px 14px rgba(10,25,80,.25)}
 .modal-sub{margin:0 0 42px;color:rgba(255,255,255,.8);font-size:16px}
