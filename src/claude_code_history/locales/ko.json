@@ -227,5 +227,7 @@
   "or exact": "또는 직접",
   "start date": "시작일",
   "end date": "종료일",
-  "language": "언어"
+  "language": "언어",
+  "⬇ Install app": "⬇ 앱으로 설치",
+  "install as a standalone app (own window, shows in the app switcher)": "독립 앱으로 설치 (별도 창, 앱 전환기(Cmd+Tab)에 표시)"
 }

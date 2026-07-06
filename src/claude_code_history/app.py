@@ -1860,6 +1860,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       <input type=date name=to value="%%TO%%" title="%%TOTITLE%%">
     </div>
   </form>
+  <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
   %%LANGSW%%
 </header>
 %%ROOTBAR%%
@@ -1894,6 +1895,11 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var o=e.target.textContent;e.target.textContent='Copied \u2713';setTimeout(function(){e.target.textContent=o;},1200);
     }
   });
+  // one-click "Install as app" — reveal the button when the browser says it's installable
+  var deferredPrompt=null, ibtn=document.getElementById('installbtn');
+  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;if(ibtn)ibtn.style.display='';});
+  if(ibtn)ibtn.addEventListener('click',function(){if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;ibtn.style.display='none';}});
+  window.addEventListener('appinstalled',function(){if(ibtn)ibtn.style.display='none';});
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
   function starred(sid){try{return localStorage.getItem('cch:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
@@ -2011,6 +2017,8 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         "%%PERIODLBL%%": esc(tr("Period")), "%%DAYSTITLE%%": esc(tr("quick period")),
         "%%ORLBL%%": esc(tr("or exact")), "%%FROMTITLE%%": esc(tr("start date")),
         "%%TOTITLE%%": esc(tr("end date")), "%%LANGSW%%": langsw,
+        "%%INSTALLLBL%%": esc(tr("⬇ Install app")),
+        "%%INSTALLTITLE%%": esc(tr("install as a standalone app (own window, shows in the app switcher)")),
     }
     out = SHELL
     for k, v in repl.items():
@@ -2350,9 +2358,13 @@ class H(BaseHTTPRequestHandler):
                 if row:
                     hits.append((gi, row["role"], _snippet(row["text"], snip_terms)))
 
+            # title matches are a strong intent signal (users recall session titles)
+            title_low = titles.get(path, "").lower()
+            ntitle = sum(1 for t in terms + phrases if t in title_low)
             score = 0.0
             if is_ref:
                 score += 3000
+            score += 450 * ntitle
             if meta_hit:
                 score += 20
             if hit:
@@ -2423,7 +2435,7 @@ class H(BaseHTTPRequestHandler):
                 for gi, role, s in r["hits"])
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
-            rows.append(f'<div class=card><a class=t href="{openurl}">{esc(r["title"])}</a> '
+            rows.append(f'<div class=card><a class=t href="{openurl}">{hl(r["title"], hlq)}</a> '
                         f'<span class=meta>{cnt}</span>{exact}{kchip}'
                         f'<div class=meta><span class=chip>{esc(short)}</span></div>{metaline}{snips}</div>')
 
