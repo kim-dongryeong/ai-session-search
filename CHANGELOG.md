@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 — 2026-07-06
+
+- **Codex transcripts are now supported** alongside Claude Code. `~/.codex/sessions`
+  is auto-discovered as a folder (🤖 in the switcher); Codex `rollout-*.jsonl` files
+  are parsed with the same attribution rigor — a `role:user` message that is really
+  injected context (`# Context from my IDE setup:`, `<environment_context>`,
+  `# AGENTS.md instructions`, agent-history, `<skill>`, …) is **never** shown as 🧑 You.
+  Codex messages / reasoning / `function_call` + output map to the existing
+  text / thinking / tool-call / tool-result categories, so search, scopes, code search,
+  the session view, tokens-where-present, and the model badge (e.g. `gpt-5.3-codex`) all
+  work. Sessions group by workspace (`cwd`, since Codex has no project folders); the
+  session card shows a **🤖 Codex** badge and a `codex resume <id>` command. (Codex
+  transcripts don't record per-message token usage, so token totals there are omitted.)
+- Provider-aware plumbing: `provider_of()`, `session_files()`, `summarize_file()`,
+  `load_session()`, `classify_turns()`, and the index all dispatch by provider.
+- +4 tests (103 total).
+
 ## 2.1.0 — 2026-07-06
 
 Search 2.0, session UX, and downloadable app bundles (from Codex's review playbook).

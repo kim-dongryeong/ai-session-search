@@ -1,14 +1,16 @@
 # claude-code-history  (`cch`)
 
-A **read-only, stdlib-only** local web viewer for browsing **Claude Code** session
-transcripts (the JSONL files under `~/.claude/projects/`). No dependencies, no build
-step, no database — just Python ≥ 3.9.
+A **read-only, stdlib-only** local web viewer for browsing and searching your **Claude
+Code** *and* **Codex** session transcripts (the JSONL under `~/.claude/projects/` and
+`~/.codex/sessions/`). No dependencies, no build step, no database — just Python ≥ 3.9.
 
-It exists to answer one question reliably: **who actually said what?** In Claude Code's
-transcript format, ~95% of `type:"user"` lines are *not* the human — they are tool
-results, system reminders, IDE notices, slash-command output, task-notifications,
-autonomous-loop prompts, or subagent briefs. This viewer uses an empirically audited +
-adversarially verified ruleset so only genuinely human-typed text is labelled **🧑 You**; everything else gets its own category, folded by default.
+It exists to answer one question reliably: **who actually said what?** In both agents'
+transcript formats, most `role:"user"` lines are *not* the human — they are tool
+results, system reminders, IDE/environment context, slash-command output,
+task-notifications, agent-history, autonomous-loop prompts, or subagent briefs. This
+viewer uses an empirically audited + adversarially verified ruleset (per provider) so
+only genuinely human-typed text is labelled **🧑 You**; everything else gets its own
+category, folded by default.
 
 ## Download (no Python needed)
 
@@ -87,6 +89,10 @@ it never writes to your transcripts.
 
 ## Features
 
+- **Claude Code + Codex** — auto-discovers `~/.claude/projects` and `~/.codex/sessions`
+  (🤖 in the folder switcher). Codex `rollout-*.jsonl` gets the same attribution rigor
+  (injected IDE/environment/agent-history context is never shown as You), groups by
+  workspace, and shows a 🤖 Codex badge + `codex resume <id>`.
 - **Correct attribution** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call / ⚙ Tool result /
   ⓘ System / 📋 Instruction / 🤖 Subagent; tooltips + an in-app legend (❓) explain
   each; technical blocks folded by default.

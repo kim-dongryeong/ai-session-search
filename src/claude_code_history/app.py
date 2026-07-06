@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -114,9 +114,10 @@ def default_primary_root():
     return os.path.expanduser(os.path.join("~", ".claude", "projects"))
 
 def _discover_roots(primary, extra_roots=()):
-    """Auto-discovered roots: primary, the standard locations, and any extras."""
+    """Auto-discovered roots: primary, the standard locations, Codex, and any extras."""
     cands = [primary, default_primary_root(),
-             os.path.expanduser(os.path.join("~", "Downloads", ".claude", "projects"))]
+             os.path.expanduser(os.path.join("~", "Downloads", ".claude", "projects")),
+             os.path.expanduser(os.path.join("~", ".codex", "sessions"))]  # Codex transcripts
     cands += [p for p in extra_roots if p]
     seen = []
     for c in cands:
@@ -201,6 +202,22 @@ STRING_INJECT_PREFIXES = ("<task-notification>", "<command-name>", "<local-comma
                           "<local-command-stderr>", "<system-reminder>", "<local-command-caveat>",
                           "<ide_opened_file>", "<ide_selection>", "Caveat:")
 LOOP_PREFIXES = ("You are CLAUDE in an AUTONOMOUS", "You are in the Codex×Claude×agy build loop")
+# Codex (~/.codex/sessions/**/rollout-*.jsonl) — a `role:user` message starting with any
+# of these is injected context, NOT the human (same precision-first rule as Claude Code).
+CODEX_INJECT_PREFIXES = ("# Context from my IDE setup:", "<environment_context>",
+                         "# AGENTS.md instructions for", "The following is the Codex agent history",
+                         "<turn_aborted>", "<skill>", "# In app browser:",
+                         "<user_instructions>", "<permissions instructions>")
+_CODEX_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+def provider_of(path):
+    """'codex' for ~/.codex/sessions/**/rollout-*.jsonl, else 'claude'."""
+    q = (path or "").replace(os.sep, "/")
+    return "codex" if ("/.codex/" in q or os.path.basename(q).startswith("rollout-")) else "claude"
+
+def _codex_sid(path):
+    m = _CODEX_UUID.search(os.path.basename(path))
+    return m.group(0) if m else os.path.basename(path)[:-6]
 SKIP_TYPES = {"mode", "permission-mode", "file-history-snapshot", "queue-operation",
               "agent-name", "started", "result", "fork-context-ref", "attachment", "system"}
 TITLE_TYPES = {"ai-title", "custom-title", "last-prompt", "summary"}
@@ -378,7 +395,7 @@ def turn_tags(o, role, segs):
             name = txt.split("\n", 1)[0].strip()
             if name in EDIT_TOOLS:
                 tags.add("edit")
-            if name == "Bash":
+            if name in ("Bash", "exec_command", "shell", "local_shell"):
                 tags.add("command")
                 if COMMIT_RE.search(txt):
                     tags.add("commit")
@@ -411,6 +428,8 @@ def turn_tags(o, role, segs):
     return tags
 
 def classify_turns(path, sub=False):
+    if provider_of(path) == "codex":
+        return _codex_load(path)["turns"]
     out = []
     for o in iter_lines(path):
         r = classify_line(o, sub)
@@ -423,6 +442,82 @@ def classify_turns(path, sub=False):
                 turn["tok"] = usage_tok(msg.get("usage"))
             out.append(turn)
     return out
+
+# ---- Codex transcript support (~/.codex/sessions/**/rollout-*.jsonl) ----------
+def classify_codex_line(o):
+    """Map one Codex response_item to (role, segs). Ignores event_msg mirrors."""
+    if o.get("type") != "response_item":
+        return None
+    pl = o.get("payload") or {}
+    pt = pl.get("type")
+    if pt == "message":
+        role = pl.get("role")
+        text = "\n".join(x.get("text", "") for x in pl.get("content", []) or []
+                         if isinstance(x, dict) and x.get("text"))
+        if not text.strip():
+            return None
+        if role == "assistant":
+            return ("assistant", [("text", text)])
+        if role == "developer":
+            return ("system", [("injected", text)])
+        if role == "user":
+            s = text.lstrip()
+            if s.startswith(CODEX_INJECT_PREFIXES) or s.startswith(LOOP_PREFIXES):
+                return ("system", [("injected", text)])
+            return ("you", [("text", text)])
+        return None
+    if pt == "reasoning":
+        summ = "\n".join(x.get("text", "") for x in pl.get("summary", []) or []
+                         if isinstance(x, dict) and x.get("text"))
+        return ("assistant", [("thinking", summ)])
+    if pt in ("function_call", "custom_tool_call"):
+        args = pl.get("arguments")
+        if args is None:
+            args = pl.get("input", "")
+        if not isinstance(args, str):
+            args = json.dumps(args, ensure_ascii=False)
+        return ("assistant", [("tool_use", f"{pl.get('name', 'tool')}\n{args}")])
+    if pt in ("function_call_output", "custom_tool_call_output"):
+        out = pl.get("output")
+        if isinstance(out, (dict, list)):
+            out = json.dumps(out, ensure_ascii=False)
+        return ("tool-result", [("tool_result", str(out or ""))])
+    if pt == "web_search_call":
+        return ("assistant", [("tool_use", "WebSearch\n" + json.dumps(pl.get("action") or {}, ensure_ascii=False))])
+    return None
+
+def _codex_load(path):
+    """One pass over a Codex rollout file → {turns, meta} (same shape as Claude)."""
+    cwd = model = last_ts = first_human = ""
+    n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
+    turns = []
+    for o in iter_lines(path):
+        t = o.get("type")
+        if t == "session_meta":
+            pl = o.get("payload") or {}
+            cwd = pl.get("cwd", cwd) or cwd
+            model = model or pl.get("model") or ""
+        elif t == "turn_context" and not model:
+            model = (o.get("payload") or {}).get("model") or ""
+        if o.get("timestamp"):
+            last_ts = o["timestamp"]
+        r = classify_codex_line(o)
+        if not r:
+            continue
+        role, segs = r
+        turn = {"role": role, "segs": segs, "ts": o.get("timestamp", ""), "tags": turn_tags(o, role, segs)}
+        if role == "assistant" and model:
+            turn["model"] = model
+        turns.append(turn)
+        if role in n:
+            n[role] += 1
+        if role == "you" and not first_human:
+            first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
+    title = (first_human or (os.path.basename(cwd) if cwd else "") or tr("(untitled)")).strip()[:120]
+    meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
+            "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
+            "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": ({model: 1} if model else {})}
+    return {"turns": turns, "meta": meta}
 
 # ---- subagents --------------------------------------------------------------
 def subagent_files(session_path):
@@ -455,7 +550,7 @@ def _toolinput(txt):
 # Fields that make a tool CALL findable: the command, the files, the pattern, the
 # intent — NOT raw JSON keys and NOT large code blobs (content/new_string are already
 # searchable via the tool_result diff, so re-indexing them would only bloat the index).
-_TOOL_SEARCH_FIELDS = ("command", "file_path", "path", "notebook_path", "pattern",
+_TOOL_SEARCH_FIELDS = ("command", "cmd", "file_path", "path", "notebook_path", "pattern",
                        "query", "url", "description", "prompt")
 
 def _tool_use_search_text(txt):
@@ -484,9 +579,9 @@ def session_digest(turns):
                     fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path")
                     if fp:
                         files.add(fp)
-                elif name == "Bash":
+                elif name in ("Bash", "exec_command", "shell", "local_shell"):
                     cmds += 1
-                    cmd = inp.get("command", "")
+                    cmd = inp.get("command") or inp.get("cmd") or ""
                     if COMMIT_RE.search(cmd):
                         m = COMMIT_MSG_RE.search(cmd)
                         commits.append(m.group(1) if m else "git commit")
@@ -528,6 +623,8 @@ def extract_code(turns):
 
 # ---- per-file summary -------------------------------------------------------
 def summarize_file(path):
+    if provider_of(path) == "codex":
+        return _codex_load(path)["meta"]
     ai_title = custom_title = last_prompt = first_human = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
     last_ts = cwd = start_cwd = branch = forked = ""
@@ -654,7 +751,7 @@ def load_session(path):
         hit = _SESSION["by_path"].get(path)
         if hit is not None and hit[0] == key:
             return hit[1]
-    data = _load_session_uncached(path)
+    data = _codex_load(path) if provider_of(path) == "codex" else _load_session_uncached(path)
     with _SESSION["lock"]:
         cache = _SESSION["by_path"]
         cache[path] = (key, data)
@@ -665,7 +762,13 @@ def load_session(path):
 
 # ---- index cache (per root, incrementally refreshed) -------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
+def is_codex_root(root):
+    q = (root or "").replace(os.sep, "/")
+    return "/.codex/" in q or q.rstrip("/").endswith("/.codex/sessions")
+
 def session_files(root):
+    if is_codex_root(root):
+        return sorted(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))
     return sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
 
 def _looks_ref(t):
@@ -695,8 +798,15 @@ def adjacent_sessions(root, current_path):
 
 def _index_item(path, st):
     s = summarize_file(path)
-    return {"path": path, "proj": os.path.basename(os.path.dirname(path)),
-            "sid": os.path.basename(path)[:-6], "title": s["title"], "preview": s["preview"],
+    prov = provider_of(path)
+    if prov == "codex":                         # no project folders — group by workspace (cwd)
+        proj = s["cwd"] or "codex"
+        sid = _codex_sid(path)
+    else:
+        proj = os.path.basename(os.path.dirname(path))
+        sid = os.path.basename(path)[:-6]
+    return {"path": path, "proj": proj, "provider": prov,
+            "sid": sid, "title": s["title"], "preview": s["preview"],
             "n": s["n"], "mtime": st.st_mtime, "size": st.st_size, "cwd": s["cwd"],
             "start_cwd": s["start_cwd"], "branch": s["branch"], "forked": s["forked"], "loop": s["loop"],
             "tok": s["tok"], "models": s["models"]}
@@ -1418,12 +1528,14 @@ def _difflib_html(old, new, filepath="", cap=800):
     rows.append(f'<div class="tk-diff">{"".join(body)}</div>')
     return "".join(rows)
 
+SHELL_TOOLS = {"Bash", "exec_command", "shell", "local_shell"}   # Claude Code + Codex
+
 def _tool_use_summary(txt):
     name, inp, _ = _split_tool(txt)
     prev = ""
     if isinstance(inp, dict):
-        if name == "Bash":
-            prev = inp.get("command", "")
+        if name in SHELL_TOOLS:
+            prev = inp.get("command") or inp.get("cmd") or ""
         elif name in EDIT_TOOLS:
             fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
             prev = short_path(fp) if fp else ""
@@ -1442,15 +1554,17 @@ def tool_use_html(txt):
     if not isinstance(inp, dict):
         return _tk_pre(raw)
     rows = []
-    if name == "Bash":
-        rows.append(_tk_pre(inp.get("command", ""), "tk-cmd"))
+    if name in SHELL_TOOLS:
+        rows.append(_tk_pre(inp.get("command") or inp.get("cmd") or "", "tk-cmd"))
         meta = []
         if inp.get("run_in_background"):
             meta.append(tr("background"))
+        if inp.get("workdir"):
+            meta.append(esc(short_path(inp["workdir"])))
         if inp.get("timeout"):
             meta.append(f'timeout {inp["timeout"]}ms')
         if meta:
-            rows.append(f'<div class="tk-meta">{esc(" · ".join(meta))}</div>')
+            rows.append(f'<div class="tk-meta">{" · ".join(meta)}</div>')
         if inp.get("description"):
             rows.append(f'<div class="tk-desc">{esc(inp["description"])}</div>')
     elif name in EDIT_TOOLS:
@@ -1834,6 +1948,9 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
 .chip.kindchip{background:#fff3cd;color:#8a6d00}
 @media(prefers-color-scheme:dark){.chip.kindchip{background:#3a3115;color:#f0d68a}}
+.provbadge.codex{background:#e2f4fb;color:#0b6a8f}
+.provbadge.claude{background:#e8f7ee;color:#157038}
+@media(prefers-color-scheme:dark){.provbadge.codex{background:#0e2c39;color:#7fcbe6}.provbadge.claude{background:#15331f;color:#7ddfa1}}
 .starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
 .starbtn.on{color:#e6b800}
 .permalink{text-decoration:none;font-size:11px;opacity:.35;cursor:pointer}
@@ -2018,8 +2135,9 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         on = "on" if r == root else ""
         rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
+        glyph = "🤖 " if is_codex_root(r) else ""
         links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(r)}">'
-                     f'{esc(short_path(r))}</a>{rm}</span>')
+                     f'{glyph}{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
                f'<input name=path placeholder="{esc(tr("Add a folder — paste a path (…/.claude/projects)"))}">'
                f'<button>{tr("➕ Add")}</button></form>')
@@ -2352,10 +2470,10 @@ class H(BaseHTTPRequestHandler):
             mt = mtimes.get(path, 0)
             if (lo is not None and mt < lo) or (hi is not None and mt >= hi):
                 continue
-            if proj and os.path.basename(os.path.dirname(path)) != proj:
-                continue
             it = metas.get(path, {})
-            sid = os.path.basename(path)[:-6]
+            if proj and it.get("proj") != proj:
+                continue
+            sid = it.get("sid") or os.path.basename(path)[:-6]
             forked = it.get("forked", "")
             # session-level metadata match: session-id / branched-from / workspace / path / title
             meta_terms = terms + id_vals
@@ -2419,7 +2537,7 @@ class H(BaseHTTPRequestHandler):
                 score += 500
             score += 300 * bool(fields.get("file")) + 200 * bool(fields.get("code")) + 200 * bool(fields.get("cmd"))
             results.append({"path": path, "title": titles.get(path, tr("(untitled)")),
-                            "proj": os.path.basename(os.path.dirname(path)),
+                            "proj": it.get("proj") or os.path.basename(os.path.dirname(path)),
                             "n": len(hits), "score": score, "mtime": mt,
                             "all_word": bool(hit) and hit.get("all_word"),
                             "hit_kind": hit["kind"] if hit else "", "hits": hits,
@@ -2494,7 +2612,8 @@ class H(BaseHTTPRequestHandler):
         t0 = time.perf_counter()
         loaded = load_session(path)          # one cached pass (turns + meta + per-question tokens)
         turns, meta = loaded["turns"], loaded["meta"]
-        sid = os.path.basename(path)[:-6]
+        prov = provider_of(path)
+        sid = _codex_sid(path) if prov == "codex" else os.path.basename(path)[:-6]
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
 
         def url(**kw):
@@ -2521,11 +2640,13 @@ class H(BaseHTTPRequestHandler):
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
             mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>'))
-        mrows.append(_srow(tr("Resume"), f'<code class=sid>claude --resume {esc(sid)}</code>'))
+        resume = f"codex resume {esc(sid)}" if prov == "codex" else f"claude --resume {esc(sid)}"
+        mrows.append(_srow(tr("Resume"), f'<code class=sid>{resume}</code>'))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
-        head = (f'<h3 style="margin:4px 0 8px">{star} {esc(meta["title"])}'
+        pbadge = f'<span class="chip provbadge {prov}">{"🤖 Codex" if prov == "codex" else "✦ Claude Code"}</span> '
+        head = (f'<h3 style="margin:4px 0 8px">{star} {pbadge}{esc(meta["title"])}'
                 + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>')
         # prev/next session in the same project (work spans sessions)
         prev, nxt = adjacent_sessions(rt, path)

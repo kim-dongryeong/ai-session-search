@@ -405,6 +405,66 @@ class Helpers(unittest.TestCase):
             os.unlink(path)
 
 
+class Codex(unittest.TestCase):
+    def _msg(self, role, text, ptype="message"):
+        return {"type": "response_item", "timestamp": "2026-03-24T00:00:00Z",
+                "payload": {"type": ptype, "role": role,
+                            "content": [{"type": "input_text", "text": text}]}}
+
+    def test_provider_detection(self):
+        self.assertEqual(app.provider_of("/Users/x/.codex/sessions/2026/03/24/rollout-a-019c.jsonl"), "codex")
+        self.assertEqual(app.provider_of("/Users/x/.claude/projects/-p/uuid.jsonl"), "claude")
+        self.assertTrue(app.is_codex_root("/Users/x/.codex/sessions"))
+        self.assertEqual(app._codex_sid("rollout-2026-03-24T20-53-57-019d1fb1-c72f-74e1-8a6b-37ff9c7386ad.jsonl"),
+                         "019d1fb1-c72f-74e1-8a6b-37ff9c7386ad")
+
+    def test_codex_attribution(self):
+        # genuine human
+        self.assertEqual(app.classify_codex_line(self._msg("user", "how do I resize windows?"))[0], "you")
+        # injected user context must NOT be human
+        self.assertEqual(app.classify_codex_line(self._msg("user", "# Context from my IDE setup:\n..."))[0], "system")
+        self.assertEqual(app.classify_codex_line(self._msg("user", "<environment_context>\n<cwd>/x</cwd>"))[0], "system")
+        self.assertEqual(app.classify_codex_line(self._msg("developer", "instructions"))[0], "system")
+        self.assertEqual(app.classify_codex_line(self._msg("assistant", "here you go"))[0], "assistant")
+
+    def test_codex_tools_and_reasoning(self):
+        fc = {"type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+              "arguments": '{"cmd":"pwd"}', "call_id": "c1"}}
+        r = app.classify_codex_line(fc)
+        self.assertEqual(r[0], "assistant")
+        self.assertEqual(r[1][0][0], "tool_use")
+        self.assertIn("exec_command", r[1][0][1])
+        fo = {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": "ok"}}
+        self.assertEqual(app.classify_codex_line(fo)[0], "tool-result")
+        rs = {"type": "response_item", "payload": {"type": "reasoning",
+              "summary": [{"type": "summary_text", "text": "thinking..."}]}}
+        self.assertEqual(app.classify_codex_line(rs)[1][0][0], "thinking")
+        # event_msg mirrors are ignored (no double-counting)
+        self.assertIsNone(app.classify_codex_line({"type": "event_msg", "payload": {"type": "agent_message", "message": "x"}}))
+
+    def test_codex_load_meta(self):
+        import tempfile
+        lines = [
+            {"type": "session_meta", "payload": {"id": "019c8b6e-2595-7111-aaaa-bbbbccccdddd",
+             "cwd": "/Users/x/dev/proj", "model_provider": "openai"}},
+            {"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}},
+            self._msg("user", "what does this do?"),
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+             "content": [{"type": "output_text", "text": "it does X"}]}},
+        ]
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "rollout-2026-02-24T01-56-17-019c8b6e-2595-7111-aaaa-bbbbccccdddd.jsonl")
+        with open(p, "w", encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o) + "\n")
+        m = app.summarize_file(p)
+        self.assertEqual(m["cwd"], "/Users/x/dev/proj")
+        self.assertEqual(m["title"], "what does this do?")
+        self.assertEqual(m["models"], {"gpt-5.3-codex": 1})
+        self.assertEqual(m["n"]["you"], 1)
+        self.assertEqual(m["n"]["assistant"], 1)
+
+
 class Markdown(unittest.TestCase):
     def test_table_renders_with_alignment(self):
         md = "| A | B |\n|:--|--:|\n| 1 | 2 |"
