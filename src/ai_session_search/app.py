@@ -2095,18 +2095,19 @@ header .advbtn{background:#1857b8}
 .modal-ov{display:none;position:fixed;inset:0;z-index:50;background:#fff;color:#1a1a1a;align-items:center;justify-content:center;padding:28px 16px}
 .modal-ov.open{display:flex}
 @media(prefers-color-scheme:dark){.modal-ov{background:#15181d;color:#e7e9ec}}
-.modal{background:transparent;max-width:500px;width:100%;padding:8px;position:relative;max-height:100%;overflow:auto;text-align:center}
-.modal-h{margin:2px 0 6px;font-size:22px;font-weight:700}
-.modal-sub{margin:0 0 18px;color:#8a8f98;font-size:13.5px}
-.modal-ill{margin:0 0 14px}
-.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:12px;overflow:hidden;background:#f7f9fc}
+.modal{background:transparent;max-width:960px;width:100%;padding:12px 20px;position:relative;max-height:100%;overflow:auto;text-align:center}
+.modal-h{margin:0 0 10px;font-size:32px;font-weight:700;letter-spacing:-.01em}
+.modal-sub{margin:0 0 34px;color:#8a8f98;font-size:16px}
+.modal-ills{display:flex;gap:32px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
+.modal-ill{flex:1 1 380px;max-width:440px;margin:0}
+.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:14px;overflow:hidden;background:#f7f9fc}
 @media(prefers-color-scheme:dark){.illsvg{border-color:#2a2e35;background:#141720}}
-.modal-cap{font-size:13px;color:#444;margin-top:7px;text-align:center}
+.modal-cap{font-size:14px;color:#444;margin-top:12px;text-align:center}
 @media(prefers-color-scheme:dark){.modal-cap{color:#cfd4db}}
-.modal-actions{display:flex;gap:8px;margin-top:18px}
-.modal-primary{flex:1;width:100%;padding:13px;border:0;border-radius:11px;background:#1f6feb;color:#fff;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(31,111,235,.4)}
+.modal-actions{display:flex;justify-content:center;margin-top:38px}
+.modal-primary{flex:0 0 auto;width:auto;min-width:300px;padding:16px 52px;border:0;border-radius:12px;background:#1f6feb;color:#fff;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 8px 22px rgba(31,111,235,.42)}
 .modal-primary:hover{background:#1a63d6}
-.modal-note{font-size:11.5px;color:#8a8f98;margin:12px 0 0;line-height:1.5}
+.modal-note{font-size:12px;color:#8a8f98;margin:16px 0 0;line-height:1.5}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
@@ -2530,8 +2531,10 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         '<div id=installmodal class=modal-ov><div class=modal role=dialog aria-modal=true>'
         f'<h2 class=modal-h>{esc(tr("Almost done!"))}</h2>'
         f'<p class=modal-sub>{esc(tr("One last step — click Confirm to finish setting up the app."))}</p>'
+        '<div class=modal-ills>'
         f'<div class=modal-ill>{SVG_CMDTAB}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app."))}</div></div>'
         f'<div class=modal-ill>{SVG_EXT}<div class=modal-cap>✓ {esc(tr("It is still Chrome inside — ⌘-F Find and your extensions keep working."))}</div></div>'
+        '</div>'
         f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("Confirm"))}</button></div>'
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
         '</div></div>')
