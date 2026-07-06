@@ -1,8 +1,9 @@
 # claude-code-history  (`cch`)
 
 A **read-only, stdlib-only** local web viewer for browsing and searching your **Claude
-Code** *and* **Codex** session transcripts (the JSONL under `~/.claude/projects/` and
-`~/.codex/sessions/`). No dependencies, no build step, no database — just Python ≥ 3.9.
+Code**, **Codex**, and **Gemini CLI** session transcripts (the JSONL under
+`~/.claude/projects/`, `~/.codex/sessions/`, and `~/.gemini/tmp/`). No dependencies, no
+build step, no database — just Python ≥ 3.9.
 
 It exists to answer one question reliably: **who actually said what?** In both agents'
 transcript formats, most `role:"user"` lines are *not* the human — they are tool
@@ -89,10 +90,11 @@ it never writes to your transcripts.
 
 ## Features
 
-- **Claude Code + Codex** — auto-discovers `~/.claude/projects` and `~/.codex/sessions`
-  (🤖 in the folder switcher). Codex `rollout-*.jsonl` gets the same attribution rigor
-  (injected IDE/environment/agent-history context is never shown as You), groups by
-  workspace, and shows a 🤖 Codex badge + `codex resume <id>`.
+- **Claude Code + Codex + Gemini CLI** — auto-discovers `~/.claude/projects`,
+  `~/.codex/sessions` (🤖), and `~/.gemini/tmp` (♊). Each provider's schema is parsed
+  with the same attribution rigor (injected IDE/environment/agent-history context is
+  never shown as You), grouped by workspace, with a provider badge and resume command.
+  (agy/antigravity-cli's SQLite trajectory DBs are not yet supported.)
 - **Correct attribution** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call / ⚙ Tool result /
   ⓘ System / 📋 Instruction / 🤖 Subagent; tooltips + an in-app legend (❓) explain
   each; technical blocks folded by default.

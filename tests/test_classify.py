@@ -465,6 +465,46 @@ class Codex(unittest.TestCase):
         self.assertEqual(m["n"]["assistant"], 1)
 
 
+class Gemini(unittest.TestCase):
+    def test_provider_detection(self):
+        self.assertEqual(app.provider_of("/Users/x/.gemini/tmp/proj/chats/session-2026-04-30T05-15-405ac996.jsonl"), "gemini")
+        self.assertTrue(app.is_gemini_root("/Users/x/.gemini/tmp"))
+
+    def test_gemini_classify(self):
+        self.assertEqual(app.classify_gemini_line({"type": "user", "content": [{"text": "check git"}]})[0], "you")
+        self.assertEqual(app.classify_gemini_line({"type": "info", "content": "Request cancelled."})[0], "system")
+        g = {"type": "gemini", "content": "done", "model": "gemini-3-flash-preview",
+             "thoughts": [{"subject": "Plan", "description": "think"}],
+             "toolCalls": [{"name": "run_shell_command", "args": {"command": "git status"},
+                            "result": [{"functionResponse": {"response": {"output": "on branch main"}}}]}]}
+        role, segs = app.classify_gemini_line(g)
+        self.assertEqual(role, "assistant")
+        kinds = [k for k, _ in segs]
+        self.assertEqual(kinds, ["thinking", "text", "tool_use", "tool_result"])   # tool result is embedded
+        self.assertIn("on branch main", dict((k, v) for k, v in [(s[0], s[1]) for s in segs])["tool_result"])
+
+    def test_gemini_load_meta_and_tokens(self):
+        import tempfile
+        lines = [
+            {"sessionId": "405ac996-4058-4604-9f22-67ab43e46735", "kind": "main", "startTime": "2026-04-30T05:15:11Z"},
+            {"type": "user", "content": [{"text": "please check git"}], "timestamp": "2026-04-30T05:19:40Z"},
+            {"type": "gemini", "content": "ok", "model": "gemini-3-flash-preview",
+             "tokens": {"input": 100, "output": 20, "cached": 5}},
+        ]
+        d = tempfile.mkdtemp()
+        cdir = os.path.join(d, "myproj", "chats")
+        os.makedirs(cdir)
+        p = os.path.join(cdir, "session-2026-04-30T05-15-405ac996.jsonl")
+        with open(p, "w", encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o) + "\n")
+        m = app.summarize_file(p)
+        self.assertEqual(m["title"], "please check git")
+        self.assertEqual(m["models"], {"gemini-3-flash-preview": 1})
+        self.assertEqual(m["tok"], {"in": 100, "out": 20, "cw": 0, "cr": 5})   # Gemini records tokens
+        self.assertEqual(app._gemini_sid(p), "405ac996-4058-4604-9f22-67ab43e46735")
+
+
 class Markdown(unittest.TestCase):
     def test_table_renders_with_alignment(self):
         md = "| A | B |\n|:--|--:|\n| 1 | 2 |"
