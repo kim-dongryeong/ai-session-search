@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -117,7 +117,8 @@ def _discover_roots(primary, extra_roots=()):
     """Auto-discovered roots: primary, the standard locations, Codex, and any extras."""
     cands = [primary, default_primary_root(),
              os.path.expanduser(os.path.join("~", "Downloads", ".claude", "projects")),
-             os.path.expanduser(os.path.join("~", ".codex", "sessions"))]  # Codex transcripts
+             os.path.expanduser(os.path.join("~", ".codex", "sessions")),   # Codex
+             os.path.expanduser(os.path.join("~", ".gemini", "tmp"))]       # Gemini CLI
     cands += [p for p in extra_roots if p]
     seen = []
     for c in cands:
@@ -211,9 +212,14 @@ CODEX_INJECT_PREFIXES = ("# Context from my IDE setup:", "<environment_context>"
 _CODEX_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 def provider_of(path):
-    """'codex' for ~/.codex/sessions/**/rollout-*.jsonl, else 'claude'."""
+    """Which agent wrote this transcript, from its path/filename."""
     q = (path or "").replace(os.sep, "/")
-    return "codex" if ("/.codex/" in q or os.path.basename(q).startswith("rollout-")) else "claude"
+    b = os.path.basename(q)
+    if "/.codex/" in q or b.startswith("rollout-"):
+        return "codex"
+    if "/.gemini/" in q or b.startswith("session-"):
+        return "gemini"
+    return "claude"
 
 def _codex_sid(path):
     m = _CODEX_UUID.search(os.path.basename(path))
@@ -395,7 +401,7 @@ def turn_tags(o, role, segs):
             name = txt.split("\n", 1)[0].strip()
             if name in EDIT_TOOLS:
                 tags.add("edit")
-            if name in ("Bash", "exec_command", "shell", "local_shell"):
+            if name in ("Bash", "exec_command", "shell", "local_shell", "run_shell_command"):
                 tags.add("command")
                 if COMMIT_RE.search(txt):
                     tags.add("commit")
@@ -428,8 +434,11 @@ def turn_tags(o, role, segs):
     return tags
 
 def classify_turns(path, sub=False):
-    if provider_of(path) == "codex":
+    prov = provider_of(path)
+    if prov == "codex":
         return _codex_load(path)["turns"]
+    if prov == "gemini":
+        return _gemini_load(path)["turns"]
     out = []
     for o in iter_lines(path):
         r = classify_line(o, sub)
@@ -519,6 +528,107 @@ def _codex_load(path):
             "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": ({model: 1} if model else {})}
     return {"turns": turns, "meta": meta}
 
+# ---- Gemini CLI support (~/.gemini/tmp/<project>/chats/session-*.jsonl) --------
+_GEMINI_PROJMAP = {"v": None}
+
+def _gemini_projmap():
+    """{project-name → real workspace path} from ~/.gemini/projects.json (cached)."""
+    if _GEMINI_PROJMAP["v"] is None:
+        m = {}
+        try:
+            with open(os.path.expanduser("~/.gemini/projects.json"), encoding="utf-8") as fh:
+                for realpath, name in (json.load(fh).get("projects") or {}).items():
+                    m[name] = realpath
+        except Exception:
+            pass
+        _GEMINI_PROJMAP["v"] = m
+    return _GEMINI_PROJMAP["v"]
+
+def _gemini_projname(path):
+    q = path.replace(os.sep, "/")
+    return q.split("/tmp/", 1)[1].split("/")[0] if "/tmp/" in q else ""
+
+def _gemini_sid(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            o = json.loads(fh.readline() or "{}")
+        if o.get("sessionId"):
+            return o["sessionId"]
+    except Exception:
+        pass
+    m = re.search(r"session-.*-([0-9a-f]{6,})\.jsonl$", os.path.basename(path))
+    return m.group(1) if m else os.path.basename(path)[:-6]
+
+def classify_gemini_line(o):
+    t = o.get("type")
+    if t == "user":
+        c = o.get("content")
+        text = c if isinstance(c, str) else ("\n".join(
+            x.get("text", "") for x in c if isinstance(x, dict) and x.get("text")) if isinstance(c, list) else "")
+        return ("you", [("text", text)]) if text.strip() else None
+    if t == "gemini":
+        segs = []
+        th = "\n\n".join(f'{x.get("subject", "")}: {x.get("description", "")}'.strip(": ")
+                         for x in (o.get("thoughts") or []) if isinstance(x, dict))
+        if th.strip():
+            segs.append(("thinking", th))
+        content = o.get("content")
+        if isinstance(content, str) and content.strip():
+            segs.append(("text", content))
+        for tc in o.get("toolCalls") or []:
+            if not isinstance(tc, dict):
+                continue
+            segs.append(("tool_use", f"{tc.get('name', 'tool')}\n{json.dumps(tc.get('args') or {}, ensure_ascii=False)}"))
+            outs = []
+            for r in tc.get("result") or []:
+                fr = r.get("functionResponse") if isinstance(r, dict) else None
+                if fr and isinstance(fr.get("response"), dict) and fr["response"].get("output") is not None:
+                    outs.append(str(fr["response"]["output"]))
+            if not outs and tc.get("resultDisplay"):
+                outs.append(str(tc["resultDisplay"]))
+            if outs:
+                segs.append(("tool_result", "\n".join(outs)))
+        return ("assistant", segs) if segs else None
+    if t == "info":
+        return ("system", [("injected", str(o.get("content", "")))])
+    return None
+
+def _gemini_load(path):
+    cwd = _gemini_projmap().get(_gemini_projname(path), "") or _gemini_projname(path)
+    model = last_ts = first_human = ""
+    n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
+    tok = {"in": 0, "out": 0, "cw": 0, "cr": 0}
+    models = {}
+    turns = []
+    for o in iter_lines(path):
+        if o.get("timestamp"):
+            last_ts = o["timestamp"]
+        if o.get("type") == "gemini":
+            if o.get("model"):
+                model = model or o["model"]
+                models[o["model"]] = models.get(o["model"], 0) + 1
+            tk = o.get("tokens") or {}
+            tok["in"] += tk.get("input", 0) or 0
+            tok["out"] += tk.get("output", 0) or 0
+            tok["cr"] += tk.get("cached", 0) or 0
+        r = classify_gemini_line(o)
+        if not r:
+            continue
+        role, segs = r
+        turn = {"role": role, "segs": segs, "ts": o.get("timestamp", ""), "tags": turn_tags(o, role, segs)}
+        if role == "assistant" and model:
+            turn["model"] = model
+        turns.append(turn)
+        if role in n:
+            n[role] += 1
+        if role == "you" and not first_human:
+            first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
+    title = (first_human or _gemini_projname(path) or tr("(untitled)")).strip()[:120]
+    meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
+            "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
+            "tok": tok, "models": models}
+    return {"turns": turns, "meta": meta}
+
 # ---- subagents --------------------------------------------------------------
 def subagent_files(session_path):
     base = session_path[:-6] if session_path.endswith(".jsonl") else session_path
@@ -579,7 +689,7 @@ def session_digest(turns):
                     fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path")
                     if fp:
                         files.add(fp)
-                elif name in ("Bash", "exec_command", "shell", "local_shell"):
+                elif name in ("Bash", "exec_command", "shell", "local_shell", "run_shell_command"):
                     cmds += 1
                     cmd = inp.get("command") or inp.get("cmd") or ""
                     if COMMIT_RE.search(cmd):
@@ -623,8 +733,11 @@ def extract_code(turns):
 
 # ---- per-file summary -------------------------------------------------------
 def summarize_file(path):
-    if provider_of(path) == "codex":
+    prov = provider_of(path)
+    if prov == "codex":
         return _codex_load(path)["meta"]
+    if prov == "gemini":
+        return _gemini_load(path)["meta"]
     ai_title = custom_title = last_prompt = first_human = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
     last_ts = cwd = start_cwd = branch = forked = ""
@@ -751,7 +864,13 @@ def load_session(path):
         hit = _SESSION["by_path"].get(path)
         if hit is not None and hit[0] == key:
             return hit[1]
-    data = _codex_load(path) if provider_of(path) == "codex" else _load_session_uncached(path)
+    prov = provider_of(path)
+    if prov == "codex":
+        data = _codex_load(path)
+    elif prov == "gemini":
+        data = _gemini_load(path)
+    else:
+        data = _load_session_uncached(path)
     with _SESSION["lock"]:
         cache = _SESSION["by_path"]
         cache[path] = (key, data)
@@ -766,9 +885,15 @@ def is_codex_root(root):
     q = (root or "").replace(os.sep, "/")
     return "/.codex/" in q or q.rstrip("/").endswith("/.codex/sessions")
 
+def is_gemini_root(root):
+    q = (root or "").replace(os.sep, "/")
+    return "/.gemini/" in q or q.rstrip("/").endswith("/.gemini/tmp")
+
 def session_files(root):
     if is_codex_root(root):
         return sorted(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))
+    if is_gemini_root(root):
+        return sorted(glob.glob(os.path.join(root, "*", "chats", "session-*.jsonl")))
     return sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
 
 def _looks_ref(t):
@@ -802,6 +927,9 @@ def _index_item(path, st):
     if prov == "codex":                         # no project folders — group by workspace (cwd)
         proj = s["cwd"] or "codex"
         sid = _codex_sid(path)
+    elif prov == "gemini":
+        proj = s["cwd"] or _gemini_projname(path) or "gemini"
+        sid = _gemini_sid(path)
     else:
         proj = os.path.basename(os.path.dirname(path))
         sid = os.path.basename(path)[:-6]
@@ -1528,7 +1656,7 @@ def _difflib_html(old, new, filepath="", cap=800):
     rows.append(f'<div class="tk-diff">{"".join(body)}</div>')
     return "".join(rows)
 
-SHELL_TOOLS = {"Bash", "exec_command", "shell", "local_shell"}   # Claude Code + Codex
+SHELL_TOOLS = {"Bash", "exec_command", "shell", "local_shell", "run_shell_command"}   # Claude / Codex / Gemini
 
 def _tool_use_summary(txt):
     name, inp, _ = _split_tool(txt)
@@ -1948,6 +2076,8 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
 .chip.kindchip{background:#fff3cd;color:#8a6d00}
 @media(prefers-color-scheme:dark){.chip.kindchip{background:#3a3115;color:#f0d68a}}
+.provbadge.gemini{background:#efe6ff;color:#5a2ca0}
+@media(prefers-color-scheme:dark){.provbadge.gemini{background:#241a3a;color:#c2a8f0}}
 .provbadge.codex{background:#e2f4fb;color:#0b6a8f}
 .provbadge.claude{background:#e8f7ee;color:#157038}
 @media(prefers-color-scheme:dark){.provbadge.codex{background:#0e2c39;color:#7fcbe6}.provbadge.claude{background:#15331f;color:#7ddfa1}}
@@ -2135,7 +2265,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         on = "on" if r == root else ""
         rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
-        glyph = "🤖 " if is_codex_root(r) else ""
+        glyph = "🤖 " if is_codex_root(r) else ("♊ " if is_gemini_root(r) else "")
         links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(r)}">'
                      f'{glyph}{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
@@ -2613,7 +2743,7 @@ class H(BaseHTTPRequestHandler):
         loaded = load_session(path)          # one cached pass (turns + meta + per-question tokens)
         turns, meta = loaded["turns"], loaded["meta"]
         prov = provider_of(path)
-        sid = _codex_sid(path) if prov == "codex" else os.path.basename(path)[:-6]
+        sid = ({"codex": _codex_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
 
         def url(**kw):
@@ -2640,12 +2770,14 @@ class H(BaseHTTPRequestHandler):
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
             mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>'))
-        resume = f"codex resume {esc(sid)}" if prov == "codex" else f"claude --resume {esc(sid)}"
-        mrows.append(_srow(tr("Resume"), f'<code class=sid>{resume}</code>'))
+        resume = {"codex": f"codex resume {esc(sid)}", "claude": f"claude --resume {esc(sid)}"}.get(prov)
+        if resume:
+            mrows.append(_srow(tr("Resume"), f'<code class=sid>{resume}</code>'))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
-        pbadge = f'<span class="chip provbadge {prov}">{"🤖 Codex" if prov == "codex" else "✦ Claude Code"}</span> '
+        PROV_LABEL = {"codex": "🤖 Codex", "gemini": "♊ Gemini", "claude": "✦ Claude Code"}
+        pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
         head = (f'<h3 style="margin:4px 0 8px">{star} {pbadge}{esc(meta["title"])}'
                 + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>')
         # prev/next session in the same project (work spans sessions)

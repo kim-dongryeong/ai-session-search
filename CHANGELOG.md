@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.3.0 — 2026-07-06
+
+- **Gemini CLI transcripts are now supported** too (three agents: Claude Code + Codex +
+  Gemini). `~/.gemini/tmp/<project>/chats/session-*.jsonl` is auto-discovered (♊ in the
+  switcher). Human `user` turns, `gemini` answers, `thoughts` (→ 💭 thinking),
+  `toolCalls` **with their embedded results** (→ 🔧 call + ⚙ result), per-turn tokens
+  (input/output/cached) and the model (`gemini-3-flash-preview`) all map through, so
+  search / scopes / code search / the session view work. Workspace comes from
+  `~/.gemini/projects.json` (project-name → real path); the card shows a ♊ Gemini badge.
+  `run_shell_command` renders as a shell block.
+- **Not** included: **agy / antigravity-cli** stores conversations as SQLite
+  "trajectory" `.db` files (`~/.gemini/antigravity-cli/conversations/*.db`) with an
+  opaque `step_payload` format — a separate reverse-engineering effort, deferred.
+- +3 tests (106 total).
+
 ## 2.2.0 — 2026-07-06
 
 - **Codex transcripts are now supported** alongside Claude Code. `~/.codex/sessions`
