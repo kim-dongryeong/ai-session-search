@@ -37,12 +37,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 __version__ = "3.1.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
-# One SVG, used as favicon and (rasterized by tooling) as the app icon.
-ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<rect width="64" height="64" rx="14" fill="#1f6feb"/>
-<path d="M14 16h36a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30l-11 9v-9h-5a6 6 0 0 1-6-6V22a6 6 0 0 1 6-6z" fill="#fff"/>
-<circle cx="32" cy="29" r="6" fill="#1f6feb"/>
-<path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
+# App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
+# favicon, PWA/apple-touch icon (rasterized by the browser), and the selected app in
+# the install-screen ⌘-Tab strap. The brand gradient here matches the title-bar band.
+ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(-50,0.5,0.5)"><stop offset="0" stop-color="#0084ff"/><stop offset="0.52" stop-color="#1061b7"/><stop offset="0.93" stop-color="#b0ff29"/></linearGradient><radialGradient id="g0" cx="0.4" cy="0.21" r="0.684"><stop offset="0" stop-color="rgb(169,138,255)" stop-opacity="1"/><stop offset="1" stop-color="rgb(169,138,255)" stop-opacity="0"/></radialGradient><radialGradient id="g1" cx="0.84" cy="0.86" r="0.684"><stop offset="0" stop-color="rgb(105,245,247)" stop-opacity="0.88"/><stop offset="1" stop-color="rgb(105,245,247)" stop-opacity="0"/></radialGradient><clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="180"/></clipPath><filter id="fx0" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="14" result="shb"/><feOffset in="shb" dy="10" result="sho"/><feFlood flood-color="#04352C" flood-opacity="0.45" result="shc"/><feComposite in="shc" in2="sho" operator="in" result="shadow"/><feGaussianBlur in="SourceAlpha" stdDeviation="40" result="glb"/><feFlood flood-color="#CFFFEE" flood-opacity="1" result="glc"/><feComposite in="glc" in2="glb" operator="in" result="glow"/><feComponentTransfer in="SourceGraphic" result="body"><feFuncA type="linear" slope="1"/></feComponentTransfer><feOffset in="SourceAlpha" dx="-7.5" dy="-7.5" result="lo1"/><feComposite in="SourceAlpha" in2="lo1" operator="out" result="lo2"/><feGaussianBlur in="lo2" stdDeviation="6.5" result="lo3"/><feFlood flood-color="#0A4A3E" flood-opacity="0.77" result="lo4"/><feComposite in="lo4" in2="lo3" operator="in" result="lowlight"/><feOffset in="SourceAlpha" dx="7.5" dy="7.5" result="hi1"/><feComposite in="SourceAlpha" in2="hi1" operator="out" result="hi2"/><feGaussianBlur in="hi2" stdDeviation="6.5" result="hi3"/><feFlood flood-color="#FFFFFF" flood-opacity="0.79" result="hi4"/><feComposite in="hi4" in2="hi3" operator="in" result="highlight"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="glow"/><feMergeNode in="body"/><feMergeNode in="lowlight"/><feMergeNode in="highlight"/></feMerge></filter></defs>
+<g clip-path="url(#sq)"><rect x="100" y="100" width="824" height="824" fill="url(#bg)"/><rect x="100" y="100" width="824" height="824" fill="url(#g0)"/><rect x="100" y="100" width="824" height="824" fill="url(#g1)"/></g>
+<g filter="url(#fx0)"><text x="512" y="512" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="730" font-weight="700" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">AI</text></g>
 </svg>"""
 
 # App icons for the install-screen ⌘-Tab strap. Finder is the REAL macOS Tahoe icon
@@ -2029,7 +2030,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/favicon.svg">
-<meta name="theme-color" content="#1f6feb">
+<meta name="theme-color" content="#1061b7">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="AI Session Search">
 <title>%%TITLE%%</title>
@@ -2038,7 +2039,17 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 *{box-sizing:border-box}
 body{font:14.5px/1.65 -apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;margin:0;background:#f5f6f8;color:#1a1a1a}
 @media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
-header{position:sticky;top:0;z-index:9;background:#1f6feb;color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header{position:sticky;top:0;z-index:9;background:#1061b7;color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+/* Installed-app window chrome (no effect in a normal browser tab) */
+.titlebar{display:none}
+@media(display-mode:window-controls-overlay){
+  .titlebar{display:flex;align-items:center;justify-content:center;position:fixed;left:env(titlebar-area-x,0);top:env(titlebar-area-y,0);width:env(titlebar-area-width,100vw);height:env(titlebar-area-height,32px);z-index:60;-webkit-app-region:drag;color:#fff;font-size:12px;font-weight:600;letter-spacing:.02em;text-shadow:0 1px 5px rgba(8,25,80,.45);background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%)}
+  body{padding-top:env(titlebar-area-height,32px)}
+  header{top:env(titlebar-area-height,32px)}
+}
+@media(display-mode:standalone),(display-mode:window-controls-overlay){
+  body::after{content:"";position:fixed;inset:0;z-index:200;pointer-events:none;border-radius:12px;padding:3px;background:linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude}
+}
 header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;white-space:nowrap}
 header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
 header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
@@ -2087,11 +2098,11 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .ct-keys{display:flex;gap:10px;justify-content:center}
 .ct-keys kbd{min-width:34px;padding:6px 13px;border-radius:9px;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.42);box-shadow:inset 0 1px 0 rgba(255,255,255,.5);color:#fff;font-size:12.5px;font-family:inherit;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
 /* -- install screen: floating mini browser window -- */
-.ext-win{width:100%;max-width:410px;background:#fff;border-radius:16px;box-shadow:0 26px 60px rgba(6,16,60,.42);overflow:hidden;text-align:left;color:#3a3f47}
-.ext-top{display:flex;align-items:center;gap:7px;padding:11px 13px;background:#f2f4f7;border-bottom:1px solid #e6e9ef}
-.ext-dot{width:11px;height:11px;border-radius:50%;flex:none}
-.ext-title{flex:1;text-align:center;font-size:11.5px;font-weight:600;color:#5f6672;white-space:nowrap;overflow:hidden;margin:0 6px}
-.ext-puz{position:relative;width:26px;height:26px;border-radius:8px;background:#edf3ff;border:1px solid #d8e4ff;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.ext-win{width:100%;max-width:410px;border:3px solid transparent;border-radius:16px;background:linear-gradient(#fff,#fff) padding-box,linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%) border-box;box-shadow:0 26px 60px rgba(6,16,60,.42);overflow:hidden;text-align:left;color:#3a3f47}
+.ext-top{display:flex;align-items:center;gap:7px;padding:11px 13px;background:radial-gradient(600px circle at 0% 21%,rgba(138,157,255,.9),rgba(138,157,255,0)),radial-gradient(600px circle at 84% 86%,rgba(105,245,247,.8),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%)}
+.ext-dot{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.ext-title{flex:1;text-align:center;font-size:11.5px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;margin:0 6px;text-shadow:0 1px 5px rgba(8,25,80,.45)}
+.ext-puz{position:relative;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.9);border:1px solid rgba(255,255,255,.6);display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
 .ext-puz i{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:#22c55e;border:1.5px solid #fff}
 .ext-body{position:relative;padding:44px 16px 18px}
 .ext-find{position:absolute;top:9px;right:12px;display:flex;align-items:center;gap:9px;background:#fff;border:1px solid #e0e4eb;border-radius:10px;padding:6px 11px;font-size:11px;color:#4a505a;box-shadow:0 8px 22px rgba(15,25,60,.14)}
@@ -2317,6 +2328,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 .mm-command{background:#16a34a}.mm-claude{background:#9bd3ad}.mm-orch{background:#a78bda}.mm-other{background:#cdd2d8}
 @media(max-width:760px){#minimap{display:none}}
 </style></head><body>
+<div class=titlebar>%%HOMELABEL%%</div>
 <header>
   <a class=home href="%%HOMEHREF%%">&#9776; %%HOMELABEL%%</a>
   <form action="/search" role=search>
@@ -2656,9 +2668,10 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
-                "name": "AI Session Search", "short_name": "CC History",
+                "name": "AI Session Search", "short_name": "AI Search",
                 "start_url": "/", "scope": "/", "display": "standalone",
-                "background_color": "#13151a", "theme_color": "#1f6feb",
+                "display_override": ["window-controls-overlay"],
+                "background_color": "#0b1220", "theme_color": "#1061b7",
                 "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml",
                            "purpose": "any maskable"}],
             }).encode("utf-8")
