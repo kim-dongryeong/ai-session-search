@@ -2030,7 +2030,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/favicon.svg">
-<meta name="theme-color" content="#1061b7">
+<meta name="theme-color" content="#6d4bd6">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="AI Session Search">
 <title>%%TITLE%%</title>
@@ -2046,9 +2046,6 @@ header{position:sticky;top:0;z-index:9;background:#1061b7;color:#fff;padding:11p
   .titlebar{display:flex;align-items:center;justify-content:center;position:fixed;left:0;top:0;width:100%;height:env(titlebar-area-height,33px);z-index:60;-webkit-app-region:drag;color:#fff;font-size:12px;font-weight:600;letter-spacing:.02em;text-shadow:0 1px 5px rgba(8,25,80,.45);background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%)}
   body{padding-top:env(titlebar-area-height,33px)}
   header{top:env(titlebar-area-height,33px)}
-}
-@media(display-mode:standalone),(display-mode:window-controls-overlay){
-  body::after{content:"";position:fixed;inset:0;z-index:200;pointer-events:none;border-radius:12px;padding:3px;background:linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude}
 }
 header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;white-space:nowrap}
 header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
@@ -2671,7 +2668,7 @@ class H(BaseHTTPRequestHandler):
                 "name": "AI Session Search", "short_name": "AI Search",
                 "start_url": "/", "scope": "/", "display": "standalone",
                 "display_override": ["window-controls-overlay"],
-                "background_color": "#0b1220", "theme_color": "#1061b7",
+                "background_color": "#0b1220", "theme_color": "#6d4bd6",
                 "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml",
                            "purpose": "any maskable"}],
             }).encode("utf-8")
