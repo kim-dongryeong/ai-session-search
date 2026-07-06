@@ -2402,7 +2402,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   // "Install as app" — a big explainer modal (⌘-Tab + extensions still work), then the native prompt
   var deferredPrompt=null, ibtn=document.getElementById('installbtn');
   var mov=document.getElementById('installmodal');
-  var standalone=window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches;
+  // "running as the installed app" — cover every installed display mode, not just standalone
+  // (our app installs in window-controls-overlay mode, where display-mode:standalone is false).
+  var mm=function(q){return window.matchMedia&&window.matchMedia(q).matches;};
+  var standalone=mm('(display-mode: standalone)')||mm('(display-mode: window-controls-overlay)')
+                 ||mm('(display-mode: minimal-ui)')||mm('(display-mode: fullscreen)')||navigator.standalone===true;
+  function mark(){try{localStorage.setItem('aiss:installed','1');}catch(_){}}
+  function installed(){try{return standalone||localStorage.getItem('aiss:installed')==='1';}catch(_){return standalone;}}
+  if(standalone)mark();  // remember (per-origin) that this machine has the app installed
   function openInstall(){if(mov)mov.classList.add('open');}
   function closeInstall(){if(mov)mov.classList.remove('open');}
   if(ibtn)ibtn.addEventListener('click',openInstall);
@@ -2415,17 +2422,19 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       // keep our full-screen behind the native prompt; close only AFTER the user chooses,
       // so the real app never shows through the browser's install dialog.
       if(dp.userChoice&&dp.userChoice.then){
-        dp.userChoice.then(function(res){if(ibtn&&res&&res.outcome==='accepted')ibtn.style.display='none';closeInstall();});
+        dp.userChoice.then(function(res){if(res&&res.outcome==='accepted'){mark();if(ibtn)ibtn.style.display='none';}closeInstall();});
       }
     }
     else{var h=document.getElementById('installhow');if(h)h.style.display='';}
   });
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;
-    if(ibtn)ibtn.style.display='';
-    try{if(!standalone&&!localStorage.getItem('aiss:installtip')){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
+    if(installed()){return;}                         // already installed → no button, no auto-modal
+    if(ibtn)ibtn.style.display='';                    // offer manual install (button) on any page…
+    // …but only auto-pop the big modal on the home page — never on a deep permalink/session link.
+    try{if(location.pathname==='/'&&!localStorage.getItem('aiss:installtip')){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
   });
-  window.addEventListener('appinstalled',function(){if(ibtn)ibtn.style.display='none';closeInstall();});
-  if(standalone&&ibtn)ibtn.style.display='none';
+  window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';closeInstall();});
+  if(installed()&&ibtn)ibtn.style.display='none';
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
   function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
