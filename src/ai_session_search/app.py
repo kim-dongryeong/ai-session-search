@@ -2042,7 +2042,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 *{box-sizing:border-box}
 body{font:14.5px/1.65 -apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;margin:0;background:#f5f6f8;color:#1a1a1a}
 @media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
-header{position:sticky;top:0;z-index:9;background:#1061b7;color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header{position:sticky;top:0;z-index:9;background:#6d4bd6;color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 /* Installed-app window chrome (no effect in a normal browser tab) */
 .titlebar{display:none}
 @media(display-mode:window-controls-overlay){
@@ -2054,8 +2054,8 @@ header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;whi
 header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
 header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
-header button{background:#0b4fc4;color:#fff}
-header .advbtn{background:#1857b8}
+header button{background:#5334bf;color:#fff}
+header .advbtn{background:#6042cf}
 .langsw{color:#fff;font-size:12px;white-space:nowrap;opacity:.9}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
