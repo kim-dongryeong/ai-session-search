@@ -2084,7 +2084,7 @@ header .advbtn{background:#1857b8}
 .ext-win{width:100%;max-width:410px;background:#fff;border-radius:16px;box-shadow:0 26px 60px rgba(6,16,60,.42);overflow:hidden;text-align:left;color:#3a3f47}
 .ext-top{display:flex;align-items:center;gap:7px;padding:11px 13px;background:#f2f4f7;border-bottom:1px solid #e6e9ef}
 .ext-dot{width:11px;height:11px;border-radius:50%;flex:none}
-.ext-url{flex:1;display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #e3e7ee;border-radius:999px;padding:4px 12px;font-size:11px;color:#6a7280;margin:0 6px;white-space:nowrap;overflow:hidden}
+.ext-title{flex:1;text-align:center;font-size:11.5px;font-weight:600;color:#5f6672;white-space:nowrap;overflow:hidden;margin:0 6px}
 .ext-puz{position:relative;width:26px;height:26px;border-radius:8px;background:#edf3ff;border:1px solid #d8e4ff;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
 .ext-puz i{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:#22c55e;border:1.5px solid #fff}
 .ext-body{position:relative;padding:44px 16px 18px}
@@ -2530,7 +2530,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         '<span class=ext-dot style="background:#ff5f57"></span>'
         '<span class=ext-dot style="background:#febc2e"></span>'
         '<span class=ext-dot style="background:#28c840"></span>'
-        '<span class=ext-url>&#128274; 127.0.0.1:8777</span>'
+        '<span class=ext-title>AI Session Search</span>'
         '<span class=ext-puz>&#129513;<i></i></span>'
         '</div><div class=ext-body>'
         '<span class=ext-find>&#8984;F <b>docker</b><span>3/14</span></span>'
