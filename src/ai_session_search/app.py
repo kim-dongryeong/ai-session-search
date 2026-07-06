@@ -20,6 +20,7 @@ Usage:
 Defaults to $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
 """
 import argparse
+import base64
 import datetime
 import difflib
 import glob
@@ -33,6 +34,8 @@ import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from ._icons import ICON_PNG_192, ICON_PNG_256
 
 __version__ = "3.1.0"
 
@@ -2662,6 +2665,15 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             return self.wfile.write(b)
+        if u.path in ("/icon-256.png", "/icon-192.png"):
+            # raster icons for the PWA/Dock/Cmd-Tab (macOS needs a PNG, not just the SVG)
+            b = base64.b64decode(ICON_PNG_256 if u.path == "/icon-256.png" else ICON_PNG_192)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            return self.wfile.write(b)
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
@@ -2669,8 +2681,11 @@ class H(BaseHTTPRequestHandler):
                 "start_url": "/", "scope": "/", "display": "standalone",
                 "display_override": ["window-controls-overlay"],
                 "background_color": "#0b1220", "theme_color": "#6d4bd6",
-                "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml",
-                           "purpose": "any maskable"}],
+                "icons": [
+                    {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                    {"src": "/icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any"},
+                    {"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+                ],
             }).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/manifest+json")
