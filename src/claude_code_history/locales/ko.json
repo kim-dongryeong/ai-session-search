@@ -229,5 +229,12 @@
   "end date": "종료일",
   "language": "언어",
   "⬇ Install app": "⬇ 앱으로 설치",
-  "install as a standalone app (own window, shows in the app switcher)": "독립 앱으로 설치 (별도 창, 앱 전환기(Cmd+Tab)에 표시)"
+  "install as a standalone app (own window, shows in the app switcher)": "독립 앱으로 설치 (별도 창, 앱 전환기(Cmd+Tab)에 표시)",
+  "Install as an app": "앱으로 설치하기",
+  "Runs in its own window — no browser tab, no address bar. It stays a local, read-only viewer.": "브라우저 탭·주소창 없이 독립 창으로 실행돼요. 여전히 로컬 읽기 전용 뷰어입니다.",
+  "Shows up in ⌘-Tab and the Dock as its own app — most people never realize a web app can do this.": "⌘-Tab과 Dock에 독립 앱으로 떠요 — 웹앱이 이게 된다는 걸 대부분 몰라요.",
+  "Your Chrome extensions still work inside it (it is still Chrome under the hood).": "크롬 확장 프로그램도 그대로 작동해요 (속은 여전히 크롬이니까요).",
+  "⬇ Install now": "⬇ 지금 설치",
+  "Maybe later": "나중에",
+  "If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.": "설치 창이 안 뜨면 크롬 ⋮ 메뉴 → “전송, 저장 및 공유” → “페이지를 앱으로 설치”를 쓰세요."
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.0 — 2026-07-06
+
+- **Per-provider folder glyphs** in the switcher: ✴️ Claude, 🌀 Codex, ✨ Gemini — by
+  folder kind or by "claude"/"codex"/"gemini" appearing in a user-added path. Session
+  badges match.
+- **"Install as an app" is now a big explainer popup** with two SVG illustrations —
+  one showing the app in the macOS **⌘-Tab** switcher (its own icon), one showing that
+  **Chrome extensions still work** inside it (it's still Chrome). Auto-opens once when the
+  browser reports the app is installable; the header button reopens it; the modal's
+  "Install now" fires the native prompt (with a manual-steps fallback).
+- **Keyboard nav works under non-Latin layouts** — `j`/`k`/`n`/`p` (and `/`) now match on
+  `event.code` (physical key), so they work with a Korean/CJK keyboard active.
+- **Language switch keeps your search** — the 🌐 switcher now sets the cookie and reloads
+  the same URL, so your query/scope survive an en↔ko switch (it used to reset to the index).
+
 ## 2.3.0 — 2026-07-06
 
 - **Gemini CLI transcripts are now supported** too (three agents: Claude Code + Codex +
