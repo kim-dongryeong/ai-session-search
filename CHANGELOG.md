@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.1.0 — 2026-07-06
+
+- **Agent access — your past sessions become a memory your coding agent can query.**
+  The same search engine (correct attribution, all three providers) is now reachable
+  four ways, all local + read-only + stdlib-only:
+  - **MCP server** — `aiss --mcp` speaks stdio JSON-RPC 2.0 (`initialize` / `tools/list`
+    / `tools/call`). Tools: `search_sessions(query, scope?, limit?)`,
+    `get_session(sid | path, limit?)`, `list_recent_sessions(provider?, limit?)`.
+    Add to Claude Code with `claude mcp add ai-session-search -- aiss --mcp`.
+  - **CLI** — one-shot `aiss --search '<query>'` (with `--scope`, `--limit`, `--json`),
+    `aiss --get <sid|path>`, `aiss --sessions`. No server needed — ideal for an agent's
+    Bash tool.
+  - **JSON HTTP API** — `/api/search`, `/api/session`, `/api/sessions`, `/api/roots`,
+    plus `/search?format=json`, on the running web server.
+  - **Skill** — `skills/search-past-sessions/SKILL.md` teaches an agent *when* to look
+    up prior work (before re-solving something) and how to query it.
+- The full field/scope query language (`file:` `cmd:` `code:` `error:` `role:me`
+  `id:`, `-exclude`, `"phrases"`, scopes `all|human|claude|chat|code|tool`) works
+  identically across all four.
+
 ## 3.0.0 — 2026-07-06
 
 - **Renamed to `ai-session-search` (command `aiss`, short alias `ass`).** Now that it

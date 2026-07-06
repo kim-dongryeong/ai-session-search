@@ -132,6 +132,11 @@ it never writes to your transcripts.
   one-click copy.
 - **Subagent threads** — sidechain/Task transcripts (incl. workflow agents) listed per
   session and openable, orchestrator briefs clearly labelled 📋 (never "you").
+- **Agent access** — the same search engine is exposed to coding agents four ways: an
+  **MCP server** (`aiss --mcp`), a one-shot **CLI** (`aiss --search/--get/--sessions`),
+  a **JSON HTTP API** (`/api/search`, `/api/session`, `/api/sessions`, `/api/roots`),
+  and a drop-in **skill**. So your agent can recall how *you* solved something before,
+  instead of re-deriving it. See [For coding agents](#for-coding-agents-mcp--cli--api--skill).
 
 ## Keyboard
 
@@ -155,6 +160,59 @@ the file into either:
   `%APPDATA%\ai-session-search\locales\` (Windows).
 
 Pick a default with `--lang ja` or `CCH_LANG=ja`. PRs adding locales are welcome.
+
+## For coding agents (MCP / CLI / API / skill)
+
+Your past sessions are a memory your coding agent doesn't have. This exposes the search
+engine so an agent can look up *how you actually did something* before re-solving it —
+across Claude Code, Codex, and Gemini, with the same correct attribution (`role:me` is
+only text you really typed). Everything is local and read-only.
+
+**Query language** (all four interfaces): words are AND-ed and matched nearby; `"quoted
+phrase"`; field filters `file:` `cmd:` `code:` `error:` `role:me` `id:<uuid>`; `-word`
+excludes; scopes `all | human | claude | chat | code | tool`.
+
+### MCP server
+
+Runs on stdio, stdlib-only, no web server. Tools: `search_sessions(query, scope?,
+limit?)`, `get_session(sid | path, limit?)`, `list_recent_sessions(provider?, limit?)`.
+
+```bash
+# Claude Code:
+claude mcp add ai-session-search -- aiss --mcp
+```
+
+```jsonc
+// or any MCP client (mcp.json / config):
+{ "mcpServers": { "ai-session-search": { "command": "aiss", "args": ["--mcp"] } } }
+```
+
+### CLI (no server, great for a Bash tool)
+
+```bash
+aiss --search 'cmd:pyinstaller locales' --scope tool --limit 10
+aiss --search 'role:me windows encoding' --json      # machine-readable
+aiss --get <session-id>                              # full session as text
+aiss --sessions --limit 20                           # recent sessions
+```
+
+### JSON HTTP API
+
+While a server is running (default `:8777`):
+
+```bash
+curl -s 'http://127.0.0.1:8777/api/search?q=windows+encoding&scope=all&limit=10'
+curl -s 'http://127.0.0.1:8777/api/session?sid=<session-id>'
+curl -s 'http://127.0.0.1:8777/api/sessions?limit=20'
+curl -s 'http://127.0.0.1:8777/api/roots'
+# the web search page can also emit JSON: /search?format=json&q=…
+```
+
+### Skill
+
+A ready-to-use skill (teaches an agent *when* to search past sessions) lives in
+[`skills/search-past-sessions/`](skills/search-past-sessions/SKILL.md). Copy it into your
+agent's skills directory (e.g. `~/.claude/skills/`).
 
 ## Development
 

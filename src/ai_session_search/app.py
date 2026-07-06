@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -1207,6 +1207,136 @@ def _snippet(text, terms):
     if pos is None:
         pos = 0
     return text[max(0, pos - 55):pos + 95].replace("\n", " ")
+
+# ---- data API (pure data; powers both the JSON HTTP endpoints and the MCP server) ----
+def search_api(root, q, scope="all", proj="", limit=30):
+    """Search one root → list of result dicts (no HTML). Mirrors the web search."""
+    root = root if root in ROOTS else ROOT
+    if scope not in SCOPES:
+        scope = "all"
+    sq = parse_search_query((q or "")[:200])
+    terms, phrases, fields, neg = sq["terms"], sq["phrases"], sq["fields"], sq["neg"]
+    if fields.get("role"):
+        scope = {"me": "human", "i": "human", "you": "human", "human": "human",
+                 "claude": "claude", "assistant": "claude"}.get(fields["role"][0], scope)
+    id_vals = fields.get("id", [])
+    field_terms = {k: v for k, v in fields.items() if k in FIELD_KIND}
+    if not (terms or phrases or fields or neg):
+        return []
+    metas = {it["path"]: it for it in get_index(root)}
+    fvals = [v for vals in field_terms.values() for v in vals]
+    snip_terms = (terms + phrases) or fvals
+    need = terms + phrases
+    out = []
+    for path in session_files(root):
+        it = metas.get(path, {})
+        if proj and it.get("proj") != proj:
+            continue
+        sid = it.get("sid") or os.path.basename(path)[:-6]
+        forked = it.get("forked", "")
+        meta_terms = terms + id_vals
+        meta_blob = " ".join(filter(None, [sid, forked, it.get("cwd", ""), it.get("start_cwd", ""),
+                                           path, it.get("title", "")])).lower()
+        meta_hit = bool(meta_terms) and all(t in meta_blob for t in meta_terms)
+        is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in meta_terms)
+        rows, blob, tokens = _rows_blob(path)
+        if need and not is_ref and not field_terms and not meta_hit and any(
+                (t not in blob) and (t not in meta_blob) for t in need):
+            continue
+        active = [r for r in rows if _scope_ok(r, scope)]
+        if neg and any(nt in blob for nt in neg):
+            continue
+        fields_ok = (not field_terms) or _fields_ok(active, field_terms)
+        hit = match_session(active, terms, phrases, blob, tokens) if (fields_ok and need) else None
+        field_only = fields_ok and bool(field_terms) and not need
+        if not hit and not field_only and not meta_hit:
+            continue
+        by_gi = {}
+        for r in active:
+            by_gi.setdefault(r["gi"], []).append(r)
+        hit_gis = hit["gis"][:5] if hit else (
+            [r["gi"] for r in active if any(v in r["low"] for v in fvals)][:5] if field_only else [])
+        snips = []
+        for gi in hit_gis:
+            rs = by_gi.get(gi, [])
+            row = next((r for r in rs if any(t in r["low"] for t in snip_terms)), rs[0] if rs else None)
+            if row:
+                snips.append({"turn": gi, "role": row["role"], "text": _snippet(row["text"], snip_terms).strip()})
+        title_low = (it.get("title", "") or "").lower()
+        score = 450 * sum(1 for t in need if t in title_low) + (3000 if is_ref else 0)
+        if hit:
+            score += {"row": 1000, "cluster": 350, "session": 100}.get(hit["kind"], 0)
+        elif field_only:
+            score += 500
+        out.append({"sid": sid, "provider": it.get("provider", "claude"), "title": it.get("title", ""),
+                    "workspace": short_path(it.get("cwd", "")) or it.get("proj", ""), "path": path,
+                    "match": (hit["kind"] if hit else ("reference" if meta_hit else "field")),
+                    "snippets": snips, "score": round(score, 1), "mtime": it.get("mtime", 0)})
+    out.sort(key=lambda x: (x["score"], x["mtime"]), reverse=True)
+    for r in out:
+        r.pop("mtime", None)
+    return out[:max(1, min(int(limit or 30), 100))]
+
+def search_all(q, scope="all", limit=30):
+    """Search every configured root (all providers) and merge, best-first."""
+    merged = []
+    for r in ROOTS:
+        merged += search_api(r, q, scope, "", limit)
+    merged.sort(key=lambda x: x["score"], reverse=True)
+    return merged[:max(1, min(int(limit or 30), 100))]
+
+def sessions_api(root=None, limit=100):
+    """Recent sessions in a root (newest first)."""
+    root = root if root in ROOTS else ROOT
+    out = []
+    for it in get_index(root)[:max(1, min(int(limit or 100), 500))]:
+        out.append({"sid": it["sid"], "provider": it.get("provider", "claude"), "title": it["title"],
+                    "workspace": short_path(it.get("cwd", "")) or it["proj"], "path": it["path"],
+                    "counts": it["n"], "date": fmt_ts(it.get("last_ts", "")) or fmt_mtime(it["mtime"])})
+    return out
+
+def find_by_sid(sid):
+    """Locate a session file by its id across all roots (any provider)."""
+    for r in ROOTS:
+        for it in get_index(r):
+            if it["sid"] == sid or it["sid"].startswith(sid):
+                return it["path"]
+    return None
+
+def session_api(path=None, sid=None, limit=400):
+    """Full session content (meta + turns as plain text) for an agent to read."""
+    if not path and sid:
+        path = find_by_sid(sid)
+    if not path:
+        return None
+    rt = root_for_path(path)
+    if not os.path.exists(path) or rt is None:
+        return None
+    data = load_session(path)
+    m = data["meta"]
+    turns = []
+    for gi, t in enumerate(data["turns"][:max(1, min(int(limit or 400), 2000))]):
+        parts = []
+        for k, v in t["segs"]:
+            if k == "channel":
+                pc = parse_channel(v)
+                parts.append(pc[1] if pc else v)
+            elif k == "tool_use":
+                parts.append(_tool_use_search_text(v))
+            elif k in ("text", "thinking", "tool_result", "injected"):
+                parts.append(v)
+        text = " ".join(parts).strip()
+        if text:
+            turns.append({"turn": gi, "role": t["role"], "text": text[:4000]})
+    prov = provider_of(path)
+    real_sid = ({"codex": _codex_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
+    return {"sid": real_sid, "provider": prov, "title": m["title"], "workspace": m.get("cwd", ""),
+            "counts": m["n"], "tokens": m.get("tok"), "models": m.get("models"),
+            "path": path, "turns": turns}
+
+def roots_api():
+    return [{"path": r, "label": short_path(r), "provider":
+             ("codex" if is_codex_root(r) else "gemini" if is_gemini_root(r) else "claude")} for r in ROOTS]
 
 # ---- render helpers ---------------------------------------------------------
 def esc(s):
@@ -2415,6 +2545,16 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _send_json(self, obj, status=200):
+        b = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
     def _redirect(self, loc):
         self.send_response(302)
         self.send_header("Location", loc)
@@ -2474,6 +2614,28 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(man)))
             self.end_headers()
             return self.wfile.write(man)
+        # ---- JSON API (local only; same data as the web UI, for agents/scripts/MCP) ----
+        if u.path in ("/api/search", "/api/sessions", "/api/session", "/api/roots") or (
+                u.path == "/search" and g("format") == "json"):
+            try:
+                if u.path == "/api/roots":
+                    return self._send_json({"roots": roots_api()})
+                if u.path == "/api/sessions":
+                    r = g("root") or None
+                    return self._send_json({"root": r or ROOT, "sessions": sessions_api(r if r in ROOTS else None, gint("limit", 100))})
+                if u.path == "/api/session":
+                    d = session_api(g("p") or None, g("sid") or None, gint("limit", 400))
+                    return self._send_json(d, 200 if d else 404) if d else self._send_json({"error": "not found"}, 404)
+                # search: /api/search (all roots) or /search?format=json (active root)
+                lim = gint("limit", 30) or 30
+                if u.path == "/search":
+                    res = search_api(active_root(g("root")), g("q"), g("scope", "all"), g("proj", ""), lim)
+                else:
+                    r = g("root")
+                    res = search_api(r, g("q"), g("scope", "all"), g("proj", ""), lim) if r in ROOTS else search_all(g("q"), g("scope", "all"), lim)
+                return self._send_json({"query": g("q"), "count": len(res), "results": res})
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 500)
         root = active_root(g("root"))
         if u.path == "/":
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
@@ -3091,6 +3253,151 @@ def _warm_cache(root):
     except Exception:
         pass
 
+# ---- MCP server (stdio JSON-RPC) --------------------------------------------
+# A tiny, dependency-free Model Context Protocol server so coding agents can
+# search the user's own past sessions (across Claude Code / Codex / Gemini)
+# before re-solving something. Speaks newline-delimited JSON-RPC 2.0 on stdio.
+MCP_TOOLS = [
+    {"name": "search_sessions",
+     "description": "Search the user's OWN past AI coding sessions (Claude Code, Codex, Gemini CLI) — their real "
+                    "prompts, the assistant's answers, tool commands, file paths, and code. Returns matching "
+                    "sessions with snippets. Use this BEFORE re-solving something to recall a prior decision, a "
+                    "command that worked, code you wrote before, or 'how did we do X last time'.",
+     "inputSchema": {"type": "object", "properties": {
+         "query": {"type": "string", "description":
+                   "words are AND-ed; \"quote\" for phrases; field filters file: cmd: code: error: role:me id:<uuid>; "
+                   "-word to exclude"},
+         "scope": {"type": "string", "enum": list(SCOPES),
+                   "description": "all | human (the user's prompts) | claude (assistant) | chat | code | tool",
+                   "default": "all"},
+         "limit": {"type": "integer", "default": 20}},
+         "required": ["query"]}},
+    {"name": "get_session",
+     "description": "Fetch the full content (all turns as plain text) of one past session by its id (or file path). "
+                    "Use after search_sessions to read the details of a hit.",
+     "inputSchema": {"type": "object", "properties": {
+         "sid": {"type": "string", "description": "session id (full or prefix) from search_sessions"},
+         "path": {"type": "string", "description": "absolute transcript path (alternative to sid)"},
+         "limit": {"type": "integer", "default": 400, "description": "max turns to return"}}}},
+    {"name": "list_recent_sessions",
+     "description": "List the user's most recent past sessions (optionally one provider). Use to see what was "
+                    "worked on lately across projects.",
+     "inputSchema": {"type": "object", "properties": {
+         "provider": {"type": "string", "enum": ["claude", "codex", "gemini"]},
+         "limit": {"type": "integer", "default": 20}}}},
+]
+
+def _mcp_call(name, args):
+    """Dispatch one MCP tool call to the data API. Returns a JSON-able object."""
+    args = args or {}
+    if name == "search_sessions":
+        return search_all(args.get("query", ""), args.get("scope", "all"), int(args.get("limit", 20) or 20))
+    if name == "get_session":
+        res = session_api(args.get("path") or None, args.get("sid") or None, int(args.get("limit", 400) or 400))
+        return res if res is not None else {"error": "session not found"}
+    if name == "list_recent_sessions":
+        prov, lim = args.get("provider"), int(args.get("limit", 20) or 20)
+        seen, out = set(), []
+        for r in ROOTS:
+            for s in sessions_api(r, lim):
+                if prov and s["provider"] != prov:
+                    continue
+                if s["path"] in seen:
+                    continue
+                seen.add(s["path"])
+                out.append(s)
+        out.sort(key=lambda x: x.get("date", ""), reverse=True)
+        return out[:lim]
+    return {"error": "unknown tool: " + str(name)}
+
+def run_mcp():
+    """Serve the MCP protocol on stdin/stdout. Nothing else may write to stdout."""
+    def send(obj):
+        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    # warm caches quietly in the background (never prints) so the first search is fast
+    threading.Thread(target=lambda: [_warm_cache(r) for r in ROOTS], daemon=True).start()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except Exception:
+            continue
+        mid, method = msg.get("id"), msg.get("method")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": (msg.get("params") or {}).get("protocolVersion", "2024-11-05"),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "ai-session-search", "version": __version__}}})
+        elif method == "tools/list":
+            send({"jsonrpc": "2.0", "id": mid, "result": {"tools": MCP_TOOLS}})
+        elif method == "tools/call":
+            p = msg.get("params") or {}
+            try:
+                res = _mcp_call(p.get("name"), p.get("arguments"))
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}})
+            except Exception as e:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text": "error: " + str(e)}], "isError": True}})
+        elif method is not None and mid is None:
+            continue  # a notification (e.g. notifications/initialized) — no reply
+        elif mid is not None:
+            send({"jsonrpc": "2.0", "id": mid,
+                  "error": {"code": -32601, "message": "method not found: " + str(method)}})
+    return 0
+
+def _run_cli(args):
+    """One-shot CLI queries (--search / --get / --sessions) for agents & scripts."""
+    lim = max(1, min(int(args.limit or 20), 200))
+    if args.get is not None:
+        p = args.get if os.path.exists(os.path.expanduser(args.get)) else None
+        res = session_api(os.path.expanduser(args.get) if p else None,
+                          None if p else args.get, 2000)
+        if res is None:
+            print("session not found: " + args.get, file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            print(f"{res['title']}  [{res['provider']}]  {res['sid']}")
+            print(f"workspace: {res['workspace']}")
+            if res.get("models"):
+                print("models: " + ", ".join(res["models"]))
+            print("-" * 60)
+            for t in res["turns"][:lim]:
+                who = {"you": "🧑 You", "assistant": "🤖 Assistant"}.get(t["role"], t["role"])
+                print(f"\n[{t['turn']}] {who}\n{t['text']}")
+        return 0
+    if args.sessions:
+        rows = []
+        for r in ROOTS:
+            rows += sessions_api(r, lim)
+        rows.sort(key=lambda x: x.get("date", ""), reverse=True)
+        rows = rows[:lim]
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            for s in rows:
+                print(f"{s['date']}  [{s['provider']}]  {s['sid']}  {s['title']}  · {s['workspace']}")
+        return 0
+    # --search
+    res = search_all(args.search or "", args.scope, lim)
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    if not res:
+        print("(no matching sessions)")
+        return 0
+    for r in res:
+        print(f"\n[{r['match']}]  {r['title']}  ({r['provider']})  {r['sid']}  · {r['workspace']}")
+        for sn in r["snippets"][:3]:
+            who = {"you": "🧑", "assistant": "🤖"}.get(sn["role"], "·")
+            print(f"    {who} {sn['text'][:200]}")
+    return 0
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="ai-session-search",
@@ -3103,6 +3410,18 @@ def main(argv=None):
     ap.add_argument("--roots", default="", metavar="DIR[,DIR...]",
                     help="extra project roots to offer in the in-app folder switcher")
     ap.add_argument("--open", action="store_true", help="open the browser after starting")
+    ap.add_argument("--mcp", action="store_true",
+                    help="run as an MCP server on stdio (no web UI) so coding agents can search your past sessions")
+    ap.add_argument("--search", metavar="QUERY",
+                    help="search past sessions and print results, then exit (no server). "
+                         "Supports field filters file:/cmd:/code:/error:/role:/id: and \"phrases\"")
+    ap.add_argument("--get", metavar="SID|PATH",
+                    help="print the full content of one session (by id or path), then exit")
+    ap.add_argument("--sessions", action="store_true", help="list recent sessions, then exit")
+    ap.add_argument("--scope", default="all", choices=sorted(SCOPES),
+                    help="search scope for --search (default: all)")
+    ap.add_argument("--limit", type=int, default=20, help="max results for --search/--get/--sessions")
+    ap.add_argument("--json", action="store_true", help="emit JSON for --search/--get/--sessions")
     ap.add_argument("--lang", default=os.environ.get("CCH_LANG", "en"),
                     help="default UI language code (e.g. en, ko); needs locales/<code>.json. "
                          "Also via CCH_LANG; switch live in the header. Default: en")
@@ -3125,6 +3444,11 @@ def main(argv=None):
     configure(args.root, extra)
     if not os.path.isdir(ROOT):
         ap.exit(2, f"projects dir not found: {ROOT}\n")
+    if args.mcp:
+        # stdio MCP mode: no web server, no banner (stdout is the JSON-RPC channel)
+        return run_mcp()
+    if args.search is not None or args.get is not None or args.sessions:
+        return _run_cli(args)
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"  \u26a0\ufe0f  Binding {args.host}: your transcripts are exposed on the network. Use only on a trusted network.")
 
