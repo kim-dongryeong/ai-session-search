@@ -45,20 +45,53 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
 </svg>"""
 
-# Illustration: macOS ⌘-Tab switcher with OUR app highlighted (shown in the install modal)
-SVG_CMDTAB = """<svg viewBox="0 0 360 142" class=illsvg xmlns="http://www.w3.org/2000/svg" role=img aria-label="Command-Tab app switcher">
-<rect x="8" y="20" width="344" height="74" rx="18" fill="#33363e"/>
-<rect x="30" y="38" width="40" height="40" rx="9" fill="#71767f"/>
-<rect x="94" y="38" width="40" height="40" rx="9" fill="#71767f"/>
-<rect x="152" y="31" width="56" height="56" rx="14" fill="none" stroke="#fff" stroke-width="2.5"/>
-<rect x="160" y="38" width="40" height="40" rx="9" fill="#1f6feb"/>
-<path d="M167 49h26a3 3 0 0 1 3 3v11a3 3 0 0 1-3 3h-11l-7 5v-5h-8a3 3 0 0 1-3-3V52a3 3 0 0 1 3-3z" fill="#fff"/>
-<rect x="226" y="38" width="40" height="40" rx="9" fill="#71767f"/>
-<rect x="290" y="38" width="40" height="40" rx="9" fill="#71767f"/>
-<rect x="116" y="110" width="50" height="24" rx="6" fill="#e7e9ec" stroke="#c7ccd2"/>
-<text x="141" y="127" text-anchor="middle" font-size="14" fill="#333">&#8984;</text>
-<rect x="172" y="110" width="66" height="24" rx="6" fill="#e7e9ec" stroke="#c7ccd2"/>
-<text x="205" y="127" text-anchor="middle" font-size="12" fill="#333">tab &#8677;</text>
+# Illustration: a realistic macOS ⌘-Tab app switcher with OUR app selected (install modal)
+SVG_CMDTAB = """<svg viewBox="0 0 360 172" class="illsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="macOS Command-Tab app switcher with AI Session Search selected">
+<defs>
+<linearGradient id="ctWall" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0" stop-color="#6d4bd6"/><stop offset="0.5" stop-color="#3f6ae6"/><stop offset="1" stop-color="#16b9c9"/></linearGradient>
+<radialGradient id="ctGlow" cx="0.24" cy="0.14" r="0.9">
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<linearGradient id="ctGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ce070"/><stop offset="1" stop-color="#16a94d"/></linearGradient>
+<linearGradient id="ctBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#66aaff"/><stop offset="1" stop-color="#2f7bf0"/></linearGradient>
+<linearGradient id="ctPink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff88c7"/><stop offset="1" stop-color="#ff4f81"/></linearGradient>
+<linearGradient id="ctGray" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a4adbc" /><stop offset="1" stop-color="#59636f"/></linearGradient>
+<filter id="ctShadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#000000" flood-opacity="0.38"/></filter>
+</defs>
+<rect x="0" y="0" width="360" height="172" fill="url(#ctWall)"/>
+<rect x="0" y="0" width="360" height="172" fill="url(#ctGlow)"/>
+<!-- glass HUD panel -->
+<rect x="30" y="34" width="300" height="96" rx="24" fill="#18181b" fill-opacity="0.52" stroke="#ffffff" stroke-opacity="0.16" filter="url(#ctShadow)"/>
+<text x="180" y="55" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="500" fill="#ffffff" fill-opacity="0.96">AI Session Search</text>
+<!-- selection highlight behind the middle (our) icon -->
+<rect x="152" y="63" width="56" height="56" rx="15" fill="#ffffff" fill-opacity="0.22"/>
+<!-- 0: Messages -->
+<rect x="54" y="70" width="42" height="42" rx="11" fill="url(#ctGreen)"/>
+<path d="M65 83h20a6 6 0 0 1 6 6v0a6 6 0 0 1-6 6H74l-6 4v-4h-3a6 6 0 0 1-6-6v0a6 6 0 0 1 6-6z" fill="#ffffff" transform="translate(-1,0)"/>
+<!-- 1: Mail -->
+<rect x="107" y="70" width="42" height="42" rx="11" fill="url(#ctBlue)"/>
+<rect x="117" y="84" width="22" height="14" rx="2.5" fill="#ffffff"/>
+<path d="M118 85.5 128 92 138 85.5" fill="none" stroke="#2f7bf0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<!-- 2: OUR app (selected) -->
+<svg x="159" y="70" width="42" height="42" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#1f6feb"/>
+<path d="M14 16h36a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30l-11 9v-9h-5a6 6 0 0 1-6-6V22a6 6 0 0 1 6-6z" fill="#fff"/>
+<circle cx="32" cy="29" r="6" fill="#1f6feb"/>
+<path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
+</svg>
+<!-- 3: Music -->
+<rect x="211" y="70" width="42" height="42" rx="11" fill="url(#ctPink)"/>
+<ellipse cx="228" cy="98" rx="4.4" ry="3.3" fill="#ffffff"/>
+<rect x="231.4" y="82" width="2.3" height="16" fill="#ffffff"/>
+<path d="M233.7 82 240.5 84 239 89 233.7 86.5 Z" fill="#ffffff"/>
+<!-- 4: Launchpad -->
+<rect x="263" y="70" width="42" height="42" rx="11" fill="url(#ctGray)"/>
+<g fill="#ffffff"><circle cx="276" cy="83" r="2.3"/><circle cx="284" cy="83" r="2.3"/><circle cx="292" cy="83" r="2.3"/><circle cx="276" cy="91" r="2.3"/><circle cx="284" cy="91" r="2.3"/><circle cx="292" cy="91" r="2.3"/><circle cx="276" cy="99" r="2.3"/><circle cx="284" cy="99" r="2.3"/><circle cx="292" cy="99" r="2.3"/></g>
+<!-- ⌘ + tab keycaps -->
+<rect x="141" y="143" width="26" height="22" rx="6" fill="#ffffff" fill-opacity="0.92"/>
+<text x="154" y="158" text-anchor="middle" font-size="13" fill="#2b2f36">&#8984;</text>
+<rect x="175" y="143" width="44" height="22" rx="6" fill="#ffffff" fill-opacity="0.92"/>
+<text x="197" y="158" text-anchor="middle" font-size="11" fill="#2b2f36">tab &#8677;</text>
 </svg>"""
 
 # Illustration: a browser window with the extensions (puzzle) button — extensions still work
@@ -2059,23 +2092,21 @@ header .advbtn{background:#1857b8}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
-.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.5);align-items:center;justify-content:center;padding:16px}
+.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:rgba(16,18,24,.94);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);align-items:center;justify-content:center;padding:16px}
 .modal-ov.open{display:flex}
-.modal{background:#fff;color:#1a1a1a;border-radius:16px;max-width:440px;width:100%;padding:22px 22px 18px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.35);max-height:92vh;overflow:auto}
+.modal{background:#fff;color:#1a1a1a;border-radius:18px;max-width:500px;width:100%;padding:26px 26px 20px;position:relative;box-shadow:0 24px 70px rgba(0,0,0,.5);max-height:94vh;overflow:auto;text-align:center}
 @media(prefers-color-scheme:dark){.modal{background:#1b1e24;color:#e7e9ec}}
-.modal-x{position:absolute;top:8px;right:12px;border:0;background:transparent;font-size:26px;line-height:1;color:#8a8f98;cursor:pointer}
-.modal-h{margin:2px 0 4px;font-size:19px}
-.modal-sub{margin:0 0 14px;color:#8a8f98;font-size:13px}
-.modal-ill{margin:0 0 12px}
-.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:10px;background:#f7f9fc}
+.modal-h{margin:2px 0 6px;font-size:22px;font-weight:700}
+.modal-sub{margin:0 0 18px;color:#8a8f98;font-size:13.5px}
+.modal-ill{margin:0 0 14px}
+.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:12px;overflow:hidden;background:#f7f9fc}
 @media(prefers-color-scheme:dark){.illsvg{border-color:#2a2e35;background:#141720}}
-.modal-cap{font-size:12.5px;color:#444;margin-top:6px}
+.modal-cap{font-size:13px;color:#444;margin-top:7px;text-align:center}
 @media(prefers-color-scheme:dark){.modal-cap{color:#cfd4db}}
-.modal-actions{display:flex;gap:8px;margin-top:16px}
-.modal-primary{flex:1;padding:10px;border:0;border-radius:9px;background:#1f6feb;color:#fff;font-size:14px;font-weight:600;cursor:pointer}
-.modal-secondary{padding:10px 14px;border:1px solid #cfd4db;border-radius:9px;background:transparent;color:#555;font-size:13px;cursor:pointer}
-@media(prefers-color-scheme:dark){.modal-secondary{border-color:#3a3f47;color:#cfd4db}}
-.modal-note{font-size:11.5px;color:#8a8f98;margin:10px 0 0;line-height:1.5}
+.modal-actions{display:flex;gap:8px;margin-top:18px}
+.modal-primary{flex:1;width:100%;padding:13px;border:0;border-radius:11px;background:#1f6feb;color:#fff;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(31,111,235,.4)}
+.modal-primary:hover{background:#1a63d6}
+.modal-note{font-size:11.5px;color:#8a8f98;margin:12px 0 0;line-height:1.5}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
@@ -2368,9 +2399,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function openInstall(){if(mov)mov.classList.add('open');}
   function closeInstall(){if(mov)mov.classList.remove('open');}
   if(ibtn)ibtn.addEventListener('click',openInstall);
-  var ic=document.getElementById('installclose'); if(ic)ic.addEventListener('click',closeInstall);
-  var il=document.getElementById('installlater'); if(il)il.addEventListener('click',closeInstall);
-  if(mov)mov.addEventListener('click',function(e){if(e.target===mov)closeInstall();});
+  // No visible dismiss — only "Confirm" (or ESC as an escape hatch). Feels like a finish-setup step.
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mov&&mov.classList.contains('open'))closeInstall();});
   var inow=document.getElementById('installnow');
   if(inow)inow.addEventListener('click',function(){
@@ -2499,13 +2528,11 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         langsw = f'<span class=langsw title="{esc(tr("language"))}">🌐 ' + " ".join(parts) + '</span>'
     install_modal = (
         '<div id=installmodal class=modal-ov><div class=modal role=dialog aria-modal=true>'
-        f'<button class=modal-x id=installclose aria-label="close">&times;</button>'
-        f'<h2 class=modal-h>{esc(tr("Install as an app"))}</h2>'
-        f'<p class=modal-sub>{esc(tr("Runs in its own window — no browser tab, no address bar. It stays a local, read-only viewer."))}</p>'
-        f'<div class=modal-ill>{SVG_CMDTAB}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app — most people never realize a web app can do this."))}</div></div>'
-        f'<div class=modal-ill>{SVG_EXT}<div class=modal-cap>✓ {esc(tr("Your Chrome extensions still work inside it (it is still Chrome under the hood)."))}</div></div>'
-        f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("⬇ Install now"))}</button>'
-        f'<button id=installlater class=modal-secondary>{esc(tr("Maybe later"))}</button></div>'
+        f'<h2 class=modal-h>{esc(tr("Almost done!"))}</h2>'
+        f'<p class=modal-sub>{esc(tr("One last step — click Confirm to finish setting up the app."))}</p>'
+        f'<div class=modal-ill>{SVG_CMDTAB}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app."))}</div></div>'
+        f'<div class=modal-ill>{SVG_EXT}<div class=modal-cap>✓ {esc(tr("It is still Chrome inside — ⌘-F Find and your extensions keep working."))}</div></div>'
+        f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("Confirm"))}</button></div>'
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
         '</div></div>')
     repl = {
