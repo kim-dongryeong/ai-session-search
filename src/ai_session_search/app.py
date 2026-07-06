@@ -45,33 +45,45 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
 </svg>"""
 
-# Illustration: a realistic macOS ⌘-Tab app switcher with OUR app selected (install modal)
+# Illustration: a realistic macOS ⌘-Tab app switcher with OUR app selected (install modal).
+# The strap is a "liquid glass" panel (frosted fill + top specular + bright rim); the app
+# icons are original lookalikes (not Apple's copyrighted artwork), so it ships freely.
 SVG_CMDTAB = """<svg viewBox="0 0 360 172" class="illsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="macOS Command-Tab app switcher with AI Session Search selected">
 <defs>
 <linearGradient id="ctWall" x1="0" y1="0" x2="1" y2="1">
 <stop offset="0" stop-color="#6d4bd6"/><stop offset="0.5" stop-color="#3f6ae6"/><stop offset="1" stop-color="#16b9c9"/></linearGradient>
 <radialGradient id="ctGlow" cx="0.24" cy="0.14" r="0.9">
-<stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<linearGradient id="ctGlass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.44"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.13"/></linearGradient>
+<linearGradient id="ctSpec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+<linearGradient id="ctRim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.34"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.1"/></linearGradient>
+<linearGradient id="ctSel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.58"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.22"/></linearGradient>
 <linearGradient id="ctGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ce070"/><stop offset="1" stop-color="#16a94d"/></linearGradient>
-<linearGradient id="ctBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#66aaff"/><stop offset="1" stop-color="#2f7bf0"/></linearGradient>
-<linearGradient id="ctPink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff88c7"/><stop offset="1" stop-color="#ff4f81"/></linearGradient>
-<linearGradient id="ctGray" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a4adbc" /><stop offset="1" stop-color="#59636f"/></linearGradient>
-<filter id="ctShadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#000000" flood-opacity="0.38"/></filter>
+<linearGradient id="ctSafari" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5cb4ff"/><stop offset="1" stop-color="#2f7be6"/></linearGradient>
+<linearGradient id="ctStore" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2aa8ff"/><stop offset="1" stop-color="#0a72f0"/></linearGradient>
+<linearGradient id="ctFinder" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57b0ff"/><stop offset="1" stop-color="#2f86ee"/></linearGradient>
+<clipPath id="ctHudClip"><rect x="30" y="34" width="300" height="96" rx="26"/></clipPath>
+<clipPath id="ctFinderClip"><rect x="54" y="70" width="42" height="42" rx="11"/></clipPath>
+<filter id="ctShadow" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#0b1030" flood-opacity="0.32"/></filter>
 </defs>
 <rect x="0" y="0" width="360" height="172" fill="url(#ctWall)"/>
 <rect x="0" y="0" width="360" height="172" fill="url(#ctGlow)"/>
-<!-- glass HUD panel -->
-<rect x="30" y="34" width="300" height="96" rx="24" fill="#18181b" fill-opacity="0.52" stroke="#ffffff" stroke-opacity="0.16" filter="url(#ctShadow)"/>
-<text x="180" y="55" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="500" fill="#ffffff" fill-opacity="0.96">AI Session Search</text>
-<!-- selection highlight behind the middle (our) icon -->
-<rect x="152" y="63" width="56" height="56" rx="15" fill="#ffffff" fill-opacity="0.22"/>
-<!-- 0: Messages -->
-<rect x="54" y="70" width="42" height="42" rx="11" fill="url(#ctGreen)"/>
-<path d="M65 83h20a6 6 0 0 1 6 6v0a6 6 0 0 1-6 6H74l-6 4v-4h-3a6 6 0 0 1-6-6v0a6 6 0 0 1 6-6z" fill="#ffffff" transform="translate(-1,0)"/>
-<!-- 1: Mail -->
-<rect x="107" y="70" width="42" height="42" rx="11" fill="url(#ctBlue)"/>
-<rect x="117" y="84" width="22" height="14" rx="2.5" fill="#ffffff"/>
-<path d="M118 85.5 128 92 138 85.5" fill="none" stroke="#2f7bf0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<!-- liquid-glass strap: frosted fill + top specular sheen + bright rim -->
+<rect x="30" y="34" width="300" height="96" rx="26" fill="url(#ctGlass)" filter="url(#ctShadow)"/>
+<g clip-path="url(#ctHudClip)"><rect x="30" y="34" width="300" height="42" fill="url(#ctSpec)"/></g>
+<rect x="30.6" y="34.6" width="298.8" height="94.8" rx="25.4" fill="none" stroke="url(#ctRim)" stroke-width="1.3"/>
+<text x="180" y="53" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600" fill="#1b2438" fill-opacity="0.82">AI Session Search</text>
+<!-- selection: brighter glass tile behind our app -->
+<rect x="152" y="63" width="56" height="56" rx="16" fill="url(#ctSel)" stroke="url(#ctRim)" stroke-width="1.1"/>
+<!-- 0: Finder (split-face) -->
+<g clip-path="url(#ctFinderClip)"><rect x="54" y="70" width="42" height="42" fill="url(#ctFinder)"/><rect x="54" y="70" width="21" height="42" fill="#d6ebff"/></g>
+<circle cx="70" cy="84" r="1.7" fill="#0f5cc0"/><circle cx="81" cy="84" r="1.7" fill="#eaf4ff"/>
+<path d="M69 90 Q75.5 96 82 90" fill="none" stroke="#1666c8" stroke-width="2" stroke-linecap="round"/>
+<!-- 1: Safari (compass) -->
+<rect x="107" y="70" width="42" height="42" rx="11" fill="url(#ctSafari)"/>
+<circle cx="128" cy="91" r="13.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-opacity="0.92"/>
+<path d="M128 91 133.5 85.5 130.5 90.5 Z" fill="#ff5a5a"/><path d="M128 91 122.5 96.5 125.5 91.5 Z" fill="#ffffff"/>
+<circle cx="128" cy="91" r="1.4" fill="#ffffff"/>
 <!-- 2: OUR app (selected) -->
 <svg x="159" y="70" width="42" height="42" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="14" fill="#1f6feb"/>
@@ -79,14 +91,12 @@ SVG_CMDTAB = """<svg viewBox="0 0 360 172" class="illsvg" xmlns="http://www.w3.o
 <circle cx="32" cy="29" r="6" fill="#1f6feb"/>
 <path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
 </svg>
-<!-- 3: Music -->
-<rect x="211" y="70" width="42" height="42" rx="11" fill="url(#ctPink)"/>
-<ellipse cx="228" cy="98" rx="4.4" ry="3.3" fill="#ffffff"/>
-<rect x="231.4" y="82" width="2.3" height="16" fill="#ffffff"/>
-<path d="M233.7 82 240.5 84 239 89 233.7 86.5 Z" fill="#ffffff"/>
-<!-- 4: Launchpad -->
-<rect x="263" y="70" width="42" height="42" rx="11" fill="url(#ctGray)"/>
-<g fill="#ffffff"><circle cx="276" cy="83" r="2.3"/><circle cx="284" cy="83" r="2.3"/><circle cx="292" cy="83" r="2.3"/><circle cx="276" cy="91" r="2.3"/><circle cx="284" cy="91" r="2.3"/><circle cx="292" cy="91" r="2.3"/><circle cx="276" cy="99" r="2.3"/><circle cx="284" cy="99" r="2.3"/><circle cx="292" cy="99" r="2.3"/></g>
+<!-- 3: Messages (bubble) -->
+<rect x="211" y="70" width="42" height="42" rx="11" fill="url(#ctGreen)"/>
+<path d="M223 82h18a6 6 0 0 1 6 6a6 6 0 0 1-6 6h-9l-6 4v-4h-3a6 6 0 0 1-6-6a6 6 0 0 1 6-6z" fill="#ffffff"/>
+<!-- 4: App Store (A) -->
+<rect x="263" y="70" width="42" height="42" rx="11" fill="url(#ctStore)"/>
+<path d="M284 82 278 100 M284 82 290 100 M280.4 94 287.6 94" fill="none" stroke="#ffffff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
 <!-- ⌘ + tab keycaps -->
 <rect x="141" y="143" width="26" height="22" rx="6" fill="#ffffff" fill-opacity="0.92"/>
 <text x="154" y="158" text-anchor="middle" font-size="13" fill="#2b2f36">&#8984;</text>
