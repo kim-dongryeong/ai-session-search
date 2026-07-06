@@ -45,78 +45,30 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
 </svg>"""
 
-# Illustration: a realistic macOS ⌘-Tab app switcher with OUR app selected (install modal).
-# The strap is a "liquid glass" panel (frosted fill + top specular + bright rim); the app
-# icons are original lookalikes (not Apple's copyrighted artwork), so it ships freely.
-SVG_CMDTAB = """<svg viewBox="0 0 360 172" class="illsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="macOS Command-Tab app switcher with AI Session Search selected">
-<defs>
-<linearGradient id="ctWall" x1="0" y1="0" x2="1" y2="1">
-<stop offset="0" stop-color="#6d4bd6"/><stop offset="0.5" stop-color="#3f6ae6"/><stop offset="1" stop-color="#16b9c9"/></linearGradient>
-<radialGradient id="ctGlow" cx="0.24" cy="0.14" r="0.9">
-<stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
-<linearGradient id="ctGlass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.44"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.13"/></linearGradient>
-<linearGradient id="ctSpec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
-<linearGradient id="ctRim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.34"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.1"/></linearGradient>
-<linearGradient id="ctSel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.58"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.22"/></linearGradient>
-<linearGradient id="ctGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ce070"/><stop offset="1" stop-color="#16a94d"/></linearGradient>
-<linearGradient id="ctSafari" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5cb4ff"/><stop offset="1" stop-color="#2f7be6"/></linearGradient>
-<linearGradient id="ctStore" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2aa8ff"/><stop offset="1" stop-color="#0a72f0"/></linearGradient>
-<linearGradient id="ctFinder" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57b0ff"/><stop offset="1" stop-color="#2f86ee"/></linearGradient>
-<clipPath id="ctHudClip"><rect x="30" y="34" width="300" height="96" rx="26"/></clipPath>
-<clipPath id="ctFinderClip"><rect x="54" y="70" width="42" height="42" rx="11"/></clipPath>
-<filter id="ctShadow" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#0b1030" flood-opacity="0.32"/></filter>
-</defs>
-<rect x="0" y="0" width="360" height="172" fill="url(#ctWall)"/>
-<rect x="0" y="0" width="360" height="172" fill="url(#ctGlow)"/>
-<!-- liquid-glass strap: frosted fill + top specular sheen + bright rim -->
-<rect x="30" y="34" width="300" height="96" rx="26" fill="url(#ctGlass)" filter="url(#ctShadow)"/>
-<g clip-path="url(#ctHudClip)"><rect x="30" y="34" width="300" height="42" fill="url(#ctSpec)"/></g>
-<rect x="30.6" y="34.6" width="298.8" height="94.8" rx="25.4" fill="none" stroke="url(#ctRim)" stroke-width="1.3"/>
-<text x="180" y="53" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600" fill="#1b2438" fill-opacity="0.82">AI Session Search</text>
-<!-- selection: brighter glass tile behind our app -->
-<rect x="152" y="63" width="56" height="56" rx="16" fill="url(#ctSel)" stroke="url(#ctRim)" stroke-width="1.1"/>
-<!-- 0: Finder (split-face) -->
-<g clip-path="url(#ctFinderClip)"><rect x="54" y="70" width="42" height="42" fill="url(#ctFinder)"/><rect x="54" y="70" width="21" height="42" fill="#d6ebff"/></g>
-<circle cx="70" cy="84" r="1.7" fill="#0f5cc0"/><circle cx="81" cy="84" r="1.7" fill="#eaf4ff"/>
-<path d="M69 90 Q75.5 96 82 90" fill="none" stroke="#1666c8" stroke-width="2" stroke-linecap="round"/>
-<!-- 1: Safari (compass) -->
-<rect x="107" y="70" width="42" height="42" rx="11" fill="url(#ctSafari)"/>
-<circle cx="128" cy="91" r="13.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-opacity="0.92"/>
-<path d="M128 91 133.5 85.5 130.5 90.5 Z" fill="#ff5a5a"/><path d="M128 91 122.5 96.5 125.5 91.5 Z" fill="#ffffff"/>
-<circle cx="128" cy="91" r="1.4" fill="#ffffff"/>
-<!-- 2: OUR app (selected) -->
-<svg x="159" y="70" width="42" height="42" viewBox="0 0 64 64">
-<rect width="64" height="64" rx="14" fill="#1f6feb"/>
-<path d="M14 16h36a6 6 0 0 1 6 6v20a6 6 0 0 1-6 6H30l-11 9v-9h-5a6 6 0 0 1-6-6V22a6 6 0 0 1 6-6z" fill="#fff"/>
-<circle cx="32" cy="29" r="6" fill="#1f6feb"/>
-<path d="M21 43c0-6 5-9 11-9s11 3 11 9z" fill="#1f6feb"/>
-</svg>
-<!-- 3: Messages (bubble) -->
-<rect x="211" y="70" width="42" height="42" rx="11" fill="url(#ctGreen)"/>
-<path d="M223 82h18a6 6 0 0 1 6 6a6 6 0 0 1-6 6h-9l-6 4v-4h-3a6 6 0 0 1-6-6a6 6 0 0 1 6-6z" fill="#ffffff"/>
-<!-- 4: App Store (A) -->
-<rect x="263" y="70" width="42" height="42" rx="11" fill="url(#ctStore)"/>
-<path d="M284 82 278 100 M284 82 290 100 M280.4 94 287.6 94" fill="none" stroke="#ffffff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
-<!-- ⌘ + tab keycaps -->
-<rect x="141" y="143" width="26" height="22" rx="6" fill="#ffffff" fill-opacity="0.92"/>
-<text x="154" y="158" text-anchor="middle" font-size="13" fill="#2b2f36">&#8984;</text>
-<rect x="175" y="143" width="44" height="22" rx="6" fill="#ffffff" fill-opacity="0.92"/>
-<text x="197" y="158" text-anchor="middle" font-size="11" fill="#2b2f36">tab &#8677;</text>
-</svg>"""
-
-# Illustration: a browser window with the extensions (puzzle) button — extensions still work
-SVG_EXT = """<svg viewBox="0 0 360 116" class=illsvg xmlns="http://www.w3.org/2000/svg" role=img aria-label="Chrome extensions still work">
-<rect x="14" y="10" width="332" height="96" rx="12" fill="#fff" stroke="#d7dbe0"/>
-<circle cx="36" cy="32" r="5" fill="#ff5f57"/><circle cx="52" cy="32" r="5" fill="#febc2e"/><circle cx="68" cy="32" r="5" fill="#28c840"/>
-<rect x="88" y="22" width="176" height="20" rx="10" fill="#eef1f4"/>
-<text x="99" y="36" font-size="11" fill="#8a8f98">127.0.0.1</text>
-<rect x="278" y="20" width="28" height="24" rx="6" fill="#dbe5ff" stroke="#1f6feb"/>
-<text x="292" y="38" text-anchor="middle" font-size="15">&#129513;</text>
-<circle cx="324" cy="32" r="9" fill="#34a853"/>
-<rect x="30" y="60" width="150" height="10" rx="5" fill="#dfe3e8"/>
-<rect x="30" y="78" width="256" height="8" rx="4" fill="#eef1f4"/>
-<rect x="30" y="92" width="196" height="8" rx="4" fill="#eef1f4"/>
-</svg>"""
+# Hand-drawn lookalike app icons for the install-screen ⌘-Tab strap (original artwork,
+# not Apple's copyrighted icon files, so they ship freely with the GPL app). The strap
+# itself is real CSS liquid glass (backdrop-filter) — see the .ct-* rules in PAGE CSS.
+_IC_FINDER = """<svg viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg"><defs>
+<linearGradient id="icf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#59b3ff"/><stop offset="1" stop-color="#2a7de1"/></linearGradient>
+<clipPath id="icfc"><rect width="56" height="56" rx="13"/></clipPath>
+<clipPath id="icfl"><rect width="28" height="56"/></clipPath><clipPath id="icfr"><rect x="28" width="28" height="56"/></clipPath></defs>
+<g clip-path="url(#icfc)"><rect width="56" height="56" fill="url(#icf)"/><rect width="28" height="56" fill="#e9f4ff"/>
+<g clip-path="url(#icfl)"><circle cx="17.5" cy="23" r="2.7" fill="#155bb5"/><path d="M13 33q15 12 30 0" stroke="#155bb5" stroke-width="3.2" fill="none" stroke-linecap="round"/></g>
+<g clip-path="url(#icfr)"><circle cx="38.5" cy="23" r="2.7" fill="#ffffff"/><path d="M13 33q15 12 30 0" stroke="#ffffff" stroke-width="3.2" fill="none" stroke-linecap="round"/></g></g></svg>"""
+_IC_SAFARI = """<svg viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg"><defs>
+<linearGradient id="icsb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfeff"/><stop offset="1" stop-color="#e3ecf9"/></linearGradient>
+<linearGradient id="ics" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4fb0ff"/><stop offset="1" stop-color="#1d6ced"/></linearGradient></defs>
+<rect width="56" height="56" rx="13" fill="url(#icsb)"/><circle cx="28" cy="28" r="17.5" fill="url(#ics)"/>
+<g stroke="#ffffff" stroke-opacity="0.75" stroke-width="1.1"><path d="M28 12.5v3M28 40.5v3M12.5 28h3M40.5 28h3"/></g>
+<path d="M37.5 18.5 30.3 30.3 25.7 25.7 Z" fill="#ff4b4b"/><path d="M18.5 37.5 25.7 25.7 30.3 30.3 Z" fill="#ffffff"/></svg>"""
+_IC_MSG = """<svg viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg"><defs>
+<linearGradient id="icm" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5ce27a"/><stop offset="1" stop-color="#12a94b"/></linearGradient></defs>
+<rect width="56" height="56" rx="13" fill="url(#icm)"/>
+<path d="M28 13.5c8.8 0 16 5.7 16 12.7S36.8 38.9 28 38.9c-1.9 0-3.7-.2-5.4-.7L15 41.8l2.7-6.3c-3.5-2.3-5.7-5.6-5.7-9.3 0-7 7.2-12.7 16-12.7Z" fill="#ffffff"/></svg>"""
+_IC_STORE = """<svg viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg"><defs>
+<linearGradient id="ica" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#31b3ff"/><stop offset="1" stop-color="#0a6ff0"/></linearGradient></defs>
+<rect width="56" height="56" rx="13" fill="url(#ica)"/>
+<path d="M28 16.5 20 39.5 M28 16.5 36 39.5 M22.8 32.5h10.4" stroke="#ffffff" stroke-width="3.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>"""
 
 # ---- config -----------------------------------------------------------------
 DEFAULT_PORT = 8777
@@ -2102,22 +2054,47 @@ header .advbtn{background:#1857b8}
 .langsw a{color:#cfe0ff;text-decoration:none;padding:0 2px}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
-.modal-ov{display:none;position:fixed;inset:0;z-index:50;background:#fff;color:#1a1a1a;align-items:center;justify-content:center;padding:28px 16px}
+.modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;background:linear-gradient(158deg,#3d6ff0 0%,#2b4fd8 46%,#0d8ec6 100%);color:#fff;align-items:center;justify-content:center;padding:30px 20px}
 .modal-ov.open{display:flex}
-@media(prefers-color-scheme:dark){.modal-ov{background:#15181d;color:#e7e9ec}}
-.modal{background:transparent;max-width:960px;width:100%;padding:12px 20px;position:relative;max-height:100%;overflow:auto;text-align:center}
-.modal-h{margin:0 0 10px;font-size:32px;font-weight:700;letter-spacing:-.01em}
-.modal-sub{margin:0 0 34px;color:#8a8f98;font-size:16px}
-.modal-ills{display:flex;gap:32px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
-.modal-ill{flex:1 1 380px;max-width:440px;margin:0}
-.illsvg{width:100%;height:auto;display:block;border:1px solid #e4e7eb;border-radius:14px;overflow:hidden;background:#f7f9fc}
-@media(prefers-color-scheme:dark){.illsvg{border-color:#2a2e35;background:#141720}}
-.modal-cap{font-size:14px;color:#444;margin-top:12px;text-align:center}
-@media(prefers-color-scheme:dark){.modal-cap{color:#cfd4db}}
-.modal-actions{display:flex;justify-content:center;margin-top:38px}
-.modal-primary{flex:0 0 auto;width:auto;min-width:300px;padding:16px 52px;border:0;border-radius:12px;background:#1f6feb;color:#fff;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 8px 22px rgba(31,111,235,.42)}
-.modal-primary:hover{background:#1a63d6}
-.modal-note{font-size:12px;color:#8a8f98;margin:16px 0 0;line-height:1.5}
+.modal-ov::before,.modal-ov::after{content:"";position:absolute;border-radius:50%;pointer-events:none;z-index:0}
+.modal-ov::before{width:480px;height:480px;top:-150px;left:5%;background:radial-gradient(circle at 35% 35%,rgba(255,255,255,.4),rgba(255,255,255,0) 68%)}
+.modal-ov::after{width:560px;height:560px;right:-140px;bottom:-200px;background:radial-gradient(circle at 60% 40%,rgba(94,234,212,.38),rgba(94,234,212,0) 70%)}
+@media(prefers-color-scheme:dark){.modal-ov{background:linear-gradient(158deg,#2c4dbb 0%,#20369b 46%,#0a6d9d 100%)}}
+.modal{position:relative;z-index:1;background:transparent;max-width:1020px;width:100%;padding:12px 8px;max-height:100%;overflow:auto;text-align:center}
+.modal-h{margin:0 0 12px;font-size:34px;font-weight:700;letter-spacing:-.02em;text-shadow:0 2px 14px rgba(10,25,80,.25)}
+.modal-sub{margin:0 0 42px;color:rgba(255,255,255,.8);font-size:16px}
+.modal-ills{display:flex;gap:48px;justify-content:center;align-items:stretch;flex-wrap:wrap}
+.modal-ill{flex:1 1 380px;max-width:460px;display:flex;flex-direction:column}
+.ill-stage{flex:1;min-height:236px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+.modal-cap{font-size:14px;color:rgba(255,255,255,.92);margin-top:18px;text-align:center}
+.modal-actions{display:flex;justify-content:center;margin-top:46px}
+.modal-primary{padding:16px 58px;border:0;border-radius:999px;background:#fff;color:#1c49cf;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 12px 34px rgba(6,18,64,.35);transition:transform .15s,box-shadow .15s}
+.modal-primary:hover{transform:translateY(-1px);box-shadow:0 16px 40px rgba(6,18,64,.42)}
+.modal-note{font-size:12px;color:rgba(255,255,255,.75);margin:18px 0 0;line-height:1.6}
+/* -- install screen: liquid-glass ⌘-Tab strap -- */
+.ct-strap{display:inline-flex;flex-direction:column;align-items:center;gap:12px;padding:20px 24px 14px;border-radius:30px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.4);box-shadow:0 18px 50px rgba(8,20,70,.35),inset 0 1px 0 rgba(255,255,255,.55);-webkit-backdrop-filter:blur(22px) saturate(1.7);backdrop-filter:blur(22px) saturate(1.7)}
+.ct-row{display:flex;align-items:center;gap:16px}
+.ct-ic{width:52px;height:52px;flex:none;filter:drop-shadow(0 5px 10px rgba(8,20,70,.28))}
+.ct-ic svg{display:block;width:100%;height:100%}
+.ct-sel{display:flex;padding:8px;border-radius:19px;background:rgba(255,255,255,.34);border:1px solid rgba(255,255,255,.65);box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
+.ct-name{font-size:12px;font-weight:600;color:#fff;letter-spacing:.01em;text-shadow:0 1px 6px rgba(10,30,90,.5)}
+.ct-keys{display:flex;gap:10px;justify-content:center}
+.ct-keys kbd{min-width:34px;padding:6px 13px;border-radius:9px;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.42);box-shadow:inset 0 1px 0 rgba(255,255,255,.5);color:#fff;font-size:12.5px;font-family:inherit;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+/* -- install screen: floating mini browser window -- */
+.ext-win{width:100%;max-width:410px;background:#fff;border-radius:16px;box-shadow:0 26px 60px rgba(6,16,60,.42);overflow:hidden;text-align:left;color:#3a3f47}
+.ext-top{display:flex;align-items:center;gap:7px;padding:11px 13px;background:#f2f4f7;border-bottom:1px solid #e6e9ef}
+.ext-dot{width:11px;height:11px;border-radius:50%;flex:none}
+.ext-url{flex:1;display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #e3e7ee;border-radius:999px;padding:4px 12px;font-size:11px;color:#6a7280;margin:0 6px;white-space:nowrap;overflow:hidden}
+.ext-puz{position:relative;width:26px;height:26px;border-radius:8px;background:#edf3ff;border:1px solid #d8e4ff;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.ext-puz i{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:#22c55e;border:1.5px solid #fff}
+.ext-body{position:relative;padding:44px 16px 18px}
+.ext-find{position:absolute;top:9px;right:12px;display:flex;align-items:center;gap:9px;background:#fff;border:1px solid #e0e4eb;border-radius:10px;padding:6px 11px;font-size:11px;color:#4a505a;box-shadow:0 8px 22px rgba(15,25,60,.14)}
+.ext-find b{color:#1f6feb;font-weight:600}
+.ext-find span{color:#9aa1ab}
+.ext-row{display:flex;align-items:center;gap:9px;margin:12px 0}
+.ext-av{width:20px;height:20px;border-radius:6px;flex:none}
+.ext-bar{height:9px;border-radius:5px;background:#e9edf2;flex:1}
+.ext-bar.hit{flex:none;width:54px;background:#ffe08a}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
@@ -2537,13 +2514,37 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         cur = cur_lang()
         parts = [(f'<b>{c}</b>' if c == cur else f'<a href="?lang={c}" data-lang="{c}">{c}</a>') for c in langs]
         langsw = f'<span class=langsw title="{esc(tr("language"))}">🌐 ' + " ".join(parts) + '</span>'
+    # the ⌘-Tab strap demo (CSS liquid glass) and a floating mini browser window
+    ill_cmdtab = (
+        '<div class=ill-stage><div class=ct-strap><div class=ct-row>'
+        f'<span class=ct-ic>{_IC_FINDER}</span>'
+        f'<span class=ct-ic>{_IC_SAFARI}</span>'
+        f'<span class=ct-sel><span class=ct-ic>{ICON_SVG}</span></span>'
+        f'<span class=ct-ic>{_IC_MSG}</span>'
+        f'<span class=ct-ic>{_IC_STORE}</span>'
+        '</div><div class=ct-name>AI Session Search</div></div>'
+        '<div class=ct-keys><kbd>&#8984;</kbd><kbd>tab &#8677;</kbd></div></div>')
+    ill_chrome = (
+        '<div class=ill-stage><div class=ext-win>'
+        '<div class=ext-top>'
+        '<span class=ext-dot style="background:#ff5f57"></span>'
+        '<span class=ext-dot style="background:#febc2e"></span>'
+        '<span class=ext-dot style="background:#28c840"></span>'
+        '<span class=ext-url>&#128274; 127.0.0.1:8777</span>'
+        '<span class=ext-puz>&#129513;<i></i></span>'
+        '</div><div class=ext-body>'
+        '<span class=ext-find>&#8984;F <b>docker</b><span>3/14</span></span>'
+        '<div class=ext-row><span class=ext-av style="background:#1f6feb"></span><span class=ext-bar style="max-width:58%"></span></div>'
+        '<div class=ext-row><span class=ext-av style="background:#8b5cf6"></span><span class=ext-bar style="max-width:34%"></span><span class="ext-bar hit"></span></div>'
+        '<div class=ext-row><span class=ext-av style="background:#0ea5e9"></span><span class=ext-bar style="max-width:66%"></span></div>'
+        '</div></div></div>')
     install_modal = (
         '<div id=installmodal class=modal-ov><div class=modal role=dialog aria-modal=true>'
         f'<h2 class=modal-h>{esc(tr("Almost done!"))}</h2>'
         f'<p class=modal-sub>{esc(tr("One last step — click Confirm to finish setting up the app."))}</p>'
         '<div class=modal-ills>'
-        f'<div class=modal-ill>{SVG_CMDTAB}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app."))}</div></div>'
-        f'<div class=modal-ill>{SVG_EXT}<div class=modal-cap>✓ {esc(tr("It is still Chrome inside — ⌘-F Find and your extensions keep working."))}</div></div>'
+        f'<div class=modal-ill>{ill_cmdtab}<div class=modal-cap>✓ {esc(tr("Shows up in ⌘-Tab and the Dock as its own app."))}</div></div>'
+        f'<div class=modal-ill>{ill_chrome}<div class=modal-cap>✓ {esc(tr("It is still Chrome inside — ⌘-F Find and your extensions keep working."))}</div></div>'
         '</div>'
         f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("Confirm"))}</button></div>'
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
