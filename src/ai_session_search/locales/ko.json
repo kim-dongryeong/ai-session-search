@@ -1,5 +1,5 @@
 {
-  "_comment": "Korean (한국어) locale for claude-code-history. Copy this file to <code>.json (e.g. ja.json) and translate the values to add a language. Keys are the English UI strings; leave a value unchanged (or drop the key) to fall back to English. Drop the file into the package's locales/ or into <CONFIG_DIR>/locales/ (~/.config/claude-code-history/locales or %APPDATA%\\claude-code-history\\locales) — no rebuild needed.",
+  "_comment": "Korean (한국어) locale for ai-session-search. Copy this file to <code>.json (e.g. ja.json) and translate the values to add a language. Keys are the English UI strings; leave a value unchanged (or drop the key) to fall back to English. Drop the file into the package's locales/ or into <CONFIG_DIR>/locales/ (~/.config/ai-session-search/locales or %APPDATA%\\ai-session-search\\locales) — no rebuild needed.",
 
   "🧑 You": "🧑 나",
   "⚙ Tool result": "⚙ 도구 결과",
@@ -132,7 +132,7 @@
   "No sessions.": "세션이 없습니다.",
   "No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under": "<code>&lt;프로젝트&gt;/&lt;uuid&gt;.jsonl</code> 세션 파일이 다음 폴더에 없습니다:",
   "Make sure this is a folder where Claude Code has run at least once, or add another folder with ➕ above.": "Claude Code를 한 번이라도 실행한 폴더인지 확인하거나, 위의 ➕ 추가로 다른 폴더를 불러오세요.",
-  "Claude Code History": "Claude Code 기록",
+  "AI Session Search": "AI 세션 검색",
 
   "Enter a query. Multiple words = all must match (AND), ": "검색어를 입력하세요. 여러 단어 = 모두 포함(AND), ",
   "&quot;quotes&quot; = exact phrase. Each word gets its own color. ": "\"따옴표\" = 정확한 구문. 각 단어는 색으로 구분됩니다. ",

@@ -14,8 +14,8 @@ event/error chips, structure minimap, per-session extracted-fact digest, code/di
 extraction with copy, per-project stats, in-app folder add/remove.
 
 Usage:
-    claude-code-history [PROJECTS_DIR] [--port 8777] [--open]
-    python3 -m claude_code_history [PROJECTS_DIR] [--port 8777]
+    ai-session-search [PROJECTS_DIR] [--port 8777] [--open]
+    python3 -m ai_session_search [PROJECTS_DIR] [--port 8777]
 
 Defaults to $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
 """
@@ -34,7 +34,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-__version__ = "2.4.0"
+__version__ = "3.0.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # One SVG, used as favicon and (rasterized by tooling) as the app icon.
@@ -78,9 +78,9 @@ SVG_EXT = """<svg viewBox="0 0 360 116" class=illsvg xmlns="http://www.w3.org/20
 # ---- config -----------------------------------------------------------------
 DEFAULT_PORT = 8777
 if os.name == "nt":
-    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude-code-history")
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ai-session-search")
 else:
-    CONFIG_DIR = os.path.expanduser("~/.config/claude-code-history")
+    CONFIG_DIR = os.path.expanduser("~/.config/ai-session-search")
 ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
 _ROOTLOCK = threading.Lock()
 
@@ -98,7 +98,7 @@ def load_locales():
     dirs = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales")]
     mp = getattr(sys, "_MEIPASS", None)           # PyInstaller bundle
     if mp:
-        dirs += [os.path.join(mp, "claude_code_history", "locales"), os.path.join(mp, "locales")]
+        dirs += [os.path.join(mp, "ai_session_search", "locales"), os.path.join(mp, "locales")]
     dirs.append(os.path.join(CONFIG_DIR, "locales"))
     for d in dirs:
         if not os.path.isdir(d):
@@ -1911,7 +1911,7 @@ SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <link rel="apple-touch-icon" href="/favicon.svg">
 <meta name="theme-color" content="#1f6feb">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Claude Code History">
+<meta name="apple-mobile-web-app-title" content="AI Session Search">
 <title>%%TITLE%%</title>
 <style>
 :root{color-scheme:light dark}
@@ -2249,17 +2249,17 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   });
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;
     if(ibtn)ibtn.style.display='';
-    try{if(!standalone&&!localStorage.getItem('cch:installtip')){localStorage.setItem('cch:installtip','1');openInstall();}}catch(_){}
+    try{if(!standalone&&!localStorage.getItem('aiss:installtip')){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
   });
   window.addEventListener('appinstalled',function(){if(ibtn)ibtn.style.display='none';closeInstall();});
   if(standalone&&ibtn)ibtn.style.display='none';
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
-  function starred(sid){try{return localStorage.getItem('cch:star:'+sid)==='1';}catch(_){return false;}}
+  function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
   document.addEventListener('click',function(e){
     var b=e.target.closest&&e.target.closest('.starbtn');
     if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
-      try{if(starred(sid))localStorage.removeItem('cch:star:'+sid);else localStorage.setItem('cch:star:'+sid,'1');}catch(_){}
+      try{if(starred(sid))localStorage.removeItem('aiss:star:'+sid);else localStorage.setItem('aiss:star:'+sid,'1');}catch(_){}
       document.querySelectorAll('.starbtn[data-sid="'+sid+'"]').forEach(paintStar);return;}
     // message permalink \u2192 copy full URL with #tN
     var pl=e.target.closest&&e.target.closest('.permalink');
@@ -2385,7 +2385,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         "%%FROM%%": esc(from_), "%%TO%%": esc(to),
         "%%ADVOPEN%%": "open" if adv_active else "", "%%ADVDOT%%": " ●" if adv_active else "",
         "%%HOMEHREF%%": home, "%%ROOTHIDDEN%%": hidden, "%%ROOTBAR%%": rootbar,
-        "%%HOMELABEL%%": esc(tr("Claude Code History")),
+        "%%HOMELABEL%%": esc(tr("AI Session Search")),
         "%%QPH%%": esc(tr('Search: words = AND · "exact phrase"  ( / key )')),
         "%%SCOPETITLE%%": esc(tr("search scope")), "%%SEARCHBTN%%": esc(tr("Search")),
         "%%ADVTITLE%%": esc(tr("advanced search (date range, …)")), "%%ADVLABEL%%": esc(tr("Tools")),
@@ -2462,7 +2462,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
-                "name": "Claude Code History", "short_name": "CC History",
+                "name": "AI Session Search", "short_name": "CC History",
                 "start_url": "/", "scope": "/", "display": "standalone",
                 "background_color": "#13151a", "theme_color": "#1f6feb",
                 "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml",
@@ -2650,7 +2650,7 @@ class H(BaseHTTPRequestHandler):
             head += (f'<div class=card><b>{tr("No sessions.")}</b>'
                      f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(root)}. '
                      + tr('Make sure this is a folder where Claude Code has run at least once, or add another folder with ➕ above.') + '</p></div>')
-        return shell(tr("Claude Code History"), head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+        return shell(tr("AI Session Search"), head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
@@ -3093,7 +3093,7 @@ def _warm_cache(root):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="claude-code-history",
+        prog="ai-session-search",
         description="Read-only local web viewer for Claude Code session transcripts.")
     ap.add_argument("root", nargs="?", default=None,
                     help="projects dir to browse (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
@@ -3134,7 +3134,7 @@ def main(argv=None):
         print(f"  \u26a0\ufe0f  Port {args.port} is in use — opening on a temporary port instead. (set one with --port)")
         srv = make_server(args.host, 0)
     url = f"http://{args.host}:{srv.server_address[1]}"
-    print(f"\n  Claude Code History v{__version__} → {url}")
+    print(f"\n  AI Session Search v{__version__} → {url}")
     print(f"  Browsing: {ROOT}" + (f"  (+{len(ROOTS)-1} more, switchable)" if len(ROOTS) > 1 else ""))
     print("  (close this window or press Ctrl-C to stop)\n")
     if args.open:
