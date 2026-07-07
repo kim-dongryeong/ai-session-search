@@ -1451,13 +1451,13 @@ def proj_label(item):
 def counts_html(n, system=False):
     total = (n.get("you", 0) + n.get("assistant", 0) + n.get("tool-result", 0)
              + n.get("system", 0) + n.get("subagent", 0))
-    parts = [f'<span class=cnt-chip title="{esc(tr("Total messages in this session — you + assistant + tool results + system"))}"><b>{total}</b> {tr("msgs")}</span>',
-             f'<span class=cnt-chip title="{esc(tr("You — messages you actually typed (not tool output or injected text)"))}">🧑 {n["you"]}</span>',
-             f'<span class=cnt-chip title="{esc(tr("Assistant — replies from the AI (Claude / Codex / Gemini)"))}">✦ {n["assistant"]}</span>',
-             f'<span class=cnt-chip title="{esc(tr("Tool results — output from Bash / Edit / Read / … calls"))}">⚙ {n["tool-result"]}</span>']
+    # one combined tooltip for the whole line (not a separate popup per number)
+    legend = tr("Total msgs = all messages · 🧑 you (typed) · ✦ assistant replies · "
+                "⚙ tool results (Bash/Edit/Read…) · ⓘ system / injected (not a human)")
+    parts = [f'<b>{total}</b> {tr("msgs")}', f'🧑 {n["you"]}', f'✦ {n["assistant"]}', f'⚙ {n["tool-result"]}']
     if system:
-        parts.append(f'<span class=cnt-chip title="{esc(tr("System / injected — reminders, IDE context, slash-command output (not a human)"))}">ⓘ {n["system"]}</span>')
-    return " · ".join(parts)
+        parts.append(f'ⓘ {n["system"]}')
+    return f'<span class=cnt-line title="{esc(legend)}">' + " · ".join(parts) + '</span>'
 
 def parse_query(q):
     """'foo bar "exact phrase"' → ['foo', 'bar', 'exact phrase'] (lowercased).
@@ -2312,11 +2312,12 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .provbadge.codex{background:#e2f4fb;color:#0b6a8f}
 .provbadge.claude{background:#e8f7ee;color:#157038}
 @media(prefers-color-scheme:dark){.provbadge.codex{background:#0e2c39;color:#7fcbe6}.provbadge.claude{background:#15331f;color:#7ddfa1}}
-.cnt-chip{cursor:help;border-bottom:1px dotted rgba(150,153,163,.5)}
-.copyval{cursor:pointer;border-radius:4px;padding:0 2px;transition:background .15s}
-.copyval:hover{background:rgba(31,111,235,.12)}
-.copyval.copied{background:rgba(38,190,110,.28)}
-.copyval.copied::after{content:" ✓";color:#189a55}
+.cnt-line{cursor:help;border-bottom:1px dotted rgba(150,153,163,.5)}
+.copybtn{cursor:pointer;opacity:.55;font-size:.92em;padding:1px 5px;border-radius:5px;user-select:none;white-space:nowrap}
+.copybtn:hover{opacity:1;background:rgba(31,111,235,.16)}
+.srow a.slink{display:inline-flex;align-items:center;gap:5px;color:#1f6feb;text-decoration:none;background:rgba(31,111,235,.1);border:1px solid rgba(31,111,235,.28);border-radius:7px;padding:2px 9px;font-weight:500}
+.srow a.slink:hover{background:rgba(31,111,235,.2)}
+.srow a.slink code{background:transparent;color:inherit;padding:0}
 .livepill{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:80;background:#1f6feb;color:#fff;border:0;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 28px rgba(15,25,60,.4)}
 .livepill:hover{background:#1a63d6}
 .starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
@@ -2507,10 +2508,11 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
   document.addEventListener('click',function(e){
-    // click-to-copy a value (session-id, path, resume command, …)
-    var cv=e.target.closest&&e.target.closest('.copyval');
-    if(cv){e.preventDefault();copyText((cv.textContent||'').trim());
-      cv.classList.add('copied');setTimeout(function(){cv.classList.remove('copied');},900);return;}
+    // click the 📋 icon to copy that value (session-id, path, resume command, …)
+    var cv=e.target.closest&&e.target.closest('.copybtn');
+    if(cv){e.preventDefault();copyText(cv.getAttribute('data-copy')||'');
+      var oc=cv.textContent;cv.textContent='✓';cv.classList.add('copied');
+      setTimeout(function(){cv.textContent=oc;cv.classList.remove('copied');},900);return;}
     var b=e.target.closest&&e.target.closest('.starbtn');
     if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
       try{if(starred(sid))localStorage.removeItem('aiss:star:'+sid);else localStorage.setItem('aiss:star:'+sid,'1');}catch(_){}
@@ -3188,31 +3190,33 @@ class H(BaseHTTPRequestHandler):
             return f'<div class=srow><span class=slbl>{lbl}</span><span class=sval>{val}</span></div>'
         proj = next((it["proj"] for it in get_index(rt) if it["path"] == path), "")
         cc = esc(tr("click to copy"))
+        def copyicon(text):   # a separate 📋 button so clicking the value itself can navigate/select
+            return f' <span class=copybtn data-copy="{esc(text)}" title="{cc}">📋</span>'
         mrows = []
         if workspace:
-            wcode = f'<code class="spath copyval" title="{cc}">{esc(workspace)}</code>'
-            if proj:  # 📂 (front) jumps to all sessions in this workspace; the path click-copies
+            if proj:  # click the path → jump to this workspace's sessions; 📋 = copy
                 ws_href = "/?" + urllib.parse.urlencode({"proj": proj, "root": rt})
-                ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">📂</a> {wcode}')
+                ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">'
+                          f'📂 <code class=spath>{esc(workspace)}</code></a>{copyicon(workspace)}')
             else:
-                ws_val = wcode
+                ws_val = f'<code class=spath>{esc(workspace)}</code>{copyicon(workspace)}'
             mrows.append(_srow("Workspace", ws_val))
         if started and started != workspace:
             mrows.append(_srow("Started in",
-                               f'<code class="spath copyval" title="{cc}">{esc(started)}</code>'
+                               f'<code class=spath>{esc(started)}</code>{copyicon(started)}'
                                f' <span class=hint>· {tr("folder the session started in (the file moved to a different workspace)")}</span>'))
-        mrows.append(_srow(tr("Session file"), f'<code class="spath copyval" title="{cc}">{esc(path)}</code>'))
-        mrows.append(_srow("session-id", f'<code class="sid copyval" title="{cc}">{esc(sid)}</code>'))
+        mrows.append(_srow(tr("Session file"), f'<code class=spath>{esc(path)}</code>{copyicon(path)}'))
+        mrows.append(_srow("session-id", f'<code class=sid>{esc(sid)}</code>{copyicon(sid)}'))
         if forked:
             pf = find_session_by_sid(rt, forked)
-            fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>'
-                  if pf else f'<code class="sid copyval" title="{cc}">{esc(forked)}</code> <span class=hint>· {tr("not in this folder")}</span>')
+            fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>{copyicon(forked)}'
+                  if pf else f'<code class=sid>{esc(forked)}</code>{copyicon(forked)} <span class=hint>· {tr("not in this folder")}</span>')
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
-            mrows.append(_srow("git", f'<code class="sid copyval" title="{cc}">{esc(meta["branch"])}</code>'))
-        resume = {"codex": f"codex resume {esc(sid)}", "claude": f"claude --resume {esc(sid)}"}.get(prov)
+            mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>{copyicon(meta["branch"])}'))
+        resume = {"codex": f"codex resume {sid}", "claude": f"claude --resume {sid}"}.get(prov)
         if resume:
-            mrows.append(_srow(tr("Resume"), f'<code class="sid copyval" title="{cc}">{resume}</code>'))
+            mrows.append(_srow(tr("Resume"), f'<code class=sid>{esc(resume)}</code>{copyicon(resume)}'))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
@@ -3248,8 +3252,10 @@ class H(BaseHTTPRequestHandler):
                      f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)}</summary>'
                      f'<div style="padding:8px 4px 2px">{sub_items}</div></details>')
 
-        # extracted-fact digest
+        # extracted-fact digest — collapsed by default; a compact stat line stays in the summary
         d = session_digest(turns)
+        stat_preview = (f'<span class=meta style="font-weight:400" title="{esc(tr("edits · commands · tests · errors · commits · web pages"))}">'
+                        f' — ✏️ {d["edits"]} · ❯ {d["cmds"]} · 🧪 {d["tests"]} · ⚠️ {d["errors"]} · ⎇ {len(d["commits"])} · 🌐 {d["webs"]}</span>')
         dl = []
         if any(meta["tok"].values()):
             tk = meta["tok"]
@@ -3258,8 +3264,6 @@ class H(BaseHTTPRequestHandler):
                       f'{tr("Cache write")} {tk["cw"]:,} · {tr("Cache read")} {tk["cr"]:,}</span></div>')
         if meta["models"]:
             dl.append(f'<div style="margin-bottom:6px"><b>{tr("Models")}</b> {models_badge(meta["models"])}</div>')
-        dl.append(f'✏️ {tr("edits")} {d["edits"]} ({len(d["files"])} {tr("files")}) · ❯ {tr("commands")} {d["cmds"]} · '
-                  f'🧪 {tr("tests")} {d["tests"]} · ⚠️ {tr("errors")} {d["errors"]} · ⎇ {tr("commits")} {len(d["commits"])} · 🌐 {tr("web")} {d["webs"]}')
         if d["files"]:
             dl.append(f'<div style="margin-top:7px"><b>{tr("Files touched")}</b> ' +
                       "".join(f'<span class=dfile>{esc(short_path(f))}</span>' for f in d["files"][:25]) +
@@ -3275,8 +3279,9 @@ class H(BaseHTTPRequestHandler):
         if d["prs"]:
             dl.append(f'<div style="margin-top:7px"><b>{tr("PRs / issues")}</b> ' +
                       "".join(f'<a class=dfile href="{esc(u)}" target=_blank>{esc(u)}</a>' for u in d["prs"][:10]) + '</div>')
-        digest = (f'<details class="card digest" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
-                  f'📊 {tr("Session summary (extracted facts)")}</summary><div style="margin-top:8px">{"".join(dl)}</div></details>')
+        digest = (f'<details class="card digest"><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
+                  f'📊 {tr("Session summary (extracted facts)")}{stat_preview}</summary>'
+                  f'<div style="margin-top:8px">{"".join(dl)}</div></details>')
         head += digest
 
         # in-session search box (always available)

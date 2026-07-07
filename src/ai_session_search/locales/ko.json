@@ -221,5 +221,7 @@
   "System / injected — reminders, IDE context, slash-command output (not a human)": "시스템 / 주입 — 리마인더·IDE 컨텍스트·슬래시명령 출력 (사람 아님)",
   "click to copy": "클릭해서 복사",
   "New messages": "새 메시지",
-  "load": "불러오기"
+  "load": "불러오기",
+  "Total msgs = all messages · 🧑 you (typed) · ✦ assistant replies · ⚙ tool results (Bash/Edit/Read…) · ⓘ system / injected (not a human)": "전체 msgs = 모든 메시지 · 🧑 나(직접 입력) · ✦ 어시스턴트 답변 · ⚙ 툴 결과(Bash/Edit/Read…) · ⓘ 시스템/주입(사람 아님)",
+  "edits · commands · tests · errors · commits · web pages": "수정 · 명령 · 테스트 · 오류 · 커밋 · 웹페이지"
 }
