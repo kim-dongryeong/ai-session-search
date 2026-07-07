@@ -219,7 +219,7 @@
   "Assistant — replies from the AI (Claude / Codex / Gemini)": "어시스턴트 — AI의 답변 (Claude / Codex / Gemini)",
   "Tool results — output from Bash / Edit / Read / … calls": "툴 결과 — Bash / Edit / Read / … 호출의 출력",
   "System / injected — reminders, IDE context, slash-command output (not a human)": "시스템 / 주입 — 리마인더·IDE 컨텍스트·슬래시명령 출력 (사람 아님)",
-  "click to copy": "클릭해서 복사",
+  "click to copy": "클릭하면 복사",
   "New messages": "새 메시지",
   "load": "불러오기",
   "Total msgs = all messages · 🧑 you (typed) · ✦ assistant replies · ⚙ tool results (Bash/Edit/Read…) · ⓘ system / injected (not a human)": "전체 msgs = 모든 메시지 · 🧑 나(직접 입력) · ✦ 어시스턴트 답변 · ⚙ 툴 결과(Bash/Edit/Read…) · ⓘ 시스템/주입(사람 아님)",
@@ -269,5 +269,11 @@
   "the request this came from": "이 코드가 나온 요청",
   "toggle: only my messages (same as chip 1)": "토글: 내 메시지만 (칩 1과 동일)",
   "toggle a filter chip (0 = All) — combine several": "필터 칩 토글 (0 = All) — 여러 개 조합 가능",
-  "back to the conversation": "대화로 돌아가기"
+  "back to the conversation": "대화로 돌아가기",
+  "is available": "업데이트 가능",
+  "on": "현재",
+  "Download": "다운로드",
+  "What's new": "변경사항",
+  "dismiss": "닫기",
+  "copied ✓": "복사됨 ✓"
 }

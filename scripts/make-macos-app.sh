@@ -1,16 +1,22 @@
 #!/bin/bash
-# Build a lightweight "Claude Code History.app" (and optional .dmg) for macOS.
+# Build a lightweight "AI Session Search.app" (and optional .dmg) for macOS.
 #
-# It does NOT bundle Python — it launches the pipx/pip-installed `claude-code-history`
-# (falling back to `python3 -m claude_code_history` from this checkout). The target
-# machine just needs Python 3.10+, which any Claude Code machine already has.
+# This is the lightweight, NON-PyInstaller local build option. It does NOT bundle
+# Python — it launches the pipx/pip-installed `ai-session-search` / `aiss` command
+# (falling back to `python3 -m ai_session_search` from this checkout). The target
+# machine just needs Python 3.10+, which any AI-coding machine already has. For the
+# self-contained, signed+notarized bundle, use the GitHub `release` workflow instead.
 #
-#   ./scripts/make-macos-app.sh          → build dist/Claude Code History.app
-#   ./scripts/make-macos-app.sh --dmg    → also build dist/claude-code-history.dmg
+#   ./scripts/make-macos-app.sh          -> build dist/AI Session Search.app
+#   ./scripts/make-macos-app.sh --dmg    -> also build dist/ai-session-search.dmg
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
-APP="dist/Claude Code History.app"
+APP="dist/AI Session Search.app"
+
+# Read the version straight from the package so it never goes stale.
+VERSION="$(python3 -c "import sys;sys.path.insert(0,'src');import ai_session_search.app as a;print(a.__version__)")"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -20,11 +26,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Claude Code History</string>
-  <key>CFBundleDisplayName</key><string>Claude Code History</string>
-  <key>CFBundleIdentifier</key><string>com.kdr.claude-code-history</string>
-  <key>CFBundleVersion</key><string>1.2.0</string>
-  <key>CFBundleShortVersionString</key><string>1.2.0</string>
+  <key>CFBundleName</key><string>AI Session Search</string>
+  <key>CFBundleDisplayName</key><string>AI Session Search</string>
+  <key>CFBundleIdentifier</key><string>com.kimdongryeong.ai-session-search</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>launch</string>
   <key>CFBundleIconFile</key><string>icon</string>
@@ -38,15 +44,17 @@ cat > "$APP/Contents/MacOS/launch" <<'LAUNCH'
 # Prefer an installed console script; fall back to running from the dev checkout.
 PORT=8777
 URL="http://127.0.0.1:$PORT"
+# Already running? Just focus the browser and exit.
 if curl -s -o /dev/null "$URL" 2>/dev/null; then open "$URL"; exit 0; fi
-if command -v claude-code-history >/dev/null 2>&1; then
-  ( sleep 1; open "$URL" ) & exec claude-code-history --port "$PORT"
-fi
+# Let the app open the browser itself (--open); exec so it stays the foreground process.
+for CMD in ai-session-search aiss ass; do
+  if command -v "$CMD" >/dev/null 2>&1; then exec "$CMD" --open --port "$PORT"; fi
+done
 REPO="__REPO__"
-if [ -f "$REPO/claude-code-history.py" ]; then
-  ( sleep 1; open "$URL" ) & exec /usr/bin/env python3 "$REPO/claude-code-history.py" --port "$PORT"
+if [ -d "$REPO/src/ai_session_search" ]; then
+  exec /usr/bin/env PYTHONPATH="$REPO/src" python3 -m ai_session_search --open --port "$PORT"
 fi
-osascript -e 'display alert "Claude Code History" message "claude-code-history 명령을 찾을 수 없습니다.\n먼저 설치하세요:\n\npipx install git+ssh://git@github.com/kim-dongryeong/claude-code-history.git"'
+osascript -e 'display alert "AI Session Search" message "The ai-session-search command was not found.\nInstall it first:\n\npipx install ai-session-search"'
 LAUNCH
 # bake the checkout path in as a fallback
 /usr/bin/sed -i '' "s#__REPO__#$REPO#" "$APP/Contents/MacOS/launch"
@@ -54,14 +62,14 @@ chmod +x "$APP/Contents/MacOS/launch"
 
 # refresh icon cache
 touch "$APP"
-echo "built: $APP"
+echo "built: $APP  (v$VERSION)"
 
 if [ "${1:-}" = "--dmg" ]; then
-  DMG="dist/claude-code-history.dmg"; rm -f "$DMG"
+  DMG="dist/ai-session-search.dmg"; rm -f "$DMG"
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname "Claude Code History" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "AI Session Search" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   rm -rf "$STAGE"
   echo "built: $DMG  (drag the app onto Applications)"
 fi

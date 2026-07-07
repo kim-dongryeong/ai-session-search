@@ -38,7 +38,7 @@ packages = ["ai_session_search"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-ai_session_search = ["locales/*.json"]
+ai_session_search = ["locales/*.json", "demo/**/*.jsonl"]
 
 [tool.setuptools.dynamic]
 version = { attr = "ai_session_search.app.__version__" }

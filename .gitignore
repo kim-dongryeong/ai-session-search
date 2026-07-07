@@ -7,6 +7,8 @@ __pycache__/
 # never commit actual transcripts or copied .claude data
 **/.claude/
 *.jsonl
+# …EXCEPT the bundled synthetic demo dataset (no real data — powers `aiss --demo`)
+!src/ai_session_search/demo/**/*.jsonl
 
 # build artifacts
 build/

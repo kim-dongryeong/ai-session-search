@@ -1,258 +1,306 @@
-# ai-session-search  (`aiss`)
+<div align="center">
 
-A **read-only, stdlib-only** local web viewer for browsing and searching your **Claude
-Code**, **Codex**, and **Gemini CLI** session transcripts (the JSONL under
-`~/.claude/projects/`, `~/.codex/sessions/`, and `~/.gemini/tmp/`). No dependencies, no
-build step, no database — just Python ≥ 3.9.
+# AI Session Search
 
-It exists to answer one question reliably: **who actually said what?** In both agents'
-transcript formats, most `role:"user"` lines are *not* the human — they are tool
-results, system reminders, IDE/environment context, slash-command output,
-task-notifications, agent-history, autonomous-loop prompts, or subagent briefs. This
-viewer uses an empirically audited + adversarially verified ruleset (per provider) so
-only genuinely human-typed text is labelled **🧑 You**; everything else gets its own
-category, folded by default.
+**Search everything you and your AI coding agents have ever done — and let your next agent look it up.**
 
-## Download (no Python needed)
+A local, read-only, **zero-dependency** viewer + full-text search engine for your
+**Claude Code**, **Codex**, and **Gemini CLI** transcripts. It's the only one that knows
+which words were *actually yours*.
 
-Grab a double-click bundle from the [**latest release**](https://github.com/kim-dongryeong/ai-session-search/releases/latest) — it starts the local server and opens the app in your browser. Nothing is uploaded; it reads your transcripts on your machine.
+[**⬇ Download**](https://github.com/kim-dongryeong/ai-session-search/releases/latest) ·
+[**🏠 Homepage**](https://kim-dongryeong.github.io) ·
+[Features](#-feature-tour) ·
+[For coding agents](#-for-coding-agents-mcp--cli--api--skill) ·
+[How attribution works](#-how-attribution-works)
 
-| OS | File | Notes |
+[![Release](https://img.shields.io/github/v/release/kim-dongryeong/ai-session-search?label=release&color=1061b7)](https://github.com/kim-dongryeong/ai-session-search/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab)
+![Dependencies: none](https://img.shields.io/badge/dependencies-0-2ea44f)
+![Providers: Claude · Codex · Gemini](https://img.shields.io/badge/providers-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini-8a9dff)
+
+![keyboard-driven tour](docs/screenshots/demo.gif)
+
+</div>
+
+---
+
+## The one thing every other viewer gets wrong
+
+Open any Claude Code / Codex / Gemini transcript and most lines are labelled `role: "user"`.
+**Almost none of them are you.** They're tool results, injected IDE/editor context, system
+reminders, task-notifications, slash-command output, subagent briefs, autonomous-loop
+prompts. In a real session **~95% of `role:user` lines are machine noise** — and every other
+viewer renders them verbatim, as if you'd typed them.
+
+AI Session Search uses an **empirically audited + adversarially verified ruleset** (one per
+provider) so only text a human genuinely typed is marked **🧑 You**. Everything else gets its
+own category and is folded away. That one fix is what makes search, reading, and agent recall
+land on *real intent* instead of transcript exhaust.
+
+<div align="center">
+
+![session view — correct attribution, tool blocks, diffs](docs/screenshots/hero-session.png)
+
+</div>
+
+---
+
+## ⬇ Download — no Python required
+
+Grab a build from the [**latest release**](https://github.com/kim-dongryeong/ai-session-search/releases/latest),
+double-click, and it opens in your browser. The server runs **on your machine** — nothing is
+uploaded, ever.
+
+| OS | File | How to run |
 |---|---|---|
-| macOS (Apple Silicon) | `…-macos-arm64.dmg` | open the dmg, drag to Applications |
-| macOS (Intel) | `…-macos-x86_64.dmg` | |
-| Windows | `…-windows-x64.zip` | unzip, run `ai-session-search.exe` |
-| Linux | `…-linux-x86_64.tar.gz` | `tar xzf …`, run `./ai-session-search` |
+| **macOS** (Apple Silicon) | `ai-session-search-macos-arm64.dmg` | Open the dmg → drag to Applications → launch. |
+| **macOS** (Intel) | `ai-session-search-macos-x86_64.dmg` | same |
+| **Windows** | `ai-session-search-windows-x64.exe` | Download → **double-click**. |
+| **Linux** | `ai-session-search-linux-x86_64.tar.gz` | `tar xzf …` → `./ai-session-search` |
 
-> Unsigned builds trip Gatekeeper/SmartScreen: on macOS right-click → **Open** the first time; on Windows click **More info → Run anyway**. (Signed/notarized macOS builds ship once the signing cert is configured.)
+> **Windows shows "Windows protected your PC"?** That's SmartScreen being cautious about a
+> brand-new open-source app (it isn't code-signed yet). Click **More info → Run anyway** — it's
+> safe and the source is right here. The warning fades as more people download it.
+> On macOS, the notarized `.dmg` opens cleanly; an un-notarized build just needs a right-click → **Open** the first time.
 
-## Install & run (with Python)
-
-**Run from a checkout (no install):**
+**Prefer the terminal?** One command, then try it on bundled sample data:
 
 ```bash
-python3 ai-session-search.py                 # compatibility shim at the repo root
-# or
-python3 -m ai_session_search                 # with src/ on PYTHONPATH
+pipx install ai-session-search          # once it's on PyPI
+# or install straight from GitHub (works today):
+pipx install git+https://github.com/kim-dongryeong/ai-session-search.git
+
+aiss --demo            # opens a browser on a synthetic Claude+Codex+Gemini dataset
+aiss                   # …then point it at your real ~/.claude, ~/.codex, ~/.gemini history
 ```
 
-**Install as a command (pipx / uv / pip):**
+---
 
-```bash
-pipx install git+ssh://git@github.com/kim-dongryeong/ai-session-search.git
-# or: uvx --from git+ssh://git@github.com/kim-dongryeong/ai-session-search.git ai-session-search
-# or: pip install .
+## ✨ Feature tour
 
-ai-session-search                            # browse ~/.claude/projects
-ai-session-search ~/Downloads/.claude/projects --port 8778 --open
-ai-session-search --version
-```
+### 🔎 Full-text search that actually finds things
 
-**macOS app:** `./scripts/make-macos-app.sh` builds `dist/AI Session Search.app` (icon in
-Dock/Finder, double-click, no lingering terminal); add `--dmg` for a draggable
-`dist/ai-session-search.dmg`. It doesn't bundle Python — it just launches the installed
-`ai-session-search`. Or use the plain `ai-session-search.command` (starts server + opens browser).
+Relevance-ranked, per-term color highlighting, matches **within a turn**, across **nearby
+turns** (proximity), or **anywhere in a session** — so a clue spread across three messages is
+still found. It searches message text, tool-call arguments (Bash commands, file paths), *and*
+code bodies (a `Write`'s content, an `Edit`'s diff). Field queries: `file:` `cmd:` `code:`
+`error:` `role:me` `id:<uuid>`, plus `-exclude` and `"exact phrase"`.
 
-**Windows:** everything is stdlib-only and cross-platform (config lives in
-`%APPDATA%\ai-session-search`, the default root is `%USERPROFILE%\.claude\projects`).
-Install with `pip install .` (or pipx) and run `ai-session-search --open`, **or**
-double-click **`ai-session-search.cmd`** in a checkout — it uses the installed command if
-present, else falls back to `python`/`py` on the repo shim, and passes an optional port
-(`ai-session-search.cmd 9000`). The Windows build is covered by CI (`windows-latest`).
+![search with per-term highlighting across turns](docs/screenshots/search.png)
 
-### Which distribution form?
+### 🗂️ One place for Claude Code, Codex, and Gemini
 
-| Form | Command | When |
-|---|---|---|
-| **pipx / uvx** (recommended) | `pipx install git+ssh://…/ai-session-search.git` | Any OS with Python 3.9+ and git. One command, `pipx upgrade` to update. |
-| **macOS .app / .dmg** | `./scripts/make-macos-app.sh --dmg` | Want a Dock icon + double-click on a Mac. Thin wrapper over the installed CLI. |
-| **`.command` double-click** (macOS) | ship `ai-session-search.py` + `.command` | Zero-build, copy the folder. |
-| **`.cmd` double-click** (Windows) | ship `ai-session-search.py` + `.cmd` | Zero-build on Windows; falls back to `python`/`py`. |
+Auto-discovers `~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp`, each parsed with
+the same attribution rigor and shown with a provider badge, model mix, token totals, and a
+resume command. Grouped by workspace; click a column to sort per-project stats.
 
-**Requirement:** Python **3.9+**. Note Claude Code itself is a *Node* app, so a machine
-with transcripts does **not** necessarily have Python — Windows has none by default, and
-macOS only ships `python3` (3.9) if the Xcode Command Line Tools are installed. On such a
-machine, install Python once (`brew install python`, python.org, or `xcode-select
---install`) before `pipx`.
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/provider-codex.png" alt="Codex sessions + project stats"></td>
+<td width="50%"><img src="docs/screenshots/provider-gemini.png" alt="Gemini sessions + tokens"></td>
+</tr>
+</table>
 
-The `scripts/make-macos-app.sh` `.dmg` above is a thin `.app` (≈90 KB) that execs an
-*installed* `ai-session-search` — it needs Python. For **zero-Python, double-click**
-distribution, use the self-contained bundles from [Releases](#download-no-python-needed)
-instead — built with PyInstaller by the `release` workflow on tag push (per-OS,
-macOS signed/notarized when the signing secrets are configured).
+### 🧩 Code & diff extraction
 
-Defaults: binds `127.0.0.1` only (never exposed to the network; `--host` warns if you
-change it), reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, and
-auto-discovers `~/Downloads/.claude/projects` (copied-from-another-machine data) in the
-in-app **📁 folder switcher**. Add any other folder at runtime by pasting its path
-(persisted in `~/.config/ai-session-search/roots.txt`), remove with ✕. Strictly read-only —
-it never writes to your transcripts.
+**🧩 Code only** re-gathers every generated code block and file edit in a session — yours *and*
+the agent's, each labelled and shown with a line of context — with one-click copy. Great for
+"what did we actually change?"
 
-## Features
+![code-only extraction with context and copy buttons](docs/screenshots/code-extraction.png)
 
-- **Claude Code + Codex + Gemini CLI** — auto-discovers `~/.claude/projects`,
-  `~/.codex/sessions` (🤖), and `~/.gemini/tmp` (♊). Each provider's schema is parsed
-  with the same attribution rigor (injected IDE/environment/agent-history context is
-  never shown as You), grouped by workspace, with a provider badge and resume command.
-  (agy/antigravity-cli's SQLite trajectory DBs are not yet supported.)
-- **Correct attribution** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call / ⚙ Tool result /
-  ⓘ System / 📋 Instruction / 🤖 Subagent; tooltips + an in-app legend (❓) explain
-  each; technical blocks folded by default.
-- **Markdown rendering** — message text renders as Markdown: GFM tables (with
-  alignment), fenced/inline code, headings, nested lists, blockquotes, bold/italic,
-  clickable links. Dependency-free renderer; raw HTML is always escaped (never
-  executed); `snake_case` survives; search highlighting stays inside text nodes.
-- **Pretty tool blocks** — `🔧 Bash` shows the command in a shell block + its
-  description; `Edit` shows a red/green old→new diff; `Read`/`Grep`/`Write` show the
-  file/pattern; a tool result splits `stdout`/`stderr` (stderr in red) instead of raw
-  JSON. Each fold summary previews the command/file so you can scan without expanding.
-- **Index** — real titles (`ai-title`/`custom-title`), project filter (by real `cwd`),
-  sort by date/my-messages/title/size (with direction toggle), per-session counts,
-  output-token totals + model mix, **session-id** per row, **🔁 build-loop chips**.
-- **Per-project stats** — sessions, my-participated sessions, my message count, total
-  size, my-session size, loop count; overview table + per-folder detail card.
-- **Full-text search** across all sessions — relevance-ranked, per-term colors,
-  highlighted snippets. Matches **within a turn**, **nearby turns** (proximity), or
-  **anywhere in a session** — so clues spread across turns are still found. Searches
-  message text, tool-call args (Bash commands, file paths), and **code bodies** (a
-  `Write`'s content, an `Edit`'s diff). Scopes: all / only-me / Claude / chat /
-  🧩 code / 🔧 commands. **Field queries** `file: cmd: code: error: role: id:`, plus
-  `-exclude` and `"exact phrase"`. **Search by session-id / reference** (UUID,
-  branched-from id, workspace path) too — exact id matches rank to the top.
-- **Session view** — per-message timestamps + per-turn tokens/model, 🧑 only-me filter,
-  in-session search, ⭐ star (browser-local), ◄ prev/next session, 🔗 per-message
-  permalink, **answer-thread** links, page size 100…10000/all, dark mode, and a
-  **📍 Session Reference card**: Workspace / Started-in / file / session-id /
-  Branched-from (linked) / `claude --resume`.
-- **Event/error chips** — ⚠️ errors / ✏️ edits / ❯ commands / ⎇ commits / 🧪 tests / 🔗 URL filters.
-- **Structure minimap** — right-edge rail (you/error/edit/command density), click to jump.
-- **Extracted-fact digest** — files touched, commands, tests, commits, PR links.
-  Deterministic, no LLM.
-- **Code/diff extraction** (`🧩 Code only`) — all generated code blocks + file edits with
-  one-click copy.
-- **Subagent threads** — sidechain/Task transcripts (incl. workflow agents) listed per
-  session and openable, orchestrator briefs clearly labelled 📋 (never "you").
-- **Agent access** — the same search engine is exposed to coding agents four ways: an
-  **MCP server** (`aiss --mcp`), a one-shot **CLI** (`aiss --search/--get/--sessions`),
-  a **JSON HTTP API** (`/api/search`, `/api/session`, `/api/sessions`, `/api/roots`),
-  and a drop-in **skill**. So your agent can recall how *you* solved something before,
-  instead of re-deriving it. See [For coding agents](#for-coding-agents-mcp--cli--api--skill).
+### ⌨️ Built for the keyboard
 
-## Keyboard
+Gmail-style navigation: `j`/`k` move through the session list or between sessions, `n`/`p` jump
+between *your* messages, `Enter` opens the answer thread, digit keys toggle filter chips, `/`
+searches everything, `f` finds within the session, `s` stars, `c` flips to code-only. Press
+`?` for the full map.
 
-- `/` focus search · `Esc` blur
-- `j` / `k` (or `n` / `p`) jump between **my** messages · `Enter` open that question's
-  answer thread
+<table>
+<tr>
+<td width="55%"><img src="docs/screenshots/keyboard.png" alt="keyboard shortcuts overlay"></td>
+<td width="45%"><img src="docs/screenshots/dark-mode.png" alt="dark mode"></td>
+</tr>
+</table>
 
-## Language
+### …and the rest
 
-The UI is **English by default** and fully translatable — switch live with the 🌐 picker
-in the header (it remembers your choice via a cookie). A **Korean (한국어)** locale ships
-built in.
+- **Correct attribution everywhere** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call /
+  ⚙ Tool result / ⓘ System / 📋 Instruction / 🤖 Subagent, with an in-app legend. Technical
+  blocks fold by default; a `🔧 Bash` shows the command, an `Edit` shows a red/green diff.
+- **Markdown rendering** — GFM tables, fenced/inline code, lists, links; raw HTML always
+  escaped; dependency-free renderer that doesn't choke on 20k-line sessions.
+- **Extracted-fact digest** — files touched, commands, tests, commits, PR links, memory
+  writes. Deterministic, no LLM.
+- **Subagent threads** — sidechain/Task transcripts (including workflow agents) listed per
+  session and openable; orchestrator briefs clearly labelled 📋 (never "you").
+- **Live updates** — new messages append in place, chat-style, without a reload.
+- **⭐ Stars that survive a machine change** — saved to a local file, with export/import.
+- **Per-project stats**, event/error chips (⚠️ ❯ ⎇ 🧪 🔗), a structure minimap, dark mode,
+  and a fixed status-bar breadcrumb.
+- **In-app updates** — a slim bar tells you when a newer release exists (see [Privacy](#-privacy)).
+- **`aiss --demo`** — a bundled synthetic dataset (all three providers, with tool calls,
+  diffs, a subagent, commits, a branched session) so you can explore every feature without
+  touching your real history. It's what these screenshots show.
 
-**Add your own language** (no rebuild): copy `src/ai_session_search/locales/ko.json` to
-`<code>.json` (e.g. `ja.json`, `fr.json`) and translate the values — the keys are the
-English UI strings; leave a value unchanged or omit a key to fall back to English. Drop
-the file into either:
+---
 
-- the package's `locales/` directory, or
-- your config dir — `~/.config/ai-session-search/locales/` (macOS/Linux) or
-  `%APPDATA%\ai-session-search\locales\` (Windows).
+## 🤖 For coding agents (MCP / CLI / API / skill)
 
-Pick a default with `--lang ja` or `CCH_LANG=ja`. PRs adding locales are welcome.
+Your past sessions are a memory your coding agent doesn't have. AI Session Search exposes its
+search engine so an agent can look up *how you actually solved something before* — across all
+three providers, with the same correct attribution (`role:me` is only text you really typed),
+over **faithful transcripts with no embeddings, no database, no indexing step**. All local,
+all read-only.
 
-## For coding agents (MCP / CLI / API / skill)
+**Query language** (every interface): words are AND-ed and matched nearby; `"quoted phrase"`;
+field filters `file:` `cmd:` `code:` `error:` `role:me` `id:<uuid>`; `-word` excludes; scopes
+`all | human | claude | chat | code | tool`.
 
-Your past sessions are a memory your coding agent doesn't have. This exposes the search
-engine so an agent can look up *how you actually did something* before re-solving it —
-across Claude Code, Codex, and Gemini, with the same correct attribution (`role:me` is
-only text you really typed). Everything is local and read-only.
+<details open>
+<summary><b>MCP server</b> — stdio, stdlib-only, no web server</summary>
 
-**Query language** (all four interfaces): words are AND-ed and matched nearby; `"quoted
-phrase"`; field filters `file:` `cmd:` `code:` `error:` `role:me` `id:<uuid>`; `-word`
-excludes; scopes `all | human | claude | chat | code | tool`.
-
-### MCP server
-
-Runs on stdio, stdlib-only, no web server. Tools: `search_sessions(query, scope?,
-limit?)`, `get_session(sid | path, limit?)`, `list_recent_sessions(provider?, limit?)`.
+Tools: `search_sessions(query, scope?, limit?)`, `get_session(sid | path, limit?)`,
+`list_recent_sessions(provider?, limit?)`.
 
 ```bash
 # Claude Code:
 claude mcp add ai-session-search -- aiss --mcp
 ```
-
 ```jsonc
-// or any MCP client (mcp.json / config):
+// or any MCP client:
 { "mcpServers": { "ai-session-search": { "command": "aiss", "args": ["--mcp"] } } }
 ```
+</details>
 
-### CLI (no server, great for a Bash tool)
+<details>
+<summary><b>CLI</b> — one-shot, no server (great as an agent's Bash tool)</summary>
 
 ```bash
 aiss --search 'cmd:pyinstaller locales' --scope tool --limit 10
 aiss --search 'role:me windows encoding' --json      # machine-readable
-aiss --get <session-id>                              # full session as text
-aiss --sessions --limit 20                           # recent sessions
+aiss --get <session-id>                               # full session as text
+aiss --sessions --limit 20                            # recent sessions
 ```
+</details>
 
-### JSON HTTP API
-
-While a server is running (default `:8777`):
+<details>
+<summary><b>JSON HTTP API</b> — while a server is running</summary>
 
 ```bash
 curl -s 'http://127.0.0.1:8777/api/search?q=windows+encoding&scope=all&limit=10'
 curl -s 'http://127.0.0.1:8777/api/session?sid=<session-id>'
 curl -s 'http://127.0.0.1:8777/api/sessions?limit=20'
 curl -s 'http://127.0.0.1:8777/api/roots'
-# the web search page can also emit JSON: /search?format=json&q=…
 ```
+</details>
 
-### Skill
+<details>
+<summary><b>Skill</b> — teaches an agent <i>when</i> to search past sessions</summary>
 
-A ready-to-use skill (teaches an agent *when* to search past sessions) lives in
-[`skills/search-past-sessions/`](skills/search-past-sessions/SKILL.md). Copy it into your
-agent's skills directory (e.g. `~/.claude/skills/`).
+Copy [`skills/search-past-sessions/`](skills/search-past-sessions/SKILL.md) into your agent's
+skills directory (e.g. `~/.claude/skills/`).
+</details>
 
-## Development
+---
+
+## 🔒 Privacy
+
+AI Session Search reads your most private developer data — your entire AI coding history — so
+it is built to keep it that way:
+
+- **Local only.** Binds `127.0.0.1`; the server never leaves your machine. Nothing is uploaded.
+- **Read-only.** It parses transcripts; it can't write to, delete, or resume a session.
+- **Zero dependencies, no telemetry, no accounts.** Stdlib Python — nothing phones home…
+- **…with exactly one exception, opt-out:** the update check. When enabled (default), at most
+  once a day it makes a plain, unauthenticated `GET` to the public GitHub *releases* endpoint to
+  see if a newer version exists. It sends **no identifiers and no transcript content** — just
+  the request. Turn it off with `AISS_NO_UPDATE_CHECK=1`.
+
+---
+
+## 📦 Install & run (with Python)
 
 ```bash
-python3 -m unittest discover -s tests -v   # 97 tests: attribution + markdown/tools + i18n + HTTP smoke
+# From a checkout, no install:
+python3 ai-session-search.py            # compatibility shim at the repo root
+python3 -m ai_session_search            # with src/ on PYTHONPATH
+
+# As a command (pipx recommended; also uv / pip):
+pipx install ai-session-search                                              # from PyPI
+pipx install git+https://github.com/kim-dongryeong/ai-session-search.git    # from GitHub (works today)
+uvx ai-session-search
+pip install ai-session-search
+
+aiss                                    # browse ~/.claude/projects (+ Codex + Gemini)
+aiss --demo                             # bundled sample data
+aiss ~/Downloads/.claude/projects --port 8778 --open
+aiss --version
 ```
 
-CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package
-and checks the `ai-session-search` entry point. The attribution tests are the contract:
-**no machine-authored line may ever be classified as 🧑 You.**
+Defaults: binds `127.0.0.1` only, reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`,
+and auto-discovers Codex, Gemini, and copied-from-another-machine data in the in-app **📁 folder
+switcher**. Add any folder at runtime by pasting its path.
 
-Layout: the whole app is one module (`src/ai_session_search/app.py`) by design — stdlib
-only, no framework. `ai-session-search.py` at the repo root is a thin shim for
-`python3 ai-session-search.py` muscle memory.
+**Build a local macOS `.app`:** `./scripts/make-macos-app.sh --dmg` (a thin ~90 KB wrapper over
+the installed `aiss`; needs Python). For a **zero-Python** app, use the notarized bundles from
+[Releases](#-download--no-python-required).
 
-## How attribution works
+**Requirement:** Python **3.9+**. Note Claude Code is a *Node* app, so a machine with
+transcripts doesn't necessarily have Python (Windows has none by default). The native downloads
+above bundle their own, so anyone can run them.
 
-See `classify_line` in `src/ai_session_search/app.py`. A genuine human message is a
-`type:"user"` line that is **not** a tool result (`toolUseResult`/`tool_result` block),
-**not** `isMeta`/`isCompactSummary`/`promptSource==system`, **not** a
-`<task-notification>`/`<command-*>`/`<system-reminder>`/`Caveat:` wrapper, **not** an
-autonomous build-loop persona (start-anchored match), and **not** `isSidechain`.
-Co-located `<ide_opened_file>`/`<system-reminder>` blocks are folded away so the human's
-actual text still renders.
+---
+
+## 🌐 Language
+
+English by default, fully translatable — switch live with the 🌐 header picker (remembered via a
+cookie). A **Korean (한국어)** locale ships built in. Add your own with no rebuild: copy
+`src/ai_session_search/locales/ko.json` to `<code>.json`, translate the values (keys are the
+English strings), and drop it in the package `locales/` dir or your config dir. PRs adding
+locales are very welcome.
+
+---
+
+## 🔬 How attribution works
+
+See `classify_line` in [`src/ai_session_search/app.py`](src/ai_session_search/app.py). A genuine
+human message is a `type:"user"` line that is **not** a tool result
+(`toolUseResult`/`tool_result`), **not** `isMeta`/`isCompactSummary`/`promptSource==system`,
+**not** a `<task-notification>`/`<command-*>`/`<system-reminder>`/`Caveat:` wrapper, **not** an
+autonomous build-loop persona, and **not** `isSidechain`. Co-located
+`<ide_opened_file>`/`<system-reminder>` blocks are folded away so the human's real text still
+renders. Codex and Gemini get their own precision-first rulesets. **The attribution tests are
+the contract: no machine-authored line may ever be classified as 🧑 You.**
+
+---
+
+## 🛠️ Development
+
+```bash
+python3 -m unittest discover -s tests -v   # attribution + markdown/tools + i18n + HTTP + API/MCP
+```
+
+CI runs the suite on Ubuntu/macOS/Windows × Python 3.9/3.14, then installs the package and checks
+the `aiss` entry point. The whole app is one stdlib-only module
+(`src/ai_session_search/app.py`) by design — no framework, no runtime dependencies, ever. See
+[`docs/RELEASING.md`](docs/RELEASING.md) for how releases are cut, signed, and notarized, and
+[`scripts/gen_demo.py`](scripts/gen_demo.py) for the `--demo` dataset.
+
+## 🙌 Contributing
+
+Issues and PRs welcome — especially new UI locales and attribution edge cases (attach a
+*redacted* JSONL line). Keep it **stdlib-only**. Run the tests before opening a PR.
 
 ## Non-goals
 
-No embeddings/semantic search, no LLM summarization, no heavy client-side syntax
-highlighters (they freeze on 20k-line sessions), no database. Bookmarks/aliases, if
-added, will use `localStorage` only.
-
-## Contributing
-
-Issues and PRs welcome — especially new UI locales (see [Language](#language)) and
-attribution edge cases (attach a redacted JSONL line). Keep it **stdlib-only**: no runtime
-dependencies, ever. Run `python3 -m unittest discover -s tests` before opening a PR.
+No embeddings/semantic search, no LLM summarization, no heavy client-side syntax highlighters
+(they freeze on 20k-line sessions), no database, no cloud.
 
 ## License
 
-[GPL-3.0-or-later](LICENSE). This is a finished end-user tool, distributed free — copyleft
-keeps every fork and derivative open too (you can use, modify, sell, and self-host it, but
-if you distribute a modified version you must share its source under the GPL). Ideas and
-algorithms aren't covered by copyright — only the code is.
+[GPL-3.0-or-later](LICENSE). A finished end-user tool, distributed free — copyleft keeps every
+fork and derivative open too. You can use, modify, sell, and self-host it; if you distribute a
+modified version you must share its source under the GPL.
