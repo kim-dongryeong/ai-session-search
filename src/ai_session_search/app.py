@@ -218,8 +218,8 @@ def root_for_path(p):
 
 def active_root(v):
     return v if v in ROOTS else ROOT
-DEFAULT_LIM = 500
-LIM_OPTIONS = [100, 250, 500, 1000, 2000, 5000, 10000]
+DEFAULT_LIM = 10000
+LIM_OPTIONS = [1000, 2000, 5000, 10000, 20000, 50000]
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 INJECT_PREFIXES = ("<ide_opened_file>", "<ide_selection>", "<system-reminder>", "<command-", "<task-notification>")
@@ -1449,7 +1449,10 @@ def proj_label(item):
     return short_path(item.get("cwd") or "") or item.get("proj", "")
 
 def counts_html(n, system=False):
-    parts = [f'<span title="{esc(tr("Messages you sent"))}">🧑 {n["you"]}</span>',
+    total = (n.get("you", 0) + n.get("assistant", 0) + n.get("tool-result", 0)
+             + n.get("system", 0) + n.get("subagent", 0))
+    parts = [f'<span title="{esc(tr("total messages in this session"))}"><b>{total}</b> {tr("msgs")}</span>',
+             f'<span title="{esc(tr("Messages you sent"))}">🧑 {n["you"]}</span>',
              f'<span title="{esc(tr("Claude (assistant) replies"))}">✦ {n["assistant"]}</span>',
              f'<span title="{esc(tr("Tool results (Bash/Edit/Read …)"))}">⚙ {n["tool-result"]}</span>']
     if system:
@@ -2159,6 +2162,9 @@ table.stab{border-collapse:collapse;width:100%;margin-top:8px;font-size:12.5px}
 table.stab th,table.stab td{text-align:right;padding:4px 8px;border-bottom:1px solid #e8ebef}
 table.stab th:first-child,table.stab td:first-child{text-align:left}
 table.stab thead th{color:#8a8f98;font-weight:600;cursor:help}
+table.stab thead th.sortable{cursor:pointer}
+table.stab thead th.sortable:hover{color:#1f6feb;text-decoration:underline}
+table.stab thead th .sarr{color:#1f6feb}
 table.stab td a{color:#1f6feb;text-decoration:none}
 table.stab tr.tot td{font-weight:700;border-top:2px solid #cdd2d8;border-bottom:0}
 @media(prefers-color-scheme:dark){table.stab th,table.stab td{border-color:#2a2e35}}
@@ -2437,6 +2443,28 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   });
   window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';closeInstall();});
   if(installed()&&ibtn)ibtn.style.display='none';
+  // Project-stats table: click a column header to sort (client-side; Total row stays last)
+  document.querySelectorAll('table.stab thead th.sortable').forEach(function(th){
+    th.style.cursor='pointer';
+    th.addEventListener('click',function(){
+      var table=th.closest('table'), tb=table.tBodies[0];
+      var idx=[].indexOf.call(th.parentNode.children, th);
+      var tot=tb.querySelector('tr.tot');
+      var rows=[].slice.call(tb.querySelectorAll('tr:not(.tot)'));
+      var asc=th.getAttribute('data-asc')!=='1';
+      table.querySelectorAll('th').forEach(function(h){h.removeAttribute('data-asc');var a=h.querySelector('.sarr');if(a)a.remove();});
+      th.setAttribute('data-asc',asc?'1':'0');
+      rows.sort(function(a,b){
+        var ca=a.children[idx], cb=b.children[idx];
+        var va=ca.getAttribute('data-v'), vb=cb.getAttribute('data-v'), r;
+        if(va!==null&&vb!==null){r=(parseFloat(va)||0)-(parseFloat(vb)||0);}
+        else{r=(ca.textContent||'').trim().localeCompare((cb.textContent||'').trim());}
+        return asc?r:-r;
+      });
+      rows.forEach(function(r){tb.insertBefore(r,tot);});
+      var s=document.createElement('span');s.className='sarr';s.textContent=asc?' ▲':' ▼';th.appendChild(s);
+    });
+  });
   // copy the current page's URL (the installed app has no address bar to copy from)
   var cpu=document.getElementById('copyurl');
   if(cpu)cpu.addEventListener('click',function(){
@@ -2846,23 +2874,28 @@ class H(BaseHTTPRequestHandler):
             for p, s in sorted(proj_stats.items(), key=lambda kv: -kv[1]["tok"]["out"]):
                 lc = f'🔁 {s["loop"]}' if s["loop"] else ""
                 ov.append(f'<tr><td><a href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a></td>'
-                          f'<td>{s["sessions"]}</td><td>{s["my_sessions"]}</td><td>{s["my_msgs"]}</td>'
-                          f'<td title="{esc(_toktip(s["tok"]))}">{fmt_tok(s["tok"]["out"])}</td>'
+                          f'<td data-v="{s["sessions"]}">{s["sessions"]}</td>'
+                          f'<td data-v="{s["my_sessions"]}">{s["my_sessions"]}</td>'
+                          f'<td data-v="{s["my_msgs"]}">{s["my_msgs"]}</td>'
+                          f'<td data-v="{s["tok"]["out"]}" title="{esc(_toktip(s["tok"]))}">{fmt_tok(s["tok"]["out"])}</td>'
                           f'<td class=mdlcell>{models_badge(s["models"])}</td>'
-                          f'<td>{fmt_size(s["size"])}</td><td>{lc}</td></tr>')
+                          f'<td data-v="{s["size"]}">{fmt_size(s["size"])}</td>'
+                          f'<td data-v="{s["loop"]}">{lc}</td></tr>')
             tot = agg_stats(all_items)
-            table = (f'<table class=stab><thead><tr><th>{tr("Project (folder)")}</th><th title="{esc(tr("session count"))}">{tr("Sessions")}</th>'
-                     f'<th title="{esc(tr("sessions a human joined"))}">{tr("My part")}</th><th title="{esc(tr("my total messages"))}">{tr("My msgs")}</th>'
-                     f'<th title="{esc(tr("output (generated) tokens. hover = full input/output/cache breakdown"))}">{tr("Out tokens")}</th>'
+            table = (f'<table class=stab><thead><tr><th class=sortable>{tr("Project (folder)")}</th>'
+                     f'<th class=sortable title="{esc(tr("session count"))}">{tr("Sessions")}</th>'
+                     f'<th class=sortable title="{esc(tr("sessions a human joined"))}">{tr("My part")}</th>'
+                     f'<th class=sortable title="{esc(tr("my total messages"))}">{tr("My msgs")}</th>'
+                     f'<th class=sortable title="{esc(tr("output (generated) tokens. hover = full input/output/cache breakdown"))}">{tr("Out tokens")}</th>'
                      f'<th title="{esc(tr("models used in this folder and response counts"))}">{tr("Models")}</th>'
-                     f'<th title="{esc(tr("total size of all sessions"))}">{tr("Size")}</th>'
-                     f'<th title="{esc(tr("autonomous build-loop sessions"))}">🔁</th></tr></thead><tbody>' + "".join(ov)
+                     f'<th class=sortable title="{esc(tr("total size of all sessions"))}">{tr("Size")}</th>'
+                     f'<th class=sortable title="{esc(tr("autonomous build-loop sessions"))}">🔁</th></tr></thead><tbody>' + "".join(ov)
                      + f'<tr class=tot><td>{tr("Total")} {len(by)} {tr("folders")}</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
                      f'<td>{tot["my_msgs"]}</td><td title="{esc(_toktip(tot["tok"]))}">{fmt_tok(tot["tok"]["out"])}</td>'
                      f'<td class=mdlcell>{models_badge(tot["models"])}</td><td>{fmt_size(tot["size"])}</td>'
                      f'<td>{tot["loop"] or ""}</td></tr></tbody></table>')
             statsblock = (f'<details class="card" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
-                          f'📊 {tr("Project stats")} ({len(by)} {tr("folders")}) · {tr("by output tokens")}</summary>{table}'
+                          f'📊 {tr("Project stats")} ({len(by)} {tr("folders")}) · {tr("click a column header to sort")}</summary>{table}'
                           f'<p class=meta style="padding:0 4px">💡 {tr("Cache-read tokens are reused each turn (cheap) — ")}'
                           f'{tr("gauge real usage by output/input/cache-write.")}</p></details>')
 
@@ -3188,8 +3221,13 @@ class H(BaseHTTPRequestHandler):
                       "".join(f'<span class=dfile>{esc(short_path(f))}</span>' for f in d["files"][:25]) +
                       (f'<span class=meta>… +{len(d["files"])-25} {tr("more")}</span>' if len(d["files"]) > 25 else "") + '</div>')
         if d["commits"]:
-            dl.append(f'<div style="margin-top:7px"><b>{tr("Commits")}</b> ' +
-                      "".join(f'<span class=dfile>⎇ {esc(c)}</span>' for c in d["commits"][:12]) + '</div>')
+            seen = {}
+            for c in d["commits"]:
+                seen[c] = seen.get(c, 0) + 1        # dedupe identical commits → show ×count
+            items = "".join(f'<span class=dfile>⎇ {esc(c)}{(" ×"+str(k)) if k > 1 else ""}</span>'
+                            for c, k in list(seen.items())[:12])
+            more = f'<span class=meta>… +{len(seen)-12} {tr("more")}</span>' if len(seen) > 12 else ""
+            dl.append(f'<div style="margin-top:7px"><b>{tr("Commits")}</b> ({len(d["commits"])}) {items}{more}</div>')
         if d["prs"]:
             dl.append(f'<div style="margin-top:7px"><b>{tr("PRs / issues")}</b> ' +
                       "".join(f'<a class=dfile href="{esc(u)}" target=_blank>{esc(u)}</a>' for u in d["prs"][:10]) + '</div>')
