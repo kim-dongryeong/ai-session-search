@@ -2321,6 +2321,7 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .hl3{background:#fbb6ce}.hl4{background:#ffc38a}.hl5{background:#cbb2f7}
 .hlkey{display:inline-block;font-size:11px;padding:0 6px;border-radius:3px;color:#000;margin-right:5px;font-weight:600}
 .msg.kfocus{outline:3px solid #1f6feb;outline-offset:2px}
+.card.rowfocus{outline:3px solid #1f6feb;outline-offset:1px}
 .msg:target{outline:3px solid #f59e0b;outline-offset:2px}
 .pg{display:flex;gap:10px;justify-content:center;margin:18px 0}
 .pg a{padding:7px 16px;border-radius:9px;background:#1f6feb;color:#fff;text-decoration:none;font-size:13px}
@@ -2440,6 +2441,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     document.querySelectorAll('.msg[data-tool]').forEach(function(m){m.classList.toggle('khide',toolsHidden);});
     var f=document.getElementById('convflag');if(f)f.style.display=toolsHidden?'inline':'none';}
   function toggleHelp(){var h=document.getElementById('kbhelp');if(h)h.classList.toggle('open');}
+  // thread-list (index/search) row navigation — Gmail-style j/k over session cards
+  var inSession=!!nk, rcur=-1;
+  function rrows(){return Array.prototype.slice.call(document.querySelectorAll('.card[data-sid]'));}
+  function focusRow(i){var a=rrows();if(!a.length)return;rcur=((i%a.length)+a.length)%a.length;
+    a.forEach(function(x){x.classList.remove('rowfocus');});var el=a[rcur];
+    el.classList.add('rowfocus');el.scrollIntoView({block:'center',behavior:'smooth'});}
+  function openRow(){var el=rrows()[rcur];var lk=el&&el.querySelector('a.t');if(lk)location.href=lk.href;}
+  function starNow(){var sb=inSession?document.querySelector('.starbtn'):(rcur>=0&&rrows()[rcur]&&rrows()[rcur].querySelector('.starbtn'));if(sb)sb.click();}
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
@@ -2456,14 +2465,18 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='KeyF'){var sb=document.querySelector('input[name=sq]');if(sb){e.preventDefault();sb.focus();sb.select();}return;}  // find in this session
     if(C==='KeyN'){if(ys().length){e.preventDefault();focusYou(cur+1);}return;}   // next my message
     if(C==='KeyP'){if(ys().length){e.preventDefault();focusYou(cur-1);}return;}   // prev my message
-    if(e.key==='Enter'&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;return;}
-    if(C==='KeyJ'){e.preventDefault();nav('data-nextsess');return;}               // next session
-    if(C==='KeyK'){e.preventDefault();nav('data-prevsess');return;}               // prev session
+    if(e.key==='Enter'){
+      if(inSession&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;return;}
+      if(!inSession){e.preventDefault();openRow();}return;}                       // open the focused list row
+    if(C==='KeyJ'){e.preventDefault();if(inSession)nav('data-prevsess');else focusRow(rcur+1);return;} // down / older
+    if(C==='KeyK'){e.preventDefault();if(inSession)nav('data-nextsess');else focusRow(rcur-1);return;} // up / newer
     if(C==='BracketRight'){e.preventDefault();nav('data-nextpage');return;}       // next page
     if(C==='BracketLeft'){e.preventDefault();nav('data-prevpage');return;}        // prev page
     if(C==='KeyM'){e.preventDefault();nav((nk&&nk.getAttribute('data-filt')==='human')?'data-showall':'data-onlyme');return;}
     if(C==='KeyT'){e.preventDefault();toggleTools();return;}                      // conversation only
-    if(C==='KeyU'){e.preventDefault();location.href='/';return;}                  // home
+    if(C==='KeyS'){e.preventDefault();starNow();return;}                         // toggle star
+    if(C==='KeyU'){e.preventDefault();nav('data-list');return;}                   // back to the session (thread) list
+    if(C==='KeyH'&&e.shiftKey){e.preventDefault();location.href='/';return;}      // home (all workspaces)
     if(C==='KeyG'){e.preventDefault();window.scrollTo({top:e.shiftKey?document.body.scrollHeight:0,behavior:'smooth'});return;}
   });
   // copy buttons (code view)
@@ -2739,18 +2752,19 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
         '</div></div>')
     kbrows = [
+        ("j / k", tr("down / up — session-list rows, or prev / next session")),
+        ("Enter", tr("open the focused session (or its answer thread)")),
         ("n / p", tr("next / previous message of yours")),
-        ("j / k", tr("next / previous session")),
-        ("[ / ]", tr("previous / next page")),
-        ("Enter", tr("open this question's answer thread")),
+        ("s", tr("toggle star")),
+        ("u", tr("back to the session list")),
         ("m", tr("toggle: only my messages")),
         ("t", tr("toggle: conversation only (hide tool calls/results)")),
+        ("[ / ]", tr("previous / next page")),
         ("g / G", tr("jump to top / bottom")),
-        ("/", tr("focus the search box (all sessions)")),
+        ("/", tr("search all sessions")),
         ("f", tr("find within THIS session")),
-        ("Esc", tr("exit in-session search / close")),
-        ("u", tr("back to home")),
-        ("?", tr("show / close this help")),
+        ("Shift + H", tr("home (all workspaces)")),
+        ("? / Esc", tr("this help / close")),
     ]
     kbhelp = ('<div id=kbhelp class=kbov><div class=kbcard role=dialog aria-modal=true>'
               f'<h3 style="margin:0 0 12px">⌨️ {esc(tr("Keyboard shortcuts"))}</h3><table class=kbtab>'
@@ -3549,6 +3563,7 @@ class H(BaseHTTPRequestHandler):
                    f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
                    f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
+                   f' data-list="{esc(("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/")}"'
                    f' data-filt="{esc(filt)}"></span>')
         return shell(meta["title"][:50], head + navkeys + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
 
