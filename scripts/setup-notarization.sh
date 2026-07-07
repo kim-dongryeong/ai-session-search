@@ -10,7 +10,7 @@
 #
 # What this DOES do, once you have that certificate installed in your login
 # keychain and exported to a .p12:
-#   1. find your "Developer ID Application" signing identity,
+#   1. detect or derive your "Developer ID Application" signing identity,
 #   2. collect the .p12 export + your Apple credentials,
 #   3. push all six secrets to the repo with `gh secret set`.
 #
@@ -43,6 +43,7 @@ echo
 command -v security >/dev/null 2>&1 || die "'security' not found — run this on macOS."
 command -v gh       >/dev/null 2>&1 || die "GitHub CLI (gh) is not installed — https://cli.github.com"
 command -v base64   >/dev/null 2>&1 || die "'base64' not found."
+command -v openssl  >/dev/null 2>&1 || die "'openssl' not found."
 
 echo "Checking GitHub CLI authentication..."
 gh auth status >/dev/null 2>&1 || die "not logged in to GitHub. Run: gh auth login"
@@ -60,9 +61,8 @@ while IFS= read -r line; do
 done < <(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" || true)
 
 if [ "${#IDS[@]}" -eq 0 ]; then
-  die "no 'Developer ID Application' identity found in your keychains.
-       Create one first (see docs/RELEASING.md), install it in your login
-       keychain, then re-run this script."
+  SIGN_IDENTITY=""
+  info "not found via security; will read it from the exported .p12 instead."
 elif [ "${#IDS[@]}" -eq 1 ]; then
   SIGN_IDENTITY="${IDS[0]}"
   info "found: $SIGN_IDENTITY"
@@ -101,6 +101,27 @@ P12_PATH="${P12_PATH% }"
 printf "Password you set on the .p12: "
 read -rs P12_PWD; echo
 [ -n "$P12_PWD" ] || die "empty .p12 password."
+
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+  P12_SUBJECT=$(
+    openssl pkcs12 -in "$P12_PATH" -clcerts -nokeys -passin "pass:$P12_PWD" 2>/dev/null \
+      | openssl x509 -noout -subject -nameopt RFC2253 2>/dev/null \
+      || true
+  )
+  [ -n "$P12_SUBJECT" ] || die "could not read the certificate from the .p12; check the file and password."
+
+  SIGN_IDENTITY=$(printf '%s\n' "$P12_SUBJECT" | sed -n 's/^subject=.*CN=\([^,]*\).*/\1/p')
+  if [ -z "$SIGN_IDENTITY" ]; then
+    printf "Could not read the signing identity name from the .p12 subject.\n"
+    printf "Type the exact certificate name (example: Developer ID Application: Dongryeong Kim (58V5P2LQ68)): "
+    read -r SIGN_IDENTITY
+  fi
+  case "$SIGN_IDENTITY" in
+    Developer\ ID\ Application:*) ;;
+    *) die "not a Developer ID Application identity: $SIGN_IDENTITY" ;;
+  esac
+  info "using: $SIGN_IDENTITY"
+fi
 echo
 
 # --- 3. Apple credentials for notarytool ------------------------------------

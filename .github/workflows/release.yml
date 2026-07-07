@@ -55,7 +55,7 @@ jobs:
         include:
           - os: macos-14
             asset: ai-session-search-macos-arm64.dmg
-          - os: macos-13
+          - os: macos-15-intel
             asset: ai-session-search-macos-x86_64.dmg
           - os: windows-latest
             asset: ai-session-search-windows-x64.exe
@@ -70,6 +70,8 @@ jobs:
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -209,6 +211,8 @@ jobs:
       id-token: write          # OIDC token for PyPI trusted publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
