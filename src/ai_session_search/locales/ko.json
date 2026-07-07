@@ -246,5 +246,12 @@
   "find within THIS session": "이 세션 안에서 찾기",
   "exit in-session search / close": "세션 내 검색 종료 / 닫기",
   "focus the search box (all sessions)": "검색창 포커스 (전체 세션)",
-  "show this workspace only": "이 워크스페이스만 보기"
+  "show this workspace only": "이 워크스페이스만 보기",
+  "down / up — session-list rows, or prev / next session": "아래 / 위 — 세션 목록 행, 또는 이전 / 다음 세션",
+  "open the focused session (or its answer thread)": "선택한 세션 열기 (또는 답변 스레드)",
+  "toggle star": "별표 토글",
+  "back to the session list": "세션 목록으로 돌아가기",
+  "search all sessions": "전체 세션 검색",
+  "home (all workspaces)": "홈 (모든 워크스페이스)",
+  "this help / close": "이 도움말 / 닫기"
 }
