@@ -255,5 +255,8 @@
   "home (all workspaces)": "홈 (모든 워크스페이스)",
   "this help / close": "이 도움말 / 닫기",
   "this folder": "이 폴더",
-  "this workspace": "이 워크스페이스"
+  "this workspace": "이 워크스페이스",
+  "✦ Agent": "✦ 에이전트",
+  "🧠 Memory": "🧠 메모리",
+  "code-only view ↔ conversation": "코드만 보기 ↔ 대화"
 }
