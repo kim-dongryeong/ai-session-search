@@ -239,5 +239,12 @@
   "show / close this help": "이 도움말 열기 / 닫기",
   "Keyboard shortcuts": "키보드 단축키",
   "conversation only — press t to show tools": "대화만 보기 — t를 누르면 툴 표시",
-  "all shortcuts": "전체 단축키"
+  "all shortcuts": "전체 단축키",
+  "in tool results / system": "툴 결과 / 시스템에서",
+  "hide tool results / system": "툴 결과 / 시스템 숨기기",
+  "No matches in the conversation (try “+… in tool results” above).": "대화에서 일치 없음 (위의 “+… 툴 결과”를 눌러보세요).",
+  "find within THIS session": "이 세션 안에서 찾기",
+  "exit in-session search / close": "세션 내 검색 종료 / 닫기",
+  "focus the search box (all sessions)": "검색창 포커스 (전체 세션)",
+  "show this workspace only": "이 워크스페이스만 보기"
 }
