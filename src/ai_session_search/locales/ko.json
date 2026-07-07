@@ -213,5 +213,13 @@
   "see all sessions in this workspace": "이 워크스페이스의 모든 대화 보기",
   "total messages in this session": "이 세션의 전체 메시지 수",
   "msgs": "메시지",
-  "click a column header to sort": "열 머리글을 클릭해 정렬"
+  "click a column header to sort": "열 머리글을 클릭해 정렬",
+  "Total messages in this session — you + assistant + tool results + system": "이 세션의 전체 메시지 수 — 나 + 어시스턴트 + 툴 결과 + 시스템",
+  "You — messages you actually typed (not tool output or injected text)": "나 — 내가 실제로 입력한 메시지 (툴 출력·주입된 텍스트 제외)",
+  "Assistant — replies from the AI (Claude / Codex / Gemini)": "어시스턴트 — AI의 답변 (Claude / Codex / Gemini)",
+  "Tool results — output from Bash / Edit / Read / … calls": "툴 결과 — Bash / Edit / Read / … 호출의 출력",
+  "System / injected — reminders, IDE context, slash-command output (not a human)": "시스템 / 주입 — 리마인더·IDE 컨텍스트·슬래시명령 출력 (사람 아님)",
+  "click to copy": "클릭해서 복사",
+  "New messages": "새 메시지",
+  "load": "불러오기"
 }
