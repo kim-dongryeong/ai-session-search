@@ -2495,10 +2495,10 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     var f=document.getElementById('convflag');if(f)f.style.display=toolsHidden?'inline':'none';}
   function toggleHelp(){var h=document.getElementById('kbhelp');if(h)h.classList.toggle('open');}
   // thread-list (index/search) row navigation — Gmail-style j/k over session cards
-  var inSession=!!nk, rcur=-1;
-  function rrows(){return Array.prototype.slice.call(document.querySelectorAll('.card[data-sid]'));}
+  var inSession=!!nk, rcur=-1, _rowcache=null, rprev=null;
+  function rrows(){if(!_rowcache)_rowcache=Array.prototype.slice.call(document.querySelectorAll('.card[data-sid]'));return _rowcache;}
   function focusRow(i){var a=rrows();if(!a.length)return;rcur=((i%a.length)+a.length)%a.length;
-    a.forEach(function(x){x.classList.remove('rowfocus');});var el=a[rcur];
+    if(rprev)rprev.classList.remove('rowfocus');var el=a[rcur];rprev=el;   // touch only the previous row, not all
     el.classList.add('rowfocus');el.scrollIntoView({block:'nearest'});}   // minimal scroll — not dizzying
   function openRow(){var el=rrows()[rcur];var lk=el&&el.querySelector('a.t');if(lk)location.href=lk.href;}
   function starNow(){var sb=inSession?document.querySelector('.starbtn'):(rcur>=0&&rrows()[rcur]&&rrows()[rcur].querySelector('.starbtn'));if(sb)sb.click();}
@@ -3209,7 +3209,14 @@ class H(BaseHTTPRequestHandler):
                   f'<a href="/api/stars.json" download>⬇ {tr("export")}</a> · '
                   f'<label class=favimp>⬆ {tr("import")}<input type=file id=starimport accept="application/json,.json" hidden></label>'
                   f' <span class=hint>{tr("kept on this machine; export to move to another computer")}</span></div>')
-        return shell(tr("AI Session Search"), head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+        # fixed bottom status bar — where you are (folder, and workspace when filtered)
+        if proj_filter:
+            crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": root})}" title="{esc(tr("this folder"))}">📁 {esc(short_path(root))}</a>'
+            crumb = (f'<div class=crumbs>{crumb_root} <span class=crumbsep>›</span> '
+                     f'<span class=crumbcur>📂 {esc(proj_cwd.get(proj_filter, proj_filter))}</span></div>')
+        else:
+            crumb = f'<div class=crumbs><span class=crumbcur>📁 {esc(short_path(root))}</span> <span class=hint>{len(items)} {tr("sessions")}</span></div>'
+        return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
@@ -3462,6 +3469,10 @@ class H(BaseHTTPRequestHandler):
             nl = (f'<a href="/session?p={urllib.parse.quote(nxt["path"])}">{tr("next")}: {esc(nxt["title"][:38])} →</a>'
                   if nxt else "")
             head += f'<div class="bar sessnav">{pl}{nl}</div>'
+            # prefetch the adjacent sessions so j/k feels instant (browser renders them in the background)
+            for _s in (prev, nxt):
+                if _s:
+                    head += f'<link rel=prefetch href="/session?p={urllib.parse.quote(_s["path"])}">'
         head += refcard + legend_html()
         # marker for the live-update poller (new messages appear without a manual reload)
         head += (f'<span id=livesess hidden data-p="{esc(path)}"'
@@ -3632,7 +3643,8 @@ class H(BaseHTTPRequestHandler):
             for c in t["tags"]:
                 if c in cc:
                     cc[c] += 1
-        CHIP_LBL = {"you": "🧑 My messages", "agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
+        # "you" is intentionally NOT a chip — the "🧑 Only me" toggle above already does that (server-side).
+        CHIP_LBL = {"agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
                     "memory": "🧠 Memory", "command": "❯ Commands", "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
         chips = [f'<div class=chips><button class=chip-f data-cat="*">{tr("All")}</button>']
         for c, lbl in CHIP_LBL.items():
