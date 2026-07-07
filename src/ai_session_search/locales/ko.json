@@ -77,7 +77,7 @@
   "Size": "용량",
   "autonomous build-loop": "자율 빌드루프",
   "Total": "총",
-  "sessions": "개 세션",
+  "sessions": "세션",
   "sessions I joined": "내가 참여한 세션",
   "my messages": "내 메시지",
   "Total size": "총 용량",
@@ -226,5 +226,18 @@
   "edits · commands · tests · errors · commits · web pages": "수정 · 명령 · 테스트 · 오류 · 커밋 · 웹페이지",
   "Memory note": "메모리 노트",
   "Memory notes written": "작성한 메모리 노트",
-  "edits (🧠 = agent-memory notes) · commands · tests · errors · commits · web pages": "수정 (🧠 = 에이전트 메모리 노트) · 명령 · 테스트 · 오류 · 커밋 · 웹페이지"
+  "edits (🧠 = agent-memory notes) · commands · tests · errors · commits · web pages": "수정 (🧠 = 에이전트 메모리 노트) · 명령 · 테스트 · 오류 · 커밋 · 웹페이지",
+  "next / previous message of yours": "내 다음 / 이전 메시지",
+  "next / previous session": "다음 / 이전 세션",
+  "previous / next page": "이전 / 다음 페이지",
+  "open this question's answer thread": "이 질문의 답변 스레드 열기",
+  "toggle: only my messages": "토글: 내 메시지만",
+  "toggle: conversation only (hide tool calls/results)": "토글: 대화만 (툴 호출/결과 숨김)",
+  "jump to top / bottom": "맨 위 / 맨 아래로",
+  "focus the search box": "검색창 포커스",
+  "back to home": "홈으로",
+  "show / close this help": "이 도움말 열기 / 닫기",
+  "Keyboard shortcuts": "키보드 단축키",
+  "conversation only — press t to show tools": "대화만 보기 — t를 누르면 툴 표시",
+  "all shortcuts": "전체 단축키"
 }

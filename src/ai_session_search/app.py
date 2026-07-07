@@ -2030,6 +2030,8 @@ def render_turn(gi, t, q="", thread_link=None):
     link = f'<a class=threadlink href="{thread_link}">{tr("↳ answer thread")}</a>' if thread_link else ""
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
+    if role != "you" and not any(k in ("text", "channel") for k, _ in segs):
+        data += ' data-tool="1"'    # non-prose (tool call/result/system) — hidable in "conversation only"
     cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
     extra = ""
     if role == "assistant":
@@ -2341,6 +2343,18 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .srow a.slink code{background:transparent;color:inherit;padding:0}
 .livepill{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:80;background:#1f6feb;color:#fff;border:0;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 28px rgba(15,25,60,.4)}
 .livepill:hover{background:#1a63d6}
+.msg.khide{display:none}
+#convflag{position:fixed;left:16px;bottom:16px;z-index:70;background:#6b3fb5;color:#fff;border-radius:999px;padding:7px 14px;font-size:12.5px;box-shadow:0 6px 18px rgba(15,25,60,.32)}
+.kbov{display:none;position:fixed;inset:0;z-index:90;background:rgba(10,15,25,.55);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);align-items:center;justify-content:center;padding:20px}
+.kbov.open{display:flex}
+.kbcard{background:#fff;color:#1a1a1a;border-radius:14px;padding:22px 26px;max-width:460px;width:100%;box-shadow:0 22px 60px rgba(0,0,0,.42)}
+@media(prefers-color-scheme:dark){.kbcard{background:#1b1e24;color:#e7e9ec}}
+.kbtab{width:100%;border-collapse:collapse;font-size:13.5px}
+.kbtab td{padding:5px 6px;border-bottom:1px solid #eef1f4}
+.kbtab td:first-child{width:104px;white-space:nowrap}
+@media(prefers-color-scheme:dark){.kbtab td{border-color:#2a2e35}}
+.kbtab kbd{background:#eef1f4;border:1px solid #d4d9e0;border-radius:5px;padding:1px 7px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+@media(prefers-color-scheme:dark){.kbtab kbd{background:#2a2e35;border-color:#3a3f47}}
 .starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
 .starbtn.on{color:#e6b800}
 .permalink{text-decoration:none;font-size:11px;opacity:.35;cursor:pointer}
@@ -2389,6 +2403,8 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 %%ROOTBAR%%
 <div class=wrap>%%BODY%%</div>
 %%INSTALLMODAL%%
+%%KBHELP%%
+<div id=convflag style="display:none">🧹 %%CONVONLY%%</div>
 <div id=minimap></div>
 <script>
 (function(){
@@ -2414,17 +2430,35 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var f=qb.form;setTimeout(function(){f.requestSubmit?f.requestSubmit():f.submit();},0);
     }
   });
+  var nk=document.getElementById('navkeys');
+  function nav(attr){var v=nk&&nk.getAttribute(attr);if(v)location.href=v;}
+  var toolsHidden=false;
+  function toggleTools(){toolsHidden=!toolsHidden;
+    document.querySelectorAll('.msg[data-tool]').forEach(function(m){m.classList.toggle('khide',toolsHidden);});
+    var f=document.getElementById('convflag');if(f)f.style.display=toolsHidden?'inline':'none';}
+  function toggleHelp(){var h=document.getElementById('kbhelp');if(h)h.classList.toggle('open');}
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
-    // use e.code (physical key) so shortcuts work under non-Latin keyboard layouts (Korean/…)
+    // e.code (physical key) so shortcuts work under non-Latin layouts (Korean/…)
     var C=e.code;
-    if((C==='Slash'||e.key==='/')&&!typing){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
-    if(e.key==='Escape'&&typing){e.target.blur();return;}
-    if(typing)return;
-    if(C==='KeyJ'||C==='KeyN'){if(ys().length){e.preventDefault();focusYou(cur+1);}}
-    else if(C==='KeyK'||C==='KeyP'){if(ys().length){e.preventDefault();focusYou(cur-1);}}
-    else if(e.key==='Enter'&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;}
+    if(e.key==='Escape'){var hp=document.getElementById('kbhelp');
+      if(hp&&hp.classList.contains('open')){hp.classList.remove('open');return;}
+      if(typing)e.target.blur();return;}
+    if(typing||e.metaKey||e.ctrlKey||e.altKey)return;
+    if(C==='Slash'&&e.shiftKey){e.preventDefault();toggleHelp();return;}          // ? = help
+    if(C==='Slash'){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
+    if(C==='KeyN'){if(ys().length){e.preventDefault();focusYou(cur+1);}return;}   // next my message
+    if(C==='KeyP'){if(ys().length){e.preventDefault();focusYou(cur-1);}return;}   // prev my message
+    if(e.key==='Enter'&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;return;}
+    if(C==='KeyJ'){e.preventDefault();nav('data-nextsess');return;}               // next session
+    if(C==='KeyK'){e.preventDefault();nav('data-prevsess');return;}               // prev session
+    if(C==='BracketRight'){e.preventDefault();nav('data-nextpage');return;}       // next page
+    if(C==='BracketLeft'){e.preventDefault();nav('data-prevpage');return;}        // prev page
+    if(C==='KeyM'){e.preventDefault();nav((nk&&nk.getAttribute('data-filt')==='human')?'data-showall':'data-onlyme');return;}
+    if(C==='KeyT'){e.preventDefault();toggleTools();return;}                      // conversation only
+    if(C==='KeyU'){e.preventDefault();location.href='/';return;}                  // home
+    if(C==='KeyG'){e.preventDefault();window.scrollTo({top:e.shiftKey?document.body.scrollHeight:0,behavior:'smooth'});return;}
   });
   // copy buttons (code view)
   document.addEventListener('click',function(e){
@@ -2683,7 +2717,25 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("Confirm"))}</button></div>'
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
         '</div></div>')
+    kbrows = [
+        ("n / p", tr("next / previous message of yours")),
+        ("j / k", tr("next / previous session")),
+        ("[ / ]", tr("previous / next page")),
+        ("Enter", tr("open this question's answer thread")),
+        ("m", tr("toggle: only my messages")),
+        ("t", tr("toggle: conversation only (hide tool calls/results)")),
+        ("g / G", tr("jump to top / bottom")),
+        ("/", tr("focus the search box")),
+        ("u", tr("back to home")),
+        ("? / Esc", tr("show / close this help")),
+    ]
+    kbhelp = ('<div id=kbhelp class=kbov><div class=kbcard role=dialog aria-modal=true>'
+              f'<h3 style="margin:0 0 12px">⌨️ {esc(tr("Keyboard shortcuts"))}</h3><table class=kbtab>'
+              + "".join(f'<tr><td><kbd>{esc(k)}</kbd></td><td>{esc(v)}</td></tr>' for k, v in kbrows)
+              + '</table></div></div>')
     repl = {
+        "%%KBHELP%%": kbhelp,
+        "%%CONVONLY%%": esc(tr("conversation only — press t to show tools")),
         "%%INSTALLMODAL%%": install_modal,
         "%%TITLE%%": esc(title), "%%BODY%%": body, "%%Q%%": esc(q),
         "%%SCOPEOPTS%%": scopeopts, "%%DAYSOPTS%%": daysopts,
@@ -3435,7 +3487,7 @@ class H(BaseHTTPRequestHandler):
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
                     + f'{tr("per page")} <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
                     + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · {tr("showing")} {len(page)}/{total} {tr("msgs")} · '
-                      f'<kbd>j</kbd>/<kbd>k</kbd> {tr("my messages")}, <kbd>Enter</kbd> {tr("answer thread")} · {tr("chips/minimap reflect the current page")}</span>'
+                      f'<kbd>n</kbd>/<kbd>p</kbd> {tr("my messages")} · <kbd>j</kbd>/<kbd>k</kbd> {tr("sessions")} · <kbd>?</kbd> {tr("all shortcuts")}</span>'
                     + '</form>')
         pg = []
         if lim is not None:
@@ -3444,7 +3496,15 @@ class H(BaseHTTPRequestHandler):
             if off + lim < total:
                 pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim)}">{tr("Next")} {min(lim, total-off-lim)} →</a>')
         pgbar = f'<div class=pg>{"".join(pg)}</div>' if pg else ""
-        return shell(meta["title"][:50], head + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
+        # targets for the keyboard shortcuts (j/k session, [/] page, m only-me toggle)
+        def _sh(s): return f'/session?p={urllib.parse.quote(s["path"])}' if s else ""
+        navkeys = ('<span id=navkeys hidden'
+                   f' data-prevsess="{esc(_sh(prev))}" data-nextsess="{esc(_sh(nxt))}"'
+                   f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
+                   f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
+                   f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
+                   f' data-filt="{esc(filt)}"></span>')
+        return shell(meta["title"][:50], head + navkeys + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
 
     # ---- subagent thread ----
     def subagent(self, path, parent="", q=""):
