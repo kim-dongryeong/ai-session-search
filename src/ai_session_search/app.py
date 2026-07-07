@@ -2287,6 +2287,7 @@ pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
  .dl.d-hunk{background:#23262d;color:#9aa0a8}}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
+details[open]>summary .foldcue{display:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
 mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:600}
 .hl0{background:#ffe27a}.hl1{background:#9ae6b4}.hl2{background:#9ecbff}
@@ -3164,9 +3165,10 @@ class H(BaseHTTPRequestHandler):
                 f'<div class=meta>{(tr("workflow")+" "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
                 f'{sb["n"]} {tr("messages")} · agent {esc(sb["agentId"][:10])}</div></div>'
                 for sb in subs)
-            head += (f'<details class=fold style="margin:10px 0;border:1px solid #d9c8f5;border-radius:11px" open>'
+            head += (f'<details class=fold style="margin:10px 0;border:1px solid #d9c8f5;border-radius:11px">'
                      f'<summary style="padding:9px 14px;color:#6b3fb5;font-weight:600">'
-                     f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)} — {tr("expand")}</summary>'
+                     f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)}'
+                     f' <span class=foldcue>— {tr("expand")}</span></summary>'
                      f'<div style="padding:0 12px 8px">{sub_items}</div></details>')
 
         # extracted-fact digest
