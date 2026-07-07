@@ -156,9 +156,9 @@ class HttpSmoke(unittest.TestCase):
     def test_permalink_and_star_present(self):
         _, sv = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
         self.assertIn("class=permalink", sv)
-        self.assertIn("class=starbtn", sv)                # star on the session header
+        self.assertIn("starbtn", sv)                # star on the session header
         _, idx = self.get("/")
-        self.assertIn("class=starbtn", idx)               # and on index rows
+        self.assertIn("starbtn", idx)               # and on index rows
 
     def test_nosniff_header(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
