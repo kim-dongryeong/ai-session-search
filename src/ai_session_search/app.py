@@ -773,13 +773,21 @@ def session_digest(turns):
 
 def extract_code(turns):
     arts = []
+    ctx = ""   # the most recent human message — "what was being worked on" for the blocks that follow
     for gi, t in enumerate(turns):
+        if t["role"] == "you":
+            prose = CODE_FENCE_RE.sub("", " ".join(x for k, x in t["segs"] if k in ("text", "channel")))
+            prose = " ".join(prose.split())
+            if prose:
+                ctx = prose
         for kind, txt in t["segs"]:
-            if kind == "text" and t["role"] == "assistant":
+            if kind == "text" and t["role"] in ("assistant", "you"):   # code you pasted counts too
+                who = "you" if t["role"] == "you" else "agent"
                 for m in CODE_FENCE_RE.finditer(txt):
                     body = m.group(2)
                     if body.strip():
-                        arts.append({"gi": gi, "label": (m.group(1) or "code"), "kind": "block", "body": body, "ts": t["ts"]})
+                        arts.append({"gi": gi, "label": (m.group(1) or "code"), "kind": "block",
+                                     "who": who, "ctx": ctx, "body": body, "ts": t["ts"]})
             elif kind == "tool_use":
                 name, inp = _toolinput(txt)
                 if name in EDIT_TOOLS:
@@ -793,7 +801,8 @@ def extract_code(turns):
                     else:
                         body = json.dumps(inp, ensure_ascii=False, indent=2)
                     if str(body).strip():
-                        arts.append({"gi": gi, "label": fp, "kind": "edit", "body": str(body), "ts": t["ts"]})
+                        arts.append({"gi": gi, "label": fp, "kind": "edit", "who": "agent",
+                                     "ctx": ctx, "body": str(body), "ts": t["ts"]})
     return arts
 
 # ---- per-file summary -------------------------------------------------------
@@ -2424,6 +2433,8 @@ kbd{background:#e7e9ec;border-radius:4px;padding:0 5px;font-size:11px;border:1px
 @media(prefers-color-scheme:dark){.codeart{border-color:#2a2e35}}
 .codehead{display:flex;justify-content:space-between;align-items:center;padding:5px 12px;background:#f0f1f3;font-size:12px;font-family:ui-monospace,Menlo,monospace}
 @media(prefers-color-scheme:dark){.codehead{background:#23262d;color:#cfd4db}}
+.codectx{padding:4px 12px;font-size:11.5px;color:#8a8f98;background:#fafbfc;border-bottom:1px solid #eef1f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(prefers-color-scheme:dark){.codectx{background:#191c22;border-color:#23262d}}
 .copy{cursor:pointer;border:0;background:#1f6feb;color:#fff;border-radius:6px;padding:3px 10px;font-size:11px}
 pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;max-height:520px;overflow:auto;background:#fafbfc}
 @media(prefers-color-scheme:dark){pre.code{background:#15171c;color:#dfe3e8}}
@@ -3597,11 +3608,17 @@ class H(BaseHTTPRequestHandler):
                    f'<span class=meta>{len(arts)} {tr("code/edit blocks")} · {tr("server")} {int((time.perf_counter()-t0)*1000)}ms<span id=perf></span></span></div>')
             body = []
             for a in arts:
-                lbl = ("✏️ " + short_path(a["label"])) if a["kind"] == "edit" else ("``` " + a["label"])
+                if a["kind"] == "edit":
+                    lbl = "✏️ " + short_path(a["label"])
+                else:
+                    lbl = ("🧑 " if a.get("who") == "you" else "✦ ") + "``` " + a["label"]
+                ctx = a.get("ctx", "")
+                ctxrow = (f'<div class=codectx title="{esc(tr("the request this came from"))}">💬 '
+                          f'{esc(ctx[:110])}{"…" if len(ctx) > 110 else ""}</div>' if ctx else "")
                 body.append(
                     f'<div class=codeart><div class=codehead><span><a href="{url(q=q)}#t{a["gi"]}" '
                     f'style="text-decoration:none">{esc(lbl)}</a> <span class=time>{fmt_ts_short(a["ts"])}</span></span>'
-                    f'<button class=copy>{tr("Copy")}</button></div><pre class=code>{esc(a["body"])}</pre></div>')
+                    f'<button class=copy>{tr("Copy")}</button></div>{ctxrow}<pre class=code>{esc(a["body"])}</pre></div>')
             return shell(meta["title"][:50], head + bar + ("".join(body) or f"<p class=meta>{tr('No code/edits.')}</p>"), q, root=rt)
 
         # ---- thread mode ----
