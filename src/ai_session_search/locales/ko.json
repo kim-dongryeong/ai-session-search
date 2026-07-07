@@ -263,5 +263,7 @@
   "export": "내보내기",
   "import": "가져오기",
   "kept on this machine; export to move to another computer": "이 컴퓨터에 저장됨; 다른 컴퓨터로 옮기려면 내보내기",
-  "star this session (kept on this machine — export/import to move)": "이 세션 별표 (이 컴퓨터에 저장 — 이동은 내보내기/가져오기)"
+  "star this session (kept on this machine — export/import to move)": "이 세션 별표 (이 컴퓨터에 저장 — 이동은 내보내기/가져오기)",
+  "this help": "이 도움말",
+  "step back: clear filter / exit search / close": "한 단계 뒤로: 필터 해제 / 검색 종료 / 닫기"
 }
