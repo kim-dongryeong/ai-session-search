@@ -2511,6 +2511,8 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       if(hp&&hp.classList.contains('open')){hp.classList.remove('open');return;}
       if(typing){e.target.blur();return;}
       var bf=document.querySelector('a.backfull');if(bf){location.href=bf.getAttribute('href');return;}  // exit in-session search
+      var af=document.querySelector('.chip-f.active');                      // a filter chip is active → back to All
+      if(af){var all=document.querySelector('.chip-f[data-cat="*"]');if(all)all.click();return;}
       return;}
     if(typing||e.metaKey||e.ctrlKey||e.altKey)return;
     if(C==='Slash'&&e.shiftKey){e.preventDefault();toggleHelp();return;}          // ? = help
@@ -2835,7 +2837,8 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         ("/", tr("search all sessions")),
         ("f", tr("find within THIS session")),
         ("Shift + H", tr("home (all workspaces)")),
-        ("? / Esc", tr("this help / close")),
+        ("?", tr("this help")),
+        ("Esc", tr("step back: clear filter / exit search / close")),
     ]
     kbhelp = ('<div id=kbhelp class=kbov><div class=kbcard role=dialog aria-modal=true>'
               f'<h3 style="margin:0 0 12px">⌨️ {esc(tr("Keyboard shortcuts"))}</h3><table class=kbtab>'
