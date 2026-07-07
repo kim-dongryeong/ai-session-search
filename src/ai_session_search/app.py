@@ -3646,9 +3646,8 @@ class H(BaseHTTPRequestHandler):
                     for i in range(gi, nxt)]
             ms = int((time.perf_counter() - t0) * 1000)
             bar = ('<div class=bar>'
-                   f'<a href="{url(filter="human", q=q)}">← {tr("Only-me list")}</a>'
-                   f'<a href="{url(q=q)}#t{gi}">{tr("see in full")}</a>'
-                   f'<span class=meta>🧑 {tr("question → answer thread")} ({nxt-gi}) · {tr("server")} {ms}ms<span id=perf></span></span></div>')
+                   f'<a class=backfull href="{url(goto=gi, q=q)}">← {tr("back to the conversation")}</a>'
+                   f'<span class=meta>🧑 {tr("question → answer thread")} ({nxt-gi}) · <kbd>Esc</kbd> {tr("back")} · {tr("server")} {ms}ms<span id=perf></span></span></div>')
             return shell(meta["title"][:50], head + bar + "".join(body), q, root=rt)
 
         # ---- normal / human-filtered + pagination ----
