@@ -76,7 +76,36 @@ if os.name == "nt":
 else:
     CONFIG_DIR = os.path.expanduser("~/.config/ai-session-search")
 ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
+STARS_FILE = os.path.join(CONFIG_DIR, "stars.json")   # starred session-ids, persisted per machine
 _ROOTLOCK = threading.Lock()
+_STARLOCK = threading.Lock()
+_STARS = set()
+
+def load_stars():
+    try:
+        with open(STARS_FILE, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return set(d if isinstance(d, list) else d.get("stars", []))
+    except (OSError, ValueError):
+        return set()
+
+def save_stars(stars):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(STARS_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"stars": sorted(stars)}, fh, ensure_ascii=False, indent=0)
+    except OSError:
+        pass
+
+def set_stars(sids, on):
+    """Star/unstar the given sids; persist; return the full starred set."""
+    global _STARS
+    with _STARLOCK:
+        s = set(_STARS)
+        (s.update if on else s.difference_update)(x for x in sids if x)
+        _STARS = s
+        save_stars(s)
+        return sorted(s)
 
 # ---- i18n -------------------------------------------------------------------
 # The UI is authored in English; the English string is its own translation key.
@@ -186,7 +215,8 @@ def normalize_root(path):
 
 def configure(primary_root=None, extra_roots=()):
     """(Re)initialize app state. Called by main(); tests call it directly."""
-    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS
+    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS
+    _STARS = load_stars()
     primary = os.path.abspath(os.path.expanduser(primary_root or default_primary_root()))
     DEFAULT_ROOTS = _discover_roots(primary, extra_roots)
     SAVED_ROOTS = [p for p in _load_saved() if p not in DEFAULT_ROOTS]
@@ -1470,6 +1500,12 @@ def counts_html(n, system=False):
         parts.append(f'ⓘ {n["system"]}')
     return f'<span class=cnt-line title="{esc(legend)}">' + " · ".join(parts) + '</span>'
 
+def star_btn(sid):
+    """A star toggle, pre-painted from the server-side starred set (persisted per machine)."""
+    on = sid in _STARS
+    return (f'<button class="starbtn{" on" if on else ""}" data-sid="{esc(sid)}"'
+            f' title="{esc(tr("star this session (kept on this machine — export/import to move)"))}">{"★" if on else "☆"}</button>')
+
 def parse_query(q):
     """'foo bar "exact phrase"' → ['foo', 'bar', 'exact phrase'] (lowercased).
     All terms must match (AND); quoted phrases match as a unit."""
@@ -2174,6 +2210,9 @@ a.chiplink:hover{background:#dbe5ff;color:#1f6feb}
 .psize select{padding:4px 8px;border-radius:7px}
 .hint{font-size:11.5px;color:#9aa0a8}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.favbar{font-size:12px;color:#8a8f98;margin:4px 0 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.favbar a,.favbar .favimp{color:#1f6feb;text-decoration:none;cursor:pointer}
+.favbar a:hover,.favbar .favimp:hover{text-decoration:underline}
 .chip-f{cursor:pointer;border:1px solid #d0d4da;background:#fff;color:#333;border-radius:14px;padding:3px 11px;font-size:12px}
 .chip-f.active{background:#1f6feb;color:#fff;border-color:#1f6feb}
 .chip-f .cnt{opacity:.6;margin-left:3px}
@@ -2610,9 +2649,24 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       }).catch(function(){});
     },4000);
   }
-  // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
-  function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
-  function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
+  // stars are server-side (persisted to CONFIG_DIR/stars.json), pre-painted on render
+  function paintStar(b,on){b.textContent=on?'\u2605':'\u2606';b.classList.toggle('on',on);}
+  // one-time migration of any old browser-local stars into the server file
+  try{var mig=[],i,k;for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k&&k.indexOf('aiss:star:')===0&&localStorage.getItem(k)==='1')mig.push(k.slice(10));}
+    if(mig.length){fetch('/api/star?sid='+encodeURIComponent(mig.join(','))+'&on=1').then(function(){
+      mig.forEach(function(s){try{localStorage.removeItem('aiss:star:'+s);}catch(_){}
+        document.querySelectorAll('.starbtn[data-sid="'+s+'"]').forEach(function(x){paintStar(x,true);});});});}
+  }catch(_){}
+  // import a stars file (merges into the server-side set)
+  var si=document.getElementById('starimport');
+  if(si)si.addEventListener('change',function(){var f=si.files&&si.files[0];if(!f)return;
+    var r=new FileReader();
+    r.onload=function(){try{var d=JSON.parse(r.result);var arr=Array.isArray(d)?d:((d&&d.stars)||[]);
+      arr=arr.filter(function(x){return typeof x==='string'&&x;});
+      if(arr.length){fetch('/api/star?sid='+encodeURIComponent(arr.join(','))+'&on=1').then(function(){location.reload();});}
+      else alert('No starred ids found in that file.');
+    }catch(_){alert('Not a valid stars JSON file.');}};
+    r.readAsText(f);});
   document.addEventListener('click',function(e){
     // click the 📋 icon to copy (for values that also have a click action, e.g. navigate)
     var cv=e.target.closest&&e.target.closest('.copybtn');
@@ -2624,9 +2678,9 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(cvv){e.preventDefault();copyText((cvv.textContent||'').trim());
       cvv.classList.add('copied');setTimeout(function(){cvv.classList.remove('copied');},900);return;}
     var b=e.target.closest&&e.target.closest('.starbtn');
-    if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
-      try{if(starred(sid))localStorage.removeItem('aiss:star:'+sid);else localStorage.setItem('aiss:star:'+sid,'1');}catch(_){}
-      document.querySelectorAll('.starbtn[data-sid="'+sid+'"]').forEach(paintStar);return;}
+    if(b){e.preventDefault();var sid=b.getAttribute('data-sid');var on=!b.classList.contains('on');
+      document.querySelectorAll('.starbtn[data-sid="'+sid+'"]').forEach(function(x){paintStar(x,on);});
+      fetch('/api/star?sid='+encodeURIComponent(sid)+'&on='+(on?1:0)).catch(function(){});return;}
     // message permalink \u2192 copy full URL with #tN
     var pl=e.target.closest&&e.target.closest('.permalink');
     if(pl){e.preventDefault();var url=location.href.split('#')[0]+pl.getAttribute('href');
@@ -2685,7 +2739,6 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   window.addEventListener('load',function(){
     var p=document.getElementById('perf');
     if(p&&window.performance){p.textContent=' \u00b7 browser render '+Math.round(performance.now())+'ms';}
-    document.querySelectorAll('.starbtn').forEach(paintStar);
     buildMinimap();
   });
 })();
@@ -2898,6 +2951,22 @@ class H(BaseHTTPRequestHandler):
                 st = os.stat(p)
                 return self._send_json({"mtime": st.st_mtime, "size": st.st_size})
             return self._send_json({"error": "not found"}, 404)
+        if u.path == "/api/star":
+            # star/unstar sessions (persisted to CONFIG_DIR/stars.json). sid may be comma-separated.
+            sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
+            if sfs in ("cross-site", "same-site"):
+                return self._send_json({"error": "cross-site rejected"}, 403)
+            sids = [s for s in (g("sid") or "").split(",") if s.strip()]
+            starred = set_stars(sids, g("on") == "1")
+            return self._send_json({"starred": starred, "count": len(starred)})
+        if u.path == "/api/stars.json":
+            b = json.dumps({"stars": sorted(_STARS)}, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="aiss-stars.json"')
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            return self.wfile.write(b)
         if u.path == "/api/session_tail":
             # render only the turns after `since` so the client can append them (live, no reload)
             p = g("p")
@@ -3117,7 +3186,7 @@ class H(BaseHTTPRequestHandler):
                     mdlbit = f' · <span class=mdl>{esc(sh)}</span>'
             rows.append(
                 f'<div class=card data-sid="{esc(it["sid"])}">'
-                f'<button class=starbtn data-sid="{esc(it["sid"])}">☆</button> '
+                f'{star_btn(it["sid"])} '
                 f'<a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
                 f'<div class=meta><a class="chip chiplink" href="{q(proj=it["proj"], sort=sort, dir=dir_)}" title="{esc(tr("show this workspace only"))}">{esc(proj_label(it))}</a> '
                 f'{counts_html(it["n"])}{tokbit}{mdlbit} · '
@@ -3133,7 +3202,11 @@ class H(BaseHTTPRequestHandler):
             head += (f'<div class=card><b>{tr("No sessions.")}</b>'
                      f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(root)}. '
                      + tr('Make sure this is a folder where Claude Code has run at least once, or add another folder with ➕ above.') + '</p></div>')
-        return shell(tr("AI Session Search"), head + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+        favbar = (f'<div class=favbar>⭐ <b>{len(_STARS)}</b> {tr("favorites")} · '
+                  f'<a href="/api/stars.json" download>⬇ {tr("export")}</a> · '
+                  f'<label class=favimp>⬆ {tr("import")}<input type=file id=starimport accept="application/json,.json" hidden></label>'
+                  f' <span class=hint>{tr("kept on this machine; export to move to another computer")}</span></div>')
+        return shell(tr("AI Session Search"), head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
@@ -3366,7 +3439,7 @@ class H(BaseHTTPRequestHandler):
             mrows.append(_srow(tr("Resume"), copycode(resume, "sid")))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
-        star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
+        star = star_btn(sid)
         PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code"}
         pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
         # breadcrumb: folder › workspace › this session · id (folder/workspace click to filter, id copies)
