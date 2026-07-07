@@ -266,5 +266,7 @@
   "star this session (kept on this machine — export/import to move)": "이 세션 별표 (이 컴퓨터에 저장 — 이동은 내보내기/가져오기)",
   "this help": "이 도움말",
   "step back: clear filter / exit search / close": "한 단계 뒤로: 필터 해제 / 검색 종료 / 닫기",
-  "the request this came from": "이 코드가 나온 요청"
+  "the request this came from": "이 코드가 나온 요청",
+  "toggle: only my messages (same as chip 1)": "토글: 내 메시지만 (칩 1과 동일)",
+  "toggle a filter chip (0 = All) — combine several": "필터 칩 토글 (0 = All) — 여러 개 조합 가능"
 }

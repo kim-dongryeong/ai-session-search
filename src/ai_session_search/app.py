@@ -2223,6 +2223,9 @@ a.chiplink:hover{background:#dbe5ff;color:#1f6feb}
 .favbar a,.favbar .favimp{color:#1f6feb;text-decoration:none;cursor:pointer}
 .favbar a:hover,.favbar .favimp:hover{text-decoration:underline}
 .chip-f{cursor:pointer;border:1px solid #d0d4da;background:#fff;color:#333;border-radius:14px;padding:3px 11px;font-size:12px}
+.chip-f .chipkey{background:rgba(0,0,0,.09);border-radius:4px;padding:0 4px;font-size:10px;font-family:ui-monospace,Menlo,monospace}
+.chip-f.active .chipkey{background:rgba(255,255,255,.28)}
+@media(prefers-color-scheme:dark){.chip-f .chipkey{background:rgba(255,255,255,.14)}}
 .chip-f.active{background:#1f6feb;color:#fff;border-color:#1f6feb}
 .chip-f .cnt{opacity:.6;margin-left:3px}
 @media(prefers-color-scheme:dark){.chip-f{background:#1b1e24;color:#cfd4db;border-color:#3a3f47}}
@@ -2513,6 +2516,10 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     el.classList.add('rowfocus');el.scrollIntoView({block:'nearest'});}   // minimal scroll — not dizzying
   function openRow(){var el=rrows()[rcur];var lk=el&&el.querySelector('a.t');if(lk)location.href=lk.href;}
   function starNow(){var sb=inSession?document.querySelector('.starbtn'):(rcur>=0&&rrows()[rcur]&&rrows()[rcur].querySelector('.starbtn'));if(sb)sb.click();}
+  // arrived from a session via u (data-list#sid) → pre-select that session's row in the list
+  if(!inSession&&location.hash.length>1){var _fs=decodeURIComponent(location.hash.slice(1)),_a=rrows(),_k;
+    for(_k=0;_k<_a.length;_k++){if(_a[_k].getAttribute('data-sid')===_fs){rcur=_k;rprev=_a[_k];
+      _a[_k].classList.add('rowfocus');_a[_k].scrollIntoView({block:'center'});break;}}}
   document.addEventListener('keydown',function(e){
     var tag=(e.target.tagName||'').toLowerCase();
     var typing=(tag==='input'||tag==='select'||tag==='textarea');
@@ -2538,7 +2545,11 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='KeyK'){e.preventDefault();if(inSession)nav('data-nextsess');else focusRow(rcur-1);return;} // up / newer
     if(C==='BracketRight'){e.preventDefault();nav('data-nextpage');return;}       // next page
     if(C==='BracketLeft'){e.preventDefault();nav('data-prevpage');return;}        // prev page
-    if(C==='KeyM'){e.preventDefault();nav((nk&&nk.getAttribute('data-filt')==='human')?'data-showall':'data-onlyme');return;}
+    if(C==='KeyM'){e.preventDefault();var mc=document.querySelector('.chip-f[data-cat="you"]');if(mc)mc.click();return;}
+    if(C.indexOf('Digit')===0){var dn=+C.slice(5);                               // 0=All, 1..9 toggle a filter chip
+      if(dn===0){var ca=document.querySelector('.chip-f[data-cat="*"]');if(ca){e.preventDefault();ca.click();}return;}
+      var cch=document.querySelectorAll('.chip-f[data-cat]:not([data-cat="*"])');
+      if(cch[dn-1]){e.preventDefault();cch[dn-1].click();}return;}
     if(C==='KeyT'){e.preventDefault();toggleTools();return;}                      // conversation only
     if(C==='KeyC'){e.preventDefault();                                            // code-only ↔ conversation
       var cd=nk&&nk.getAttribute('data-code');if(cd){location.href=cd;return;}
@@ -2859,7 +2870,8 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         ("n / p", tr("next / previous message of yours")),
         ("s", tr("toggle star")),
         ("u", tr("back to the session list")),
-        ("m", tr("toggle: only my messages")),
+        ("m", tr("toggle: only my messages (same as chip 1)")),
+        ("0 – 9", tr("toggle a filter chip (0 = All) — combine several")),
         ("t", tr("toggle: conversation only (hide tool calls/results)")),
         ("c", tr("code-only view ↔ conversation")),
         ("[ / ]", tr("previous / next page")),
@@ -3680,10 +3692,9 @@ class H(BaseHTTPRequestHandler):
         ms = int((time.perf_counter() - t0) * 1000)
 
         n = meta["n"]
-        toggles = ('<div class=bar>'
-                   f'<a class="{"on" if filt=="all" else ""}" href="{url(q=q, lim=lim_raw)}">{tr("Show all")}</a>'
-                   f'<a class="{"on" if filt=="human" else ""}" href="{url(filter="human", q=q, lim=lim_raw)}">🧑 {tr("Only me")}</a>'
-                   f'<a href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
+        showall = f'<a href="{url(q=q, lim=lim_raw)}">← {tr("Show all")}</a>' if filt == "human" else ""
+        toggles = ('<div class=bar>' + showall
+                   + f'<a href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
                    f'<span class=meta>{counts_html(n, system=True)}</span>'
                    '</div>')
         # event-filter chips (counts over ALL turns)
@@ -3696,13 +3707,16 @@ class H(BaseHTTPRequestHandler):
             for c in t["tags"]:
                 if c in cc:
                     cc[c] += 1
-        # "you" is intentionally NOT a chip — the "🧑 Only me" toggle above already does that (server-side).
-        CHIP_LBL = {"agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
+        # every filter is a (combinable) chip; "Code only" is separate because it's a reprocessed view, not a filter
+        CHIP_LBL = {"you": "🧑 My messages", "agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
                     "memory": "🧠 Memory", "command": "❯ Commands", "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
-        chips = [f'<div class=chips><button class=chip-f data-cat="*">{tr("All")}</button>']
+        chips = [f'<div class=chips><button class=chip-f data-cat="*"><kbd class=chipkey>0</kbd> {tr("All")}</button>']
+        knum = 0
         for c, lbl in CHIP_LBL.items():
             if cc[c]:
-                chips.append(f'<button class=chip-f data-cat="{c}">{tr(lbl)}<span class=cnt>{cc[c]}</span></button>')
+                knum += 1
+                key = f'<kbd class=chipkey>{knum}</kbd> ' if knum <= 9 else ''
+                chips.append(f'<button class=chip-f data-cat="{c}">{key}{tr(lbl)}<span class=cnt>{cc[c]}</span></button>')
         chips.append('</div>')
 
         opts = []
@@ -3731,7 +3745,7 @@ class H(BaseHTTPRequestHandler):
                    f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
                    f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
-                   f' data-list="{esc(("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/")}"'
+                   f' data-list="{esc((("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/") + "#" + sid)}"'
                    f' data-code="{esc(url(view="code", q=q))}" data-filt="{esc(filt)}"></span>')
         return shell(meta["title"][:50], head + navkeys + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
 
