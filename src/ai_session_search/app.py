@@ -2155,6 +2155,9 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .meta{color:#8a8f98;font-size:12px;margin-top:3px}
 .chip{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;margin-right:5px;background:#eef1f4;color:#555}
 @media(prefers-color-scheme:dark){.chip{background:#2a2e35;color:#aeb4bd}}
+a.chiplink{text-decoration:none;cursor:pointer}
+a.chiplink:hover{background:#dbe5ff;color:#1f6feb}
+@media(prefers-color-scheme:dark){a.chiplink:hover{background:#1a3763;color:#cfe0ff}}
 .preview{color:#666;font-size:12.5px;margin-top:5px}
 @media(prefers-color-scheme:dark){.preview{color:#9aa0a8}}
 .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
@@ -2444,10 +2447,13 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     var C=e.code;
     if(e.key==='Escape'){var hp=document.getElementById('kbhelp');
       if(hp&&hp.classList.contains('open')){hp.classList.remove('open');return;}
-      if(typing)e.target.blur();return;}
+      if(typing){e.target.blur();return;}
+      var bf=document.querySelector('a.backfull');if(bf){location.href=bf.getAttribute('href');return;}  // exit in-session search
+      return;}
     if(typing||e.metaKey||e.ctrlKey||e.altKey)return;
     if(C==='Slash'&&e.shiftKey){e.preventDefault();toggleHelp();return;}          // ? = help
     if(C==='Slash'){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
+    if(C==='KeyF'){var sb=document.querySelector('input[name=sq]');if(sb){e.preventDefault();sb.focus();sb.select();}return;}  // find in this session
     if(C==='KeyN'){if(ys().length){e.preventDefault();focusYou(cur+1);}return;}   // next my message
     if(C==='KeyP'){if(ys().length){e.preventDefault();focusYou(cur-1);}return;}   // prev my message
     if(e.key==='Enter'&&cur>=0){var a=ys();var l=a[cur]&&a[cur].getAttribute('data-thread');if(l)location.href=l;return;}
@@ -2740,9 +2746,11 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         ("m", tr("toggle: only my messages")),
         ("t", tr("toggle: conversation only (hide tool calls/results)")),
         ("g / G", tr("jump to top / bottom")),
-        ("/", tr("focus the search box")),
+        ("/", tr("focus the search box (all sessions)")),
+        ("f", tr("find within THIS session")),
+        ("Esc", tr("exit in-session search / close")),
         ("u", tr("back to home")),
-        ("? / Esc", tr("show / close this help")),
+        ("?", tr("show / close this help")),
     ]
     kbhelp = ('<div id=kbhelp class=kbov><div class=kbcard role=dialog aria-modal=true>'
               f'<h3 style="margin:0 0 12px">⌨️ {esc(tr("Keyboard shortcuts"))}</h3><table class=kbtab>'
@@ -2921,7 +2929,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
-                                           g("goto", ""), g("sq", "")))
+                                           g("goto", ""), g("sq", ""), g("sqtools", "")))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot"):
@@ -3079,7 +3087,7 @@ class H(BaseHTTPRequestHandler):
                 f'<div class=card data-sid="{esc(it["sid"])}">'
                 f'<button class=starbtn data-sid="{esc(it["sid"])}">☆</button> '
                 f'<a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
-                f'<div class=meta><span class=chip>{esc(proj_label(it))}</span>'
+                f'<div class=meta><a class="chip chiplink" href="{q(proj=it["proj"], sort=sort, dir=dir_)}" title="{esc(tr("show this workspace only"))}">{esc(proj_label(it))}</a> '
                 f'{counts_html(it["n"])}{tokbit}{mdlbit} · '
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
@@ -3260,9 +3268,10 @@ class H(BaseHTTPRequestHandler):
                 for gi, role, s in r["hits"])
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
+            proj_href = "/?" + urllib.parse.urlencode({"proj": r["proj"], "root": root})
             rows.append(f'<div class=card><a class=t href="{openurl}">{hl(r["title"], hlq)}</a> '
                         f'<span class=meta>{cnt}</span>{exact}{kchip}'
-                        f'<div class=meta><span class=chip>{esc(short)}</span></div>{metaline}{snips}</div>')
+                        f'<div class=meta><a class="chip chiplink" href="{proj_href}" title="{esc(tr("show this workspace only"))}">{esc(short)}</a></div>{metaline}{snips}</div>')
 
         keys = " ".join(f'<span class="hlkey hl{i % HL_COLORS}">{esc(t)}</span>' for i, t in enumerate(hl_terms))
         when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
@@ -3274,7 +3283,7 @@ class H(BaseHTTPRequestHandler):
                      q, scope, root, days, from_, to)
 
     # ---- session ----
-    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq=""):
+    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq="", sqtools=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
             return shell("?", f"<p>{tr('Session not found.')}</p>")
@@ -3405,16 +3414,25 @@ class H(BaseHTTPRequestHandler):
         # ---- in-session search (sq) ----
         if sq.strip():
             terms = parse_query(sq)
-            match_gis = [gi for gi, role, txt in search_turns(path)
-                         if terms and all(t in txt.lower() for t in terms)]
+            hits = [(gi, role) for gi, role, txt in search_turns(path)
+                    if terms and all(t in txt.lower() for t in terms)]
+            noise = {"tool-result", "system"}      # tool output / injected — usually search noise
+            n_noise = sum(1 for _, role in hits if role in noise)
+            show = [gi for gi, role in hits if sqtools or role not in noise]
             body = [render_turn(gi, turns[gi], sq, url(thread=gi) if turns[gi]["role"] == "you" else None)
-                    for gi in match_gis]
+                    for gi in show]
             ms = int((time.perf_counter() - t0) * 1000)
-            bar = (f'<div class=bar><a href="{url()}">← {tr("full conversation")}</a>'
-                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(match_gis)} {tr("messages matched in this session")} · {ms}ms'
+            if n_noise and not sqtools:
+                extra = f' · <a href="{url(sq=sq, sqtools=1)}">+{n_noise} {tr("in tool results / system")}</a>'
+            elif sqtools and n_noise:
+                extra = f' · <a href="{url(sq=sq)}">{tr("hide tool results / system")}</a>'
+            else:
+                extra = ""
+            bar = (f'<div class=bar><a class=backfull href="{url()}">← {tr("full conversation")}</a>'
+                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(show)} {tr("messages matched in this session")}{extra} · {ms}ms'
                    f'<span id=perf></span></span></div>')
             return shell(meta["title"][:50], head + bar
-                         + ("".join(body) or f"<p class=meta>{tr('No matches in this session.')}</p>"), q, root=rt)
+                         + ("".join(body) or f"<p class=meta>{tr('No matches in the conversation (try “+… in tool results” above).')}</p>"), q, root=rt)
 
         # ---- CODE view ----
         if view == "code":
