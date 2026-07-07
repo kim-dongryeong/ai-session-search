@@ -2616,6 +2616,24 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
   }
+  // progressive load: the server paints the first chunk instantly; stream the rest in the background
+  var lz=document.getElementById('lazyload');
+  if(lz){
+    var lp=lz.getAttribute('data-p'),lsince=+lz.getAttribute('data-since'),lend=+lz.getAttribute('data-end'),lq=lz.getAttribute('data-q')||'';
+    var idle=window.requestIdleCallback||function(f){return setTimeout(f,40);};
+    var loadChunk=function(){
+      if(!lz||lsince>=lend){if(lz){lz.remove();lz=null;}return;}
+      var take=Math.min(400,lend-lsince);
+      fetch('/api/session_tail?p='+encodeURIComponent(lp)+'&since='+lsince+'&limit='+take+(lq?'&q='+encodeURIComponent(lq):''))
+        .then(function(r){return r.json();}).then(function(d){
+          if(d&&d.html&&lz)lz.insertAdjacentHTML('beforebegin',d.html);
+          lsince=(d&&d.end)?d.end:(lsince+take);
+          if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});
+          if(lz&&lsince<lend)idle(loadChunk); else if(lz){lz.remove();lz=null;}
+        }).catch(function(){});
+    };
+    idle(loadChunk);
+  }
   // live-update: poll the session file and APPEND new messages in place, like a chat — no reload.
   try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}
   var ls=document.getElementById('livesess');
@@ -2641,6 +2659,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
         }).catch(function(){busy=false;});
     }
     setInterval(function(){
+      if(document.getElementById('lazyload'))return;   // wait until the progressive load finishes
       fetch('/api/session_stat?p='+encodeURIComponent(sp)).then(function(r){return r.json();}).then(function(d){
         if(!d||d.error)return; var cur=d.mtime+'/'+d.size;
         if(base===null){base=cur;return;}
@@ -2971,18 +2990,28 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(b)
         if u.path == "/api/session_tail":
-            # render only the turns after `since` so the client can append them (live, no reload)
+            # render turns [since, since+limit) so the client can append them (progressive / live, no reload)
             p = g("p")
             if not (p and os.path.exists(p) and root_for_path(p) is not None):
                 return self._send_json({"error": "not found"}, 404)
             try:
                 since = max(0, int(g("since") or 0))
+                lim = int(g("limit") or 0)
             except ValueError:
-                since = 0
+                since, lim = 0, 0
             turns = load_session(p)["turns"]
             qq = g("q", "")
-            html = "".join(render_turn(gi, turns[gi], qq, None) for gi in range(since, len(turns)))
-            return self._send_json({"n": len(turns), "html": html})
+            end = len(turns) if lim <= 0 else min(len(turns), since + lim)
+
+            def _tl(gi, t):     # keep the answer-thread link on lazily-loaded human turns
+                if t["role"] != "you":
+                    return None
+                params = {"p": p, "thread": gi}
+                if qq:
+                    params["q"] = qq
+                return "/session?" + urllib.parse.urlencode(params)
+            html = "".join(render_turn(gi, turns[gi], qq, _tl(gi, turns[gi])) for gi in range(since, end))
+            return self._send_json({"n": len(turns), "end": end, "html": html})
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
@@ -3615,10 +3644,17 @@ class H(BaseHTTPRequestHandler):
             if pos is not None and lim is not None:
                 off = (pos // lim) * lim
         page = view_turns if lim is None else view_turns[off:off + lim]
+        # progressive render: paint the first chunk instantly, stream the rest in the background
+        # (only for the plain conversation view — filtered/goto/search need everything up front)
+        INIT_CHUNK = 120
+        lazy = filt == "all" and goto_gi is None and len(page) > INIT_CHUNK
         body = []
-        for gi, t in page:
+        for gi, t in (page[:INIT_CHUNK] if lazy else page):
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
             body.append(render_turn(gi, t, q, tl))
+        if lazy:
+            body.append(f'<div id=lazyload hidden data-p="{esc(path)}" data-since="{page[INIT_CHUNK][0]}" '
+                        f'data-end="{page[-1][0] + 1}" data-q="{esc(q)}"></div>')
         if goto_gi is not None:
             body.append(
                 '<script>window.addEventListener("load",function(){'
