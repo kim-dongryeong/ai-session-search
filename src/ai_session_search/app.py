@@ -2215,6 +2215,12 @@ code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 @media(prefers-color-scheme:dark){code.sid{background:#2a2e35;color:#aeb4bd}}
 .srefcard>summary{cursor:pointer;font-weight:650;color:#1f6feb}
 .srefbody{margin-top:8px}
+.crumbs{font-size:11.5px;color:#8a8f98;margin:0 0 6px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;line-height:1.6}
+.crumbs a.crumb{color:#1f6feb;text-decoration:none}
+.crumbs a.crumb:hover{text-decoration:underline}
+.crumbsep{color:#c0c5cc}
+.crumbcur{color:#444;font-weight:600}
+@media(prefers-color-scheme:dark){.crumbcur{color:#cfd4db}.crumbsep{color:#4a4f57}}
 .srow{display:flex;gap:10px;align-items:baseline;padding:2px 0;font-size:12.5px}
 .srow .slbl{flex:0 0 110px;color:#8a8f98;font-size:11.5px;text-align:right}
 .srow .sval{flex:1;min-width:0;word-break:break-all}
@@ -3351,7 +3357,14 @@ class H(BaseHTTPRequestHandler):
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
         PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code"}
         pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
-        head = (f'<h3 style="margin:4px 0 8px">{star} {pbadge}{esc(meta["title"])}'
+        # breadcrumb: folder › workspace › this session · id (folder/workspace click to filter, id copies)
+        crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rt})}" title="{esc(tr("this folder"))}">📁 {esc(short_path(rt))}</a>'
+        crumb_ws = (f' <span class=crumbsep>›</span> <a class=crumb href="/?{urllib.parse.urlencode({"proj": proj, "root": rt})}" title="{esc(tr("this workspace"))}">📂 {esc(short_path(workspace) or proj)}</a>'
+                    if (workspace and proj) else "")
+        crumb = (f'<div class=crumbs>{crumb_root}{crumb_ws}'
+                 f' <span class=crumbsep>›</span> <span class=crumbcur>{esc(meta["title"])}</span>'
+                 f' <code class="sid copyval" title="{esc(tr("click to copy"))}">{esc(sid)}</code></div>')
+        head = (crumb + f'<h3 style="margin:4px 0 8px">{star} {pbadge}{esc(meta["title"])}'
                 + (f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if meta.get("loop") else "") + '</h3>')
         # prev/next session in the same project (work spans sessions)
         prev, nxt = adjacent_sessions(rt, path)

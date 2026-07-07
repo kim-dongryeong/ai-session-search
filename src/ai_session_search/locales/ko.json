@@ -253,5 +253,7 @@
   "back to the session list": "세션 목록으로 돌아가기",
   "search all sessions": "전체 세션 검색",
   "home (all workspaces)": "홈 (모든 워크스페이스)",
-  "this help / close": "이 도움말 / 닫기"
+  "this help / close": "이 도움말 / 닫기",
+  "this folder": "이 폴더",
+  "this workspace": "이 워크스페이스"
 }
