@@ -253,6 +253,10 @@ SKIP_TYPES = {"mode", "permission-mode", "file-history-snapshot", "queue-operati
 TITLE_TYPES = {"ai-title", "custom-title", "last-prompt", "summary"}
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update", "str_replace_editor", "create_file", "apply_patch"}
+# An agent-memory write: a Markdown file under a `memory/` dir (e.g. ~/.claude/projects/<slug>/memory/*.md).
+MEMORY_RE = re.compile(r"/memory/[^/]+\.md$", re.I)
+def is_memory_path(fp):
+    return bool(fp) and MEMORY_RE.search(str(fp).replace("\\", "/")) is not None
 TEST_RE = re.compile(r"\b(pytest|jest|vitest|mocha|npm (run )?test|yarn test|pnpm test|go test|cargo test|rspec|phpunit|unittest|ctest|gradle test|mvn test)\b", re.I)
 ERR_RE = re.compile(r"\b(Traceback|Exception|FAILED|fatal:|panic:)\b|exit code [1-9]|command not found|is not recognized|: error:|Error:", re.I)
 URL_RE = re.compile(r"https?://[^\s)\]<>\"']+")
@@ -700,8 +704,8 @@ def _tool_use_search_text(txt):
     return " ".join(vals)
 
 def session_digest(turns):
-    files, commits, urls = set(), [], set()
-    cmds = tests = errors = edits = webs = 0
+    files, commits, urls, mem_files = set(), [], set(), set()
+    cmds = tests = errors = edits = webs = memory = 0
     for t in turns:
         if "error" in t["tags"]:
             errors += 1
@@ -709,10 +713,13 @@ def session_digest(turns):
             if kind == "tool_use":
                 name, inp = _toolinput(txt)
                 if name in EDIT_TOOLS:
-                    edits += 1
+                    edits += 1                    # memory writes are edits too — just a special kind
                     fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path")
                     if fp:
                         files.add(fp)
+                        if is_memory_path(fp):
+                            memory += 1
+                            mem_files.add(fp)
                 elif name in ("Bash", "exec_command", "shell", "local_shell", "run_shell_command"):
                     cmds += 1
                     cmd = inp.get("command") or inp.get("cmd") or ""
@@ -728,7 +735,8 @@ def session_digest(turns):
                     urls.add(u.rstrip(".,);"))
     prs = sorted({u for u in urls if re.search(r"github\.com/.+/(pull|issues)/\d+", u)})
     return {"files": sorted(files), "cmds": cmds, "commits": commits, "tests": tests,
-            "errors": errors, "edits": edits, "urls": sorted(urls), "prs": prs, "webs": webs}
+            "errors": errors, "edits": edits, "urls": sorted(urls), "prs": prs, "webs": webs,
+            "memory": memory, "mem_files": sorted(mem_files)}
 
 def extract_code(turns):
     arts = []
@@ -1790,9 +1798,15 @@ def _diff_line(ln):
     cls = "d-add" if s == "+" else "d-del" if s == "-" else "d-ctx"
     return f'<div class="dl {cls}">{esc(ln) or "&nbsp;"}</div>'
 
+def _tk_file(fp):
+    """Tool-block file header — flags agent-memory writes (🧠) distinctly from normal files (📄)."""
+    if is_memory_path(fp):
+        return f'<div class="tk-file tk-mem">🧠 {tr("Memory note")} · {esc(fp)}</div>'
+    return f'<div class="tk-file">📄 {esc(fp)}</div>'
+
 def _patch_html(patch, filepath="", cap=800):
     """Render Claude's structuredPatch (a ready-made unified diff) as GitHub-style diff."""
-    rows = [f'<div class="tk-file">📄 {esc(filepath)}</div>'] if filepath else []
+    rows = [_tk_file(filepath)] if filepath else []
     body, count = [], 0
     for h in patch:
         if not isinstance(h, dict):
@@ -1815,7 +1829,7 @@ def _difflib_html(old, new, filepath="", cap=800):
     lines = list(difflib.unified_diff(str(old).splitlines(), str(new).splitlines(), lineterm="", n=3))
     while lines and (lines[0].startswith("--- ") or lines[0].startswith("+++ ")):
         lines.pop(0)
-    rows = [f'<div class="tk-file">📄 {esc(filepath)}</div>'] if filepath else []
+    rows = [_tk_file(filepath)] if filepath else []
     body = []
     for ln in lines[:cap]:
         body.append(f'<div class="dl d-hunk">{esc(ln)}</div>' if ln.startswith("@@") else _diff_line(ln))
@@ -1870,16 +1884,16 @@ def tool_use_html(txt):
             rows.append(_difflib_html(old, new, fp))          # Edit → real diff
         elif "content" in inp:                                # Write → new file body
             if fp:
-                rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
+                rows.append(_tk_file(fp))
             rows.append(_tk_pre(inp.get("content", ""), "tk-out tk-add"))
         elif isinstance(inp.get("edits"), list):              # MultiEdit → each hunk
             if fp:
-                rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
+                rows.append(_tk_file(fp))
             for e in inp["edits"]:
                 if isinstance(e, dict) and isinstance(e.get("old_string"), str) and isinstance(e.get("new_string"), str):
                     rows.append(_difflib_html(e["old_string"], e["new_string"]))
         elif fp:
-            rows.append(f'<div class="tk-file">📄 {esc(fp)}</div>')
+            rows.append(_tk_file(fp))
     elif name == "Read":
         fp = inp.get("file_path") or inp.get("path") or ""
         extra = [f"{k} {inp[k]}" for k in ("offset", "limit") if inp.get(k)]
@@ -2275,6 +2289,9 @@ pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
 .tk-desc{color:#8a8f98;font-style:italic;font-size:12px;margin:3px 0 2px}
 .tk-meta{color:#8a8f98;font-size:11.5px;margin:3px 0}
 .tk-file{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#1f6feb;margin:2px 0 4px;word-break:break-all}
+.tk-file.tk-mem{color:#6b3fb5;font-weight:600}
+.dfile.tk-mem{display:inline-block;background:#f1e9fc;color:#6b3fb5;border-radius:4px;padding:0 6px;margin:2px 3px 0 0}
+@media(prefers-color-scheme:dark){.tk-file.tk-mem{color:#c2a8f0}.dfile.tk-mem{background:#251a3a;color:#c2a8f0}}
 .tk-lbl{font-size:11px;color:#8a8f98;margin:6px 0 1px;text-transform:uppercase;letter-spacing:.03em}
 .tk-kv{font-size:12.5px;margin:2px 0}
 .tk-k{font-family:ui-monospace,Menlo,monospace;color:#6b3fb5;font-size:11.5px}
@@ -2315,6 +2332,10 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .cnt-line{cursor:help;border-bottom:1px dotted rgba(150,153,163,.5)}
 .copybtn{cursor:pointer;opacity:.55;font-size:.92em;padding:1px 5px;border-radius:5px;user-select:none;white-space:nowrap}
 .copybtn:hover{opacity:1;background:rgba(31,111,235,.16)}
+.copyval{cursor:pointer;border-radius:4px;padding:0 3px;transition:background .12s}
+.copyval:hover{background:rgba(31,111,235,.14)}
+.copyval.copied{background:rgba(38,190,110,.3)}
+.copyval.copied::after{content:" ✓";color:#189a55}
 .srow a.slink{display:inline-flex;align-items:center;gap:5px;color:#1f6feb;text-decoration:none;background:rgba(31,111,235,.1);border:1px solid rgba(31,111,235,.28);border-radius:7px;padding:2px 9px;font-weight:500}
 .srow a.slink:hover{background:rgba(31,111,235,.2)}
 .srow a.slink code{background:transparent;color:inherit;padding:0}
@@ -2508,11 +2529,15 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
   document.addEventListener('click',function(e){
-    // click the 📋 icon to copy that value (session-id, path, resume command, …)
+    // click the 📋 icon to copy (for values that also have a click action, e.g. navigate)
     var cv=e.target.closest&&e.target.closest('.copybtn');
     if(cv){e.preventDefault();copyText(cv.getAttribute('data-copy')||'');
       var oc=cv.textContent;cv.textContent='✓';cv.classList.add('copied');
       setTimeout(function(){cv.textContent=oc;cv.classList.remove('copied');},900);return;}
+    // click a plain value (no navigation) → copy it directly
+    var cvv=e.target.closest&&e.target.closest('.copyval');
+    if(cvv){e.preventDefault();copyText((cvv.textContent||'').trim());
+      cvv.classList.add('copied');setTimeout(function(){cvv.classList.remove('copied');},900);return;}
     var b=e.target.closest&&e.target.closest('.starbtn');
     if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
       try{if(starred(sid))localStorage.removeItem('aiss:star:'+sid);else localStorage.setItem('aiss:star:'+sid,'1');}catch(_){}
@@ -3190,8 +3215,10 @@ class H(BaseHTTPRequestHandler):
             return f'<div class=srow><span class=slbl>{lbl}</span><span class=sval>{val}</span></div>'
         proj = next((it["proj"] for it in get_index(rt) if it["path"] == path), "")
         cc = esc(tr("click to copy"))
-        def copyicon(text):   # a separate 📋 button so clicking the value itself can navigate/select
+        def copyicon(text):   # 📋 button — for values that ALSO have a click action (navigate)
             return f' <span class=copybtn data-copy="{esc(text)}" title="{cc}">📋</span>'
+        def copycode(text, cls):   # nothing to navigate to → click the value itself to copy
+            return f'<code class="{cls} copyval" title="{cc}">{esc(text)}</code>'
         mrows = []
         if workspace:
             if proj:  # click the path → jump to this workspace's sessions; 📋 = copy
@@ -3199,24 +3226,23 @@ class H(BaseHTTPRequestHandler):
                 ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">'
                           f'📂 <code class=spath>{esc(workspace)}</code></a>{copyicon(workspace)}')
             else:
-                ws_val = f'<code class=spath>{esc(workspace)}</code>{copyicon(workspace)}'
+                ws_val = copycode(workspace, "spath")
             mrows.append(_srow("Workspace", ws_val))
         if started and started != workspace:
             mrows.append(_srow("Started in",
-                               f'<code class=spath>{esc(started)}</code>{copyicon(started)}'
-                               f' <span class=hint>· {tr("folder the session started in (the file moved to a different workspace)")}</span>'))
-        mrows.append(_srow(tr("Session file"), f'<code class=spath>{esc(path)}</code>{copyicon(path)}'))
-        mrows.append(_srow("session-id", f'<code class=sid>{esc(sid)}</code>{copyicon(sid)}'))
+                               f'{copycode(started, "spath")} <span class=hint>· {tr("folder the session started in (the file moved to a different workspace)")}</span>'))
+        mrows.append(_srow(tr("Session file"), copycode(path, "spath")))
+        mrows.append(_srow("session-id", copycode(sid, "sid")))
         if forked:
             pf = find_session_by_sid(rt, forked)
             fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>{copyicon(forked)}'
-                  if pf else f'<code class=sid>{esc(forked)}</code>{copyicon(forked)} <span class=hint>· {tr("not in this folder")}</span>')
+                  if pf else f'{copycode(forked, "sid")} <span class=hint>· {tr("not in this folder")}</span>')
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
-            mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>{copyicon(meta["branch"])}'))
+            mrows.append(_srow("git", copycode(meta["branch"], "sid")))
         resume = {"codex": f"codex resume {sid}", "claude": f"claude --resume {sid}"}.get(prov)
         if resume:
-            mrows.append(_srow(tr("Resume"), f'<code class=sid>{esc(resume)}</code>{copyicon(resume)}'))
+            mrows.append(_srow(tr("Resume"), copycode(resume, "sid")))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
@@ -3254,8 +3280,9 @@ class H(BaseHTTPRequestHandler):
 
         # extracted-fact digest — collapsed by default; a compact stat line stays in the summary
         d = session_digest(turns)
-        stat_preview = (f'<span class=meta style="font-weight:400" title="{esc(tr("edits · commands · tests · errors · commits · web pages"))}">'
-                        f' — ✏️ {d["edits"]} · ❯ {d["cmds"]} · 🧪 {d["tests"]} · ⚠️ {d["errors"]} · ⎇ {len(d["commits"])} · 🌐 {d["webs"]}</span>')
+        mem_bit = f' · 🧠 {d["memory"]}' if d["memory"] else ''
+        stat_preview = (f'<span class=meta style="font-weight:400" title="{esc(tr("edits (🧠 = agent-memory notes) · commands · tests · errors · commits · web pages"))}">'
+                        f' — ✏️ {d["edits"]}{mem_bit} · ❯ {d["cmds"]} · 🧪 {d["tests"]} · ⚠️ {d["errors"]} · ⎇ {len(d["commits"])} · 🌐 {d["webs"]}</span>')
         dl = []
         if any(meta["tok"].values()):
             tk = meta["tok"]
@@ -3264,6 +3291,10 @@ class H(BaseHTTPRequestHandler):
                       f'{tr("Cache write")} {tk["cw"]:,} · {tr("Cache read")} {tk["cr"]:,}</span></div>')
         if meta["models"]:
             dl.append(f'<div style="margin-bottom:6px"><b>{tr("Models")}</b> {models_badge(meta["models"])}</div>')
+        if d["mem_files"]:
+            dl.append(f'<div style="margin-top:7px"><b>🧠 {tr("Memory notes written")}</b> ' +
+                      "".join(f'<span class="dfile tk-mem">{esc(os.path.basename(f))}</span>' for f in d["mem_files"][:20]) +
+                      (f'<span class=meta>… +{len(d["mem_files"])-20} {tr("more")}</span>' if len(d["mem_files"]) > 20 else "") + '</div>')
         if d["files"]:
             dl.append(f'<div style="margin-top:7px"><b>{tr("Files touched")}</b> ' +
                       "".join(f'<span class=dfile>{esc(short_path(f))}</span>' for f in d["files"][:25]) +
