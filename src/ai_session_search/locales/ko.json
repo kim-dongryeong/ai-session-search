@@ -208,5 +208,7 @@
   "One last step — click Confirm to finish setting up the app.": "마지막 단계예요 — ‘확인’을 누르면 앱 설정이 끝나요.",
   "Shows up in ⌘-Tab and the Dock as its own app.": "⌘-Tab과 Dock에 독립 앱으로 떠요.",
   "It is still Chrome inside — ⌘-F Find and your extensions keep working.": "속은 여전히 크롬이라 ⌘-F 찾기·확장 프로그램이 그대로 동작해요.",
-  "Confirm": "확인"
+  "Confirm": "확인",
+  "copy this page's link (handy in the installed app — no address bar)": "현재 페이지 링크 복사 (설치된 앱엔 주소창이 없어서 편리해요)",
+  "see all sessions in this workspace": "이 워크스페이스의 모든 대화 보기"
 }
