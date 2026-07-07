@@ -2347,6 +2347,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       <input type=date name=to value="%%TO%%" title="%%TOTITLE%%">
     </div>
   </form>
+  <button type=button id=copyurl class=advbtn title="%%COPYURLTITLE%%">🔗</button>
   <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
   %%LANGSW%%
 </header>
@@ -2435,6 +2436,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   });
   window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';closeInstall();});
   if(installed()&&ibtn)ibtn.style.display='none';
+  // copy the current page's URL (the installed app has no address bar to copy from)
+  var cpu=document.getElementById('copyurl');
+  if(cpu)cpu.addEventListener('click',function(){
+    var u=location.href;
+    if(navigator.clipboard){navigator.clipboard.writeText(u);}
+    else{var t=document.createElement('input');t.value=u;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);}
+    var o=cpu.textContent;cpu.textContent='✓';cpu.disabled=true;setTimeout(function(){cpu.textContent=o;cpu.disabled=false;},1000);
+  });
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
   function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
@@ -2600,6 +2609,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         "%%TOTITLE%%": esc(tr("end date")), "%%LANGSW%%": langsw,
         "%%INSTALLLBL%%": esc(tr("⬇ Install app")),
         "%%INSTALLTITLE%%": esc(tr("install as a standalone app (own window, shows in the app switcher)")),
+        "%%COPYURLTITLE%%": esc(tr("copy this page's link (handy in the installed app — no address bar)")),
     }
     out = SHELL
     for k, v in repl.items():
@@ -3101,9 +3111,16 @@ class H(BaseHTTPRequestHandler):
         workspace, started, forked = meta.get("cwd", ""), meta.get("start_cwd", ""), meta.get("forked", "")
         def _srow(lbl, val):
             return f'<div class=srow><span class=slbl>{lbl}</span><span class=sval>{val}</span></div>'
+        proj = next((it["proj"] for it in get_index(rt) if it["path"] == path), "")
         mrows = []
         if workspace:
-            mrows.append(_srow("Workspace", f'<code class=spath>{esc(workspace)}</code>'))
+            if proj:  # link to the index filtered to this workspace's sessions
+                ws_href = "/?" + urllib.parse.urlencode({"proj": proj, "root": rt})
+                ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">'
+                          f'<code class=spath>{esc(workspace)}</code> 📂</a>')
+            else:
+                ws_val = f'<code class=spath>{esc(workspace)}</code>'
+            mrows.append(_srow("Workspace", ws_val))
         if started and started != workspace:
             mrows.append(_srow("Started in",
                                f'<code class=spath>{esc(started)}</code>'
