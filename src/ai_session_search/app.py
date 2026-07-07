@@ -2539,22 +2539,37 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
   }
-  // live-update: poll the session file; when it grows, jump to new messages (or show a pill if scrolled up)
+  // live-update: poll the session file and APPEND new messages in place, like a chat — no reload.
   try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}
   var ls=document.getElementById('livesess');
   if(ls){
-    var sp=ls.getAttribute('data-p'), base=null, pill=null;
-    function tailNow(){try{sessionStorage.setItem('aiss:tail','1');}catch(_){}location.reload();}
+    var sp=ls.getAttribute('data-p'), base=null, pill=null, busy=false;
+    function lastGi(){var m=document.querySelectorAll('.msg');if(!m.length)return -1;
+      var n=parseInt((m[m.length-1].id||'').replace('t',''),10);return isNaN(n)?-1:n;}
     function showPill(){if(pill)return;pill=document.createElement('button');pill.className='livepill';
       pill.textContent='🔄 '+(ls.getAttribute('data-new')||'New messages')+' — '+(ls.getAttribute('data-load')||'load');
-      pill.addEventListener('click',tailNow);document.body.appendChild(pill);}
+      pill.addEventListener('click',function(){try{sessionStorage.setItem('aiss:tail','1');}catch(_){}location.reload();});
+      document.body.appendChild(pill);}
+    function appendNew(){
+      if(busy)return; busy=true;
+      var q=new URLSearchParams(location.search).get('q')||'';
+      var nearBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-180);
+      fetch('/api/session_tail?p='+encodeURIComponent(sp)+'&since='+(lastGi()+1)+(q?'&q='+encodeURIComponent(q):''))
+        .then(function(r){return r.json();}).then(function(d){busy=false;
+          if(!d||!d.html)return;
+          var m=document.querySelectorAll('.msg');
+          if(m.length)m[m.length-1].insertAdjacentHTML('afterend',d.html);
+          if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});
+          if(nearBottom)window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+        }).catch(function(){busy=false;});
+    }
     setInterval(function(){
       fetch('/api/session_stat?p='+encodeURIComponent(sp)).then(function(r){return r.json();}).then(function(d){
         if(!d||d.error)return; var cur=d.mtime+'/'+d.size;
         if(base===null){base=cur;return;}
         if(cur!==base){base=cur;
-          var nearBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-170);
-          if(nearBottom)tailNow(); else showPill();
+          // append in place on the last page; on a middle (paginated) page just offer a reload pill
+          if(nk&&nk.getAttribute('data-nextpage'))showPill(); else appendNew();
         }
       }).catch(function(){});
     },4000);
@@ -2843,6 +2858,19 @@ class H(BaseHTTPRequestHandler):
                 st = os.stat(p)
                 return self._send_json({"mtime": st.st_mtime, "size": st.st_size})
             return self._send_json({"error": "not found"}, 404)
+        if u.path == "/api/session_tail":
+            # render only the turns after `since` so the client can append them (live, no reload)
+            p = g("p")
+            if not (p and os.path.exists(p) and root_for_path(p) is not None):
+                return self._send_json({"error": "not found"}, 404)
+            try:
+                since = max(0, int(g("since") or 0))
+            except ValueError:
+                since = 0
+            turns = load_session(p)["turns"]
+            qq = g("q", "")
+            html = "".join(render_turn(gi, turns[gi], qq, None) for gi in range(since, len(turns)))
+            return self._send_json({"n": len(turns), "html": html})
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
