@@ -255,6 +255,7 @@ TITLE_TYPES = {"ai-title", "custom-title", "last-prompt", "summary"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "Update", "str_replace_editor", "create_file", "apply_patch"}
 # An agent-memory write: a Markdown file under a `memory/` dir (e.g. ~/.claude/projects/<slug>/memory/*.md).
 MEMORY_RE = re.compile(r"/memory/[^/]+\.md$", re.I)
+_MEM_IN = re.compile(r"/memory/[^\"'\\/\s]+\.md", re.I)   # a memory path anywhere in a tool_use blob
 def is_memory_path(fp):
     return bool(fp) and MEMORY_RE.search(str(fp).replace("\\", "/")) is not None
 TEST_RE = re.compile(r"\b(pytest|jest|vitest|mocha|npm (run )?test|yarn test|pnpm test|go test|cargo test|rspec|phpunit|unittest|ctest|gradle test|mvn test)\b", re.I)
@@ -429,6 +430,8 @@ def turn_tags(o, role, segs):
             name = txt.split("\n", 1)[0].strip()
             if name in EDIT_TOOLS:
                 tags.add("edit")
+                if _MEM_IN.search(txt):
+                    tags.add("memory")            # writing an agent-memory note (a special kind of edit)
             if name in ("Bash", "exec_command", "shell", "local_shell", "run_shell_command"):
                 tags.add("command")
                 if COMMIT_RE.search(txt):
@@ -2030,9 +2033,12 @@ def render_turn(gi, t, q="", thread_link=None):
     link = f'<a class=threadlink href="{thread_link}">{tr("↳ answer thread")}</a>' if thread_link else ""
     tstr = f'<span class=time>{fmt_ts_short(ts)}</span>' if ts else ""
     data = f' data-thread="{esc(thread_link)}"' if thread_link else ""
-    if role != "you" and not any(k in ("text", "channel") for k, _ in segs):
+    has_prose = any(k in ("text", "channel") for k, _ in segs)
+    if role != "you" and not has_prose:
         data += ' data-tool="1"'    # non-prose (tool call/result/system) — hidable in "conversation only"
-    cats = " ".join((["you"] if role == "you" else []) + sorted(tags))
+    cats = " ".join((["you"] if role == "you" else [])
+                    + (["agent"] if role == "assistant" and has_prose else [])   # the AI's actual replies
+                    + sorted(tags))
     extra = ""
     if role == "assistant":
         sh = model_short(t.get("model", ""))
@@ -2215,12 +2221,14 @@ code.sid{background:#eef1f4;padding:1px 5px;border-radius:4px;color:#555}
 @media(prefers-color-scheme:dark){code.sid{background:#2a2e35;color:#aeb4bd}}
 .srefcard>summary{cursor:pointer;font-weight:650;color:#1f6feb}
 .srefbody{margin-top:8px}
-.crumbs{font-size:11.5px;color:#8a8f98;margin:0 0 6px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;line-height:1.6}
+.crumbs{position:fixed;left:0;right:0;bottom:0;z-index:45;background:rgba(255,255,255,.94);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-top:1px solid #e4e7eb;padding:5px 14px;font-size:11px;color:#8a8f98;display:flex;flex-wrap:wrap;align-items:center;gap:5px;line-height:1.5}
 .crumbs a.crumb{color:#1f6feb;text-decoration:none}
 .crumbs a.crumb:hover{text-decoration:underline}
 .crumbsep{color:#c0c5cc}
-.crumbcur{color:#444;font-weight:600}
-@media(prefers-color-scheme:dark){.crumbcur{color:#cfd4db}.crumbsep{color:#4a4f57}}
+.crumbcur{color:#333;font-weight:600}
+.crumbs code.sid{font-size:10px}
+body:has(.crumbs){padding-bottom:34px}
+@media(prefers-color-scheme:dark){.crumbs{background:rgba(18,21,26,.94);border-color:#2a2e35}.crumbcur{color:#e7e9ec}.crumbsep{color:#4a4f57}}
 .srow{display:flex;gap:10px;align-items:baseline;padding:2px 0;font-size:12.5px}
 .srow .slbl{flex:0 0 110px;color:#8a8f98;font-size:11.5px;text-align:right}
 .srow .sval{flex:1;min-width:0;word-break:break-all}
@@ -2351,10 +2359,10 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .srow a.slink{display:inline-flex;align-items:center;gap:5px;color:#1f6feb;text-decoration:none;background:rgba(31,111,235,.1);border:1px solid rgba(31,111,235,.28);border-radius:7px;padding:2px 9px;font-weight:500}
 .srow a.slink:hover{background:rgba(31,111,235,.2)}
 .srow a.slink code{background:transparent;color:inherit;padding:0}
-.livepill{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:80;background:#1f6feb;color:#fff;border:0;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 28px rgba(15,25,60,.4)}
+.livepill{position:fixed;left:50%;transform:translateX(-50%);bottom:52px;z-index:80;background:#1f6feb;color:#fff;border:0;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 28px rgba(15,25,60,.4)}
 .livepill:hover{background:#1a63d6}
 .msg.khide{display:none}
-#convflag{position:fixed;left:16px;bottom:16px;z-index:70;background:#6b3fb5;color:#fff;border-radius:999px;padding:7px 14px;font-size:12.5px;box-shadow:0 6px 18px rgba(15,25,60,.32)}
+#convflag{position:fixed;left:16px;bottom:46px;z-index:70;background:#6b3fb5;color:#fff;border-radius:999px;padding:7px 14px;font-size:12.5px;box-shadow:0 6px 18px rgba(15,25,60,.32)}
 .kbov{display:none;position:fixed;inset:0;z-index:90;background:rgba(10,15,25,.55);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);align-items:center;justify-content:center;padding:20px}
 .kbov.open{display:flex}
 .kbcard{background:#fff;color:#1a1a1a;border-radius:14px;padding:22px 26px;max-width:460px;width:100%;box-shadow:0 22px 60px rgba(0,0,0,.42)}
@@ -2422,7 +2430,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function ys(){return Array.prototype.slice.call(document.querySelectorAll('.msg.you'));}
   function focusYou(i){var a=ys();if(!a.length)return;cur=((i%a.length)+a.length)%a.length;
     a.forEach(function(e){e.classList.remove('kfocus');});var el=a[cur];
-    el.classList.add('kfocus');el.scrollIntoView({block:'center',behavior:'smooth'});}
+    el.classList.add('kfocus');el.scrollIntoView({block:'center'});}   // instant — smooth is slow on huge pages
   // advanced-search (Tools) toggle
   var at=document.getElementById('advtoggle');
   if(at){at.addEventListener('click',function(){document.getElementById('advpanel').classList.toggle('open');});}
@@ -2452,7 +2460,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function rrows(){return Array.prototype.slice.call(document.querySelectorAll('.card[data-sid]'));}
   function focusRow(i){var a=rrows();if(!a.length)return;rcur=((i%a.length)+a.length)%a.length;
     a.forEach(function(x){x.classList.remove('rowfocus');});var el=a[rcur];
-    el.classList.add('rowfocus');el.scrollIntoView({block:'center',behavior:'smooth'});}
+    el.classList.add('rowfocus');el.scrollIntoView({block:'nearest'});}   // minimal scroll — not dizzying
   function openRow(){var el=rrows()[rcur];var lk=el&&el.querySelector('a.t');if(lk)location.href=lk.href;}
   function starNow(){var sb=inSession?document.querySelector('.starbtn'):(rcur>=0&&rrows()[rcur]&&rrows()[rcur].querySelector('.starbtn'));if(sb)sb.click();}
   document.addEventListener('keydown',function(e){
@@ -2480,10 +2488,13 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='BracketLeft'){e.preventDefault();nav('data-prevpage');return;}        // prev page
     if(C==='KeyM'){e.preventDefault();nav((nk&&nk.getAttribute('data-filt')==='human')?'data-showall':'data-onlyme');return;}
     if(C==='KeyT'){e.preventDefault();toggleTools();return;}                      // conversation only
+    if(C==='KeyC'){e.preventDefault();                                            // code-only ↔ conversation
+      var cd=nk&&nk.getAttribute('data-code');if(cd){location.href=cd;return;}
+      var bf2=document.querySelector('a.backfull');if(bf2)location.href=bf2.getAttribute('href');return;}
     if(C==='KeyS'){e.preventDefault();starNow();return;}                         // toggle star
     if(C==='KeyU'){e.preventDefault();nav('data-list');return;}                   // back to the session (thread) list
     if(C==='KeyH'&&e.shiftKey){e.preventDefault();location.href='/';return;}      // home (all workspaces)
-    if(C==='KeyG'){e.preventDefault();window.scrollTo({top:e.shiftKey?document.body.scrollHeight:0,behavior:'smooth'});return;}
+    if(C==='KeyG'){e.preventDefault();window.scrollTo(0,e.shiftKey?document.body.scrollHeight:0);return;}
   });
   // copy buttons (code view)
   document.addEventListener('click',function(e){
@@ -2765,6 +2776,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         ("u", tr("back to the session list")),
         ("m", tr("toggle: only my messages")),
         ("t", tr("toggle: conversation only (hide tool calls/results)")),
+        ("c", tr("code-only view ↔ conversation")),
         ("[ / ]", tr("previous / next page")),
         ("g / G", tr("jump to top / bottom")),
         ("/", tr("search all sessions")),
@@ -3464,7 +3476,7 @@ class H(BaseHTTPRequestHandler):
         # ---- CODE view ----
         if view == "code":
             arts = extract_code(turns)
-            bar = (f'<div class=bar><a href="{url(q=q)}">← {tr("to conversation")}</a>'
+            bar = (f'<div class=bar><a class=backfull href="{url(q=q)}">← {tr("to conversation")}</a>'
                    f'<a class=on href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
                    f'<span class=meta>{len(arts)} {tr("code/edit blocks")} · {tr("server")} {int((time.perf_counter()-t0)*1000)}ms<span id=perf></span></span></div>')
             body = []
@@ -3535,15 +3547,17 @@ class H(BaseHTTPRequestHandler):
                    f'<span class=meta>{counts_html(n, system=True)}</span>'
                    '</div>')
         # event-filter chips (counts over ALL turns)
-        cc = {"you": 0, "error": 0, "edit": 0, "command": 0, "commit": 0, "test": 0, "url": 0}
+        cc = {"you": 0, "agent": 0, "error": 0, "edit": 0, "memory": 0, "command": 0, "commit": 0, "test": 0, "url": 0}
         for t in turns:
             if t["role"] == "you":
                 cc["you"] += 1
+            elif t["role"] == "assistant" and any(k in ("text", "channel") for k, _ in t["segs"]):
+                cc["agent"] += 1
             for c in t["tags"]:
                 if c in cc:
                     cc[c] += 1
-        CHIP_LBL = {"you": "🧑 My messages", "error": "⚠️ Errors", "edit": "✏️ Edits", "command": "❯ Commands",
-                    "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
+        CHIP_LBL = {"you": "🧑 My messages", "agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
+                    "memory": "🧠 Memory", "command": "❯ Commands", "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
         chips = [f'<div class=chips><button class=chip-f data-cat="*">{tr("All")}</button>']
         for c, lbl in CHIP_LBL.items():
             if cc[c]:
@@ -3577,7 +3591,7 @@ class H(BaseHTTPRequestHandler):
                    f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
                    f' data-list="{esc(("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/")}"'
-                   f' data-filt="{esc(filt)}"></span>')
+                   f' data-code="{esc(url(view="code", q=q))}" data-filt="{esc(filt)}"></span>')
         return shell(meta["title"][:50], head + navkeys + toggles + "".join(chips) + sizeform + pgbar + "".join(body) + pgbar, q, root=rt)
 
     # ---- subagent thread ----
