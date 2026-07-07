@@ -1451,12 +1451,12 @@ def proj_label(item):
 def counts_html(n, system=False):
     total = (n.get("you", 0) + n.get("assistant", 0) + n.get("tool-result", 0)
              + n.get("system", 0) + n.get("subagent", 0))
-    parts = [f'<span title="{esc(tr("total messages in this session"))}"><b>{total}</b> {tr("msgs")}</span>',
-             f'<span title="{esc(tr("Messages you sent"))}">🧑 {n["you"]}</span>',
-             f'<span title="{esc(tr("Claude (assistant) replies"))}">✦ {n["assistant"]}</span>',
-             f'<span title="{esc(tr("Tool results (Bash/Edit/Read …)"))}">⚙ {n["tool-result"]}</span>']
+    parts = [f'<span class=cnt-chip title="{esc(tr("Total messages in this session — you + assistant + tool results + system"))}"><b>{total}</b> {tr("msgs")}</span>',
+             f'<span class=cnt-chip title="{esc(tr("You — messages you actually typed (not tool output or injected text)"))}">🧑 {n["you"]}</span>',
+             f'<span class=cnt-chip title="{esc(tr("Assistant — replies from the AI (Claude / Codex / Gemini)"))}">✦ {n["assistant"]}</span>',
+             f'<span class=cnt-chip title="{esc(tr("Tool results — output from Bash / Edit / Read / … calls"))}">⚙ {n["tool-result"]}</span>']
     if system:
-        parts.append(f'<span title="{esc(tr("System / injected context"))}">ⓘ {n["system"]}</span>')
+        parts.append(f'<span class=cnt-chip title="{esc(tr("System / injected — reminders, IDE context, slash-command output (not a human)"))}">ⓘ {n["system"]}</span>')
     return " · ".join(parts)
 
 def parse_query(q):
@@ -2293,7 +2293,6 @@ pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
  .dl.d-hunk{background:#23262d;color:#9aa0a8}}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
-details[open]>summary .foldcue{display:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
 mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:600}
 .hl0{background:#ffe27a}.hl1{background:#9ae6b4}.hl2{background:#9ecbff}
@@ -2313,6 +2312,13 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .provbadge.codex{background:#e2f4fb;color:#0b6a8f}
 .provbadge.claude{background:#e8f7ee;color:#157038}
 @media(prefers-color-scheme:dark){.provbadge.codex{background:#0e2c39;color:#7fcbe6}.provbadge.claude{background:#15331f;color:#7ddfa1}}
+.cnt-chip{cursor:help;border-bottom:1px dotted rgba(150,153,163,.5)}
+.copyval{cursor:pointer;border-radius:4px;padding:0 2px;transition:background .15s}
+.copyval:hover{background:rgba(31,111,235,.12)}
+.copyval.copied{background:rgba(38,190,110,.28)}
+.copyval.copied::after{content:" ✓";color:#189a55}
+.livepill{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:80;background:#1f6feb;color:#fff;border:0;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 28px rgba(15,25,60,.4)}
+.livepill:hover{background:#1a63d6}
 .starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
 .starbtn.on{color:#e6b800}
 .permalink{text-decoration:none;font-size:11px;opacity:.35;cursor:pointer}
@@ -2473,10 +2479,38 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     else{var t=document.createElement('input');t.value=u;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);}
     var o=cpu.textContent;cpu.textContent='✓';cpu.disabled=true;setTimeout(function(){cpu.textContent=o;cpu.disabled=false;},1000);
   });
+  function copyText(s){
+    if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
+    var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
+  }
+  // live-update: poll the session file; when it grows, jump to new messages (or show a pill if scrolled up)
+  try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}
+  var ls=document.getElementById('livesess');
+  if(ls){
+    var sp=ls.getAttribute('data-p'), base=null, pill=null;
+    function tailNow(){try{sessionStorage.setItem('aiss:tail','1');}catch(_){}location.reload();}
+    function showPill(){if(pill)return;pill=document.createElement('button');pill.className='livepill';
+      pill.textContent='🔄 '+(ls.getAttribute('data-new')||'New messages')+' — '+(ls.getAttribute('data-load')||'load');
+      pill.addEventListener('click',tailNow);document.body.appendChild(pill);}
+    setInterval(function(){
+      fetch('/api/session_stat?p='+encodeURIComponent(sp)).then(function(r){return r.json();}).then(function(d){
+        if(!d||d.error)return; var cur=d.mtime+'/'+d.size;
+        if(base===null){base=cur;return;}
+        if(cur!==base){base=cur;
+          var nearBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-170);
+          if(nearBottom)tailNow(); else showPill();
+        }
+      }).catch(function(){});
+    },4000);
+  }
   // localStorage stars (browser-local; server never sees them, transcripts stay read-only)
   function starred(sid){try{return localStorage.getItem('aiss:star:'+sid)==='1';}catch(_){return false;}}
   function paintStar(b){b.textContent=starred(b.getAttribute('data-sid'))?'\u2605':'\u2606';b.classList.toggle('on',starred(b.getAttribute('data-sid')));}
   document.addEventListener('click',function(e){
+    // click-to-copy a value (session-id, path, resume command, …)
+    var cv=e.target.closest&&e.target.closest('.copyval');
+    if(cv){e.preventDefault();copyText((cv.textContent||'').trim());
+      cv.classList.add('copied');setTimeout(function(){cv.classList.remove('copied');},900);return;}
     var b=e.target.closest&&e.target.closest('.starbtn');
     if(b){e.preventDefault();var sid=b.getAttribute('data-sid');
       try{if(starred(sid))localStorage.removeItem('aiss:star:'+sid);else localStorage.setItem('aiss:star:'+sid,'1');}catch(_){}
@@ -2723,6 +2757,13 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             return self.wfile.write(b)
+        if u.path == "/api/session_stat":
+            # cheap change-detector for live updates: mtime+size only, no parse (path must be in a root)
+            p = g("p")
+            if p and os.path.exists(p) and root_for_path(p) is not None:
+                st = os.stat(p)
+                return self._send_json({"mtime": st.st_mtime, "size": st.st_size})
+            return self._send_json({"error": "not found"}, 404)
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
@@ -3146,31 +3187,32 @@ class H(BaseHTTPRequestHandler):
         def _srow(lbl, val):
             return f'<div class=srow><span class=slbl>{lbl}</span><span class=sval>{val}</span></div>'
         proj = next((it["proj"] for it in get_index(rt) if it["path"] == path), "")
+        cc = esc(tr("click to copy"))
         mrows = []
         if workspace:
-            if proj:  # link to the index filtered to this workspace's sessions
+            wcode = f'<code class="spath copyval" title="{cc}">{esc(workspace)}</code>'
+            if proj:  # 📂 (front) jumps to all sessions in this workspace; the path click-copies
                 ws_href = "/?" + urllib.parse.urlencode({"proj": proj, "root": rt})
-                ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">'
-                          f'<code class=spath>{esc(workspace)}</code> 📂</a>')
+                ws_val = (f'<a class=slink href="{ws_href}" title="{esc(tr("see all sessions in this workspace"))}">📂</a> {wcode}')
             else:
-                ws_val = f'<code class=spath>{esc(workspace)}</code>'
+                ws_val = wcode
             mrows.append(_srow("Workspace", ws_val))
         if started and started != workspace:
             mrows.append(_srow("Started in",
-                               f'<code class=spath>{esc(started)}</code>'
+                               f'<code class="spath copyval" title="{cc}">{esc(started)}</code>'
                                f' <span class=hint>· {tr("folder the session started in (the file moved to a different workspace)")}</span>'))
-        mrows.append(_srow(tr("Session file"), f'<code class=spath>{esc(path)}</code>'))
-        mrows.append(_srow("session-id", f'<code class=sid>{esc(sid)}</code>'))
+        mrows.append(_srow(tr("Session file"), f'<code class="spath copyval" title="{cc}">{esc(path)}</code>'))
+        mrows.append(_srow("session-id", f'<code class="sid copyval" title="{cc}">{esc(sid)}</code>'))
         if forked:
             pf = find_session_by_sid(rt, forked)
             fv = (f'<a class=slink href="/session?p={urllib.parse.quote(pf)}"><code class=sid>{esc(forked)}</code></a>'
-                  if pf else f'<code class=sid>{esc(forked)}</code> <span class=hint>· {tr("not in this folder")}</span>')
+                  if pf else f'<code class="sid copyval" title="{cc}">{esc(forked)}</code> <span class=hint>· {tr("not in this folder")}</span>')
             mrows.append(_srow("Branched from", fv))
         if meta.get("branch"):
-            mrows.append(_srow("git", f'<code class=sid>{esc(meta["branch"])}</code>'))
+            mrows.append(_srow("git", f'<code class="sid copyval" title="{cc}">{esc(meta["branch"])}</code>'))
         resume = {"codex": f"codex resume {esc(sid)}", "claude": f"claude --resume {esc(sid)}"}.get(prov)
         if resume:
-            mrows.append(_srow(tr("Resume"), f'<code class=sid>{resume}</code>'))
+            mrows.append(_srow(tr("Resume"), f'<code class="sid copyval" title="{cc}">{resume}</code>'))
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = f'<button class=starbtn data-sid="{esc(sid)}" title="{esc(tr("star this session (saved in your browser)"))}">☆</button>'
@@ -3187,6 +3229,9 @@ class H(BaseHTTPRequestHandler):
                   if nxt else "")
             head += f'<div class="bar sessnav">{pl}{nl}</div>'
         head += refcard + legend_html()
+        # marker for the live-update poller (new messages appear without a manual reload)
+        head += (f'<span id=livesess hidden data-p="{esc(path)}"'
+                 f' data-new="{esc(tr("New messages"))}" data-load="{esc(tr("load"))}"></span>')
 
         # subagent banner
         subs = [subagent_brief(s) for s in subagent_files(path)]
@@ -3198,11 +3243,10 @@ class H(BaseHTTPRequestHandler):
                 f'<div class=meta>{(tr("workflow")+" "+esc(sb["wf"])+" · ") if sb["wf"] else ""}'
                 f'{sb["n"]} {tr("messages")} · agent {esc(sb["agentId"][:10])}</div></div>'
                 for sb in subs)
-            head += (f'<details class=fold style="margin:10px 0;border:1px solid #d9c8f5;border-radius:11px">'
-                     f'<summary style="padding:9px 14px;color:#6b3fb5;font-weight:600">'
-                     f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)}'
-                     f' <span class=foldcue>— {tr("expand")}</span></summary>'
-                     f'<div style="padding:0 12px 8px">{sub_items}</div></details>')
+            head += (f'<details class="card" style="margin:10px 0">'
+                     f'<summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
+                     f'🤖 {tr("Sub-agents this session spawned")}: {len(subs)}</summary>'
+                     f'<div style="padding:8px 4px 2px">{sub_items}</div></details>')
 
         # extracted-fact digest
         d = session_digest(turns)
@@ -3354,7 +3398,7 @@ class H(BaseHTTPRequestHandler):
                     + (f'<input type=hidden name=q value="{esc(q)}">' if q else "")
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
                     + f'{tr("per page")} <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
-                    + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · {tr("showing")} {len(page)}/{total} · '
+                    + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · {tr("showing")} {len(page)}/{total} {tr("msgs")} · '
                       f'<kbd>j</kbd>/<kbd>k</kbd> {tr("my messages")}, <kbd>Enter</kbd> {tr("answer thread")} · {tr("chips/minimap reflect the current page")}</span>'
                     + '</form>')
         pg = []
