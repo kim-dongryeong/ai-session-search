@@ -1,15 +1,15 @@
 name: release
 
-# Build double-click bundles (.dmg / .exe / AppImage-style binary) and attach them to
-# the GitHub Release for a pushed tag. Developers still use pip/pipx (see README); this
-# is for everyone else: download, double-click, it opens in the browser.
+# Build double-click bundles (.dmg / .exe / tar.gz) and attach them to the GitHub
+# Release for a pushed tag. Developers still use pip/pipx (see README); this is for
+# everyone else: download one file, double-click, it opens in the browser.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build & attach to (e.g. v2.1.0)"
+        description: "Existing tag to build & attach to (e.g. v3.1.0)"
         required: true
 
 permissions:
@@ -28,8 +28,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
-            --notes "Download a bundle for your OS below (double-click → opens in your browser). Or install with pipx: \`pipx install ai-session-search\`. See CHANGELOG.md for details."
+          cat > release-notes.md <<'NOTES'
+          **AI Session Search** — local, private, read-only search across your Claude Code, Codex, and Gemini CLI history.
+
+          ## Download & run
+
+          Grab the file for your OS below and double-click — it opens in your browser at http://127.0.0.1:8777. Everything stays on your machine; nothing is uploaded.
+
+          - **macOS** (`.dmg`): open the disk image and drag the app to Applications. Release builds are **signed and notarized by Apple** when signing secrets are configured, so they just open. If macOS ever says the app is from an "unidentified developer," right-click the app → **Open** → **Open** (once).
+          - **Windows** (`.exe`): one file — just double-click. Windows shows a blue **"Windows protected your PC"** screen. This is expected for a new, unsigned app and is safe. Click **More info**, then **Run anyway**.
+          - **Linux** (`.tar.gz`): extract it and run the `ai-session-search` binary.
+
+          ## Developers
+
+          Prefer the command line? `pipx install ai-session-search` (or `pip install ai-session-search`), then run `aiss`.
+
+          See CHANGELOG.md for what changed in this release.
+          NOTES
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release-notes.md
 
   build:
     needs: create-release
@@ -42,10 +58,16 @@ jobs:
           - os: macos-13
             asset: ai-session-search-macos-x86_64.dmg
           - os: windows-latest
-            asset: ai-session-search-windows-x64.zip
+            asset: ai-session-search-windows-x64.exe
           - os: ubuntu-latest
             asset: ai-session-search-linux-x86_64.tar.gz
     runs-on: ${{ matrix.os }}
+    # Job-level env so `env.APPLE_ID != ''` is usable in a step `if:` — a step's OWN
+    # env: block is NOT visible to that same step's if: (documented Actions gotcha).
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,7 +77,7 @@ jobs:
       - name: Install build deps
         run: python -m pip install --upgrade pip pyinstaller
 
-      # ---- macOS: .app → (sign) → .dmg → (notarize) ----
+      # ---- macOS: .app → sign → notarize+staple app → .dmg → notarize+staple dmg ----
       - name: Build macOS .app
         if: runner.os == 'macOS'
         run: |
@@ -64,6 +86,7 @@ jobs:
             --icon assets/icon.icns \
             --paths src \
             --add-data "src/ai_session_search/locales:ai_session_search/locales" \
+            --add-data "src/ai_session_search/demo:ai_session_search/demo" \
             --hidden-import ai_session_search.app \
             --osx-bundle-identifier com.kimdongryeong.ai-session-search \
             packaging/launch.py
@@ -75,6 +98,7 @@ jobs:
           CERT_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
+          set -euo pipefail
           APP="dist/AI Session Search.app"
           if [ -n "$CERT_B64" ]; then
             echo "$CERT_B64" | base64 --decode > cert.p12
@@ -82,10 +106,21 @@ jobs:
             security create-keychain -p actions "$KEYCHAIN"
             security default-keychain -s "$KEYCHAIN"
             security unlock-keychain -p actions "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"   # don't auto-lock mid-build
             security import cert.p12 -k "$KEYCHAIN" -P "$CERT_PWD" -T /usr/bin/codesign
+            # REQUIRED on macOS 10.12.5+: without this, codesign can't use the key
+            # non-interactively and hangs / dies with errSecInternalComponent in CI.
             security set-key-partition-list -S apple-tool:,apple: -s -k actions "$KEYCHAIN"
             rm -f cert.p12
-            codesign --deep --force --options runtime --timestamp \
+            # Sign inside-out: every nested Mach-O first with hardened runtime + timestamp,
+            # then the .app bundle LAST with the entitlements. We deliberately avoid --deep
+            # (it re-signs nested items in one pass and mis-signs some inner binaries, which
+            # Apple then rejects as "hardened runtime not enabled" / "signature invalid").
+            find "$APP/Contents" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) -print0 |
+              while IFS= read -r -d '' f; do
+                codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$f"
+              done
+            codesign --force --options runtime --timestamp \
               --entitlements packaging/entitlements.plist --sign "$SIGN_ID" "$APP"
             codesign --verify --strict --verbose=2 "$APP"
           else
@@ -93,24 +128,46 @@ jobs:
             codesign --deep --force --sign - "$APP"
           fi
 
+      - name: Notarize & staple .app
+        if: runner.os == 'macOS' && env.APPLE_ID != ''
+        run: |
+          set -euo pipefail
+          APP="dist/AI Session Search.app"
+          # notarytool cannot take a .app directly — zip it for upload; stapler staples the .app.
+          ditto -c -k --keepParent "$APP" app-notarize.zip
+          xcrun notarytool submit app-notarize.zip \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
+          xcrun stapler staple "$APP"
+          rm -f app-notarize.zip
+
       - name: Make .dmg
         if: runner.os == 'macOS'
+        env:
+          SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
+          set -euo pipefail
+          # Build the dmg FROM the (now stapled) .app so the notarization ticket rides inside it.
           hdiutil create -volname "AI Session Search" \
             -srcfolder "dist/AI Session Search.app" -ov -format UDZO "${{ matrix.asset }}"
+          # Sign the dmg itself when a Developer ID is available (no runtime/entitlements on a dmg).
+          if [ -n "${SIGN_ID:-}" ]; then
+            codesign --force --timestamp --sign "$SIGN_ID" "${{ matrix.asset }}"
+          fi
 
       - name: Notarize & staple .dmg
         if: runner.os == 'macOS' && env.APPLE_ID != ''
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          set -euo pipefail
           xcrun notarytool submit "${{ matrix.asset }}" \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
           xcrun stapler staple "${{ matrix.asset }}"
+          # Sanity checks — best-effort, never fail the build on these.
+          xcrun stapler validate "${{ matrix.asset }}" || true
+          spctl -a -t open --context context:primary-signature -v "${{ matrix.asset }}" || true
 
-      # ---- Windows: .exe → .zip ----
+      # ---- Windows: bare .exe (one file to download & double-click) ----
       - name: Build Windows .exe
         if: runner.os == 'Windows'
         run: |
@@ -119,8 +176,9 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --name ai-session-search `
             --icon assets/icon.ico --paths src `
             --add-data "src/ai_session_search/locales;ai_session_search/locales" `
+            --add-data "src/ai_session_search/demo;ai_session_search/demo" `
             --hidden-import ai_session_search.app packaging/launch.py
-          Compress-Archive -Path dist/ai-session-search.exe -DestinationPath "${{ matrix.asset }}" -Force
+          Copy-Item dist/ai-session-search.exe "${{ matrix.asset }}"
 
       # ---- Linux: single binary → .tar.gz ----
       - name: Build Linux binary
@@ -128,6 +186,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --onefile --name ai-session-search \
             --paths src --add-data "src/ai_session_search/locales:ai_session_search/locales" \
+            --add-data "src/ai_session_search/demo:ai_session_search/demo" \
             --hidden-import ai_session_search.app packaging/launch.py
           tar czf "${{ matrix.asset }}" -C dist ai-session-search
 
@@ -136,3 +195,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" "${{ matrix.asset }}" --repo "$GITHUB_REPOSITORY" --clobber
         shell: bash
+
+  # ---- PyPI (opt-in): trusted publishing, no token needed ----
+  # Enable by (1) configuring a Trusted Publisher on PyPI for this repo + workflow
+  # (owner: kim-dongryeong, repo: ai-session-search, workflow: release.yml — a "pending"
+  # publisher works before the first upload), and (2) setting repo variable
+  # PUBLISH_PYPI=true (Settings → Secrets and variables → Actions → Variables). See docs/RELEASING.md.
+  pypi:
+    if: ${{ vars.PUBLISH_PYPI == 'true' }}
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write          # OIDC token for PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

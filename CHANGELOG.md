@@ -1,5 +1,32 @@
 # Changelog
 
+## 4.0.0 — 2026-07-07
+
+**First public release** — download-and-run native apps, in-app updates, and a demo mode.
+
+- **Native downloadable builds for macOS, Windows, and Linux** — no Python required.
+  Grab a file from [Releases](https://github.com/kim-dongryeong/ai-session-search/releases/latest),
+  double-click, and it opens in your browser (the server runs locally; nothing is uploaded).
+  - **macOS** — a signed + **notarized** `.dmg` (Apple Silicon and Intel) once the signing
+    secrets are configured, so Gatekeeper opens it without warnings.
+  - **Windows** — a single `.exe`; download and double-click. (Unsigned for now, so
+    SmartScreen shows *"Windows protected your PC"* → **More info → Run anyway** — this is
+    expected for a new open-source app and safe.)
+  - **Linux** — a self-contained `.tar.gz` binary.
+  - Built by the `release` workflow (PyInstaller) on every version tag.
+- **In-app update notice.** When a newer release exists, a slim bar offers a one-click
+  update — a **Download** link in the native app, or a `pipx upgrade` command otherwise.
+  Privacy-first: this is the *only* thing the app ever sends over the network — a plain,
+  unauthenticated, once-a-day GET of the public GitHub releases endpoint (no identifiers,
+  never any transcript content). Turn it off with `AISS_NO_UPDATE_CHECK=1`.
+- **`aiss --demo`** — browse a bundled **synthetic** dataset (Claude + Codex + Gemini, with
+  tool calls, diffs, thinking, a subagent thread, commits, and a branched session) instead
+  of your own history. Great for a first look, and it's what the README/screenshots show —
+  so no real data is ever exposed. Fully isolated: `--demo` never touches your real folders.
+- Replaced the last piece of vendor artwork (a macOS icon used only in the install
+  explainer) with a hand-drawn generic one — the project is now fully self-contained and
+  clean for public release.
+
 ## 3.1.0 — 2026-07-06
 
 - **Agent access — your past sessions become a memory your coding agent can query.**
