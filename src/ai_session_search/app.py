@@ -773,6 +773,39 @@ def _agy_sid(path):
     m = re.search(r"/brain/([0-9a-f\-]+)/", path.replace(os.sep, "/"))
     return m.group(1) if m else os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path))))
 
+_AGY_TITLES = {"ts": {}, "data": {}}
+def get_agy_title(path):
+    root = root_for_path(path)
+    if not root: return None
+    pb_path = os.path.join(root, "..", "agyhub_summaries_proto.pb")
+    if not os.path.exists(pb_path): return None
+    try:
+        mtime = os.stat(pb_path).st_mtime_ns
+        if _AGY_TITLES["ts"].get(pb_path) == mtime:
+            return _AGY_TITLES["data"].get(pb_path, {}).get(_agy_sid(path))
+        with open(pb_path, "rb") as f:
+            data = f.read()
+        res = {}
+        for m in re.finditer(b"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", data):
+            sid = m.group(1).decode("utf-8")
+            idx = m.end()
+            n_idx = data.find(b'\n', idx, idx + 20)
+            if n_idx != -1:
+                strlen = data[n_idx+1]
+                title = data[n_idx+2:n_idx+2+strlen]
+                try:
+                    dec = title.decode("utf-8")
+                    if len(dec) == strlen or len(dec) > 0:
+                        res[sid] = dec
+                except:
+                    pass
+        _AGY_TITLES["data"][pb_path] = res
+        _AGY_TITLES["ts"][pb_path] = mtime
+        return res.get(_agy_sid(path))
+    except Exception:
+        return None
+
+
 def classify_agy_line(o):
     t = o.get("type")
     content = o.get("content", "")
@@ -834,7 +867,7 @@ def _agy_load(path):
             n[role] += 1
         if role == "you" and not first_human:
             first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
-    title = (first_human or tr("(untitled)")).strip()[:120]
+    title = (get_agy_title(path) or first_human or tr("(untitled)")).strip()[:120]
     meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
             "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
             "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": {"Antigravity": 1}}
