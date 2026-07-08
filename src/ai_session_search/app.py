@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.1"
+__version__ = "4.0.2"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -777,14 +777,29 @@ _AGY_TITLES = {"ts": {}, "data": {}}
 def get_agy_title(path):
     root = root_for_path(path)
     if not root: return None
+    sid = _agy_sid(path)
+    if not sid: return None
+
+    # 1. Check annotations/<sid>.pbtxt for renamed titles
+    anno_path = os.path.join(root, "..", "annotations", f"{sid}.pbtxt")
+    if os.path.exists(anno_path):
+        try:
+            with open(anno_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            m = re.search(r'title\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', content)
+            if m:
+                return json.loads('"' + m.group(1) + '"')
+        except Exception:
+            pass
     
+    # 2. Check SQLite DB (used by CLI)
     db_path = os.path.join(root, "..", "conversation_summaries.db")
     if os.path.exists(db_path):
         import sqlite3
         try:
             mtime = os.stat(db_path).st_mtime_ns
             if _AGY_TITLES["ts"].get(db_path) == mtime:
-                return _AGY_TITLES["data"].get(db_path, {}).get(_agy_sid(path))
+                return _AGY_TITLES["data"].get(db_path, {}).get(sid)
             conn = sqlite3.connect(db_path)
             c = conn.cursor()
             c.execute("SELECT conversation_id, title FROM conversation_summaries")
@@ -792,21 +807,22 @@ def get_agy_title(path):
             conn.close()
             _AGY_TITLES["data"][db_path] = res
             _AGY_TITLES["ts"][db_path] = mtime
-            return res.get(_agy_sid(path))
+            return res.get(sid)
         except Exception:
             pass
 
+    # 3. Check Protobuf (used by standard GUI)
     pb_path = os.path.join(root, "..", "agyhub_summaries_proto.pb")
     if os.path.exists(pb_path):
         try:
             mtime = os.stat(pb_path).st_mtime_ns
             if _AGY_TITLES["ts"].get(pb_path) == mtime:
-                return _AGY_TITLES["data"].get(pb_path, {}).get(_agy_sid(path))
+                return _AGY_TITLES["data"].get(pb_path, {}).get(sid)
             with open(pb_path, "rb") as f:
                 data = f.read()
             res = {}
             for m in re.finditer(b"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", data):
-                sid = m.group(1).decode("utf-8")
+                m_sid = m.group(1).decode("utf-8")
                 idx = m.end()
                 n_idx = data.find(b'\n', idx, idx + 20)
                 if n_idx != -1:
@@ -815,12 +831,12 @@ def get_agy_title(path):
                     try:
                         dec = title.decode("utf-8")
                         if len(dec) == strlen or len(dec) > 0:
-                            res[sid] = dec
+                            res[m_sid] = dec
                     except:
                         pass
             _AGY_TITLES["data"][pb_path] = res
             _AGY_TITLES["ts"][pb_path] = mtime
-            return res.get(_agy_sid(path))
+            return res.get(sid)
         except Exception:
             pass
             
