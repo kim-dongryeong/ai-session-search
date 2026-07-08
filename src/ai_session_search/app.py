@@ -236,6 +236,8 @@ def _discover_roots(primary, extra_roots=()):
     cands = [primary, default_primary_root(),
              os.path.expanduser(os.path.join("~", "Downloads", ".claude", "projects")),
              os.path.expanduser(os.path.join("~", ".codex", "sessions")),   # Codex
+             os.path.expanduser(os.path.join("~", ".gemini", "antigravity", "brain")), # Antigravity
+             os.path.expanduser(os.path.join("~", ".gemini", "antigravity-cli", "brain")), # Antigravity CLI
              os.path.expanduser(os.path.join("~", ".gemini", "tmp"))]       # Gemini CLI
     cands += [p for p in extra_roots if p]
     seen = []
@@ -343,6 +345,8 @@ def provider_of(path):
     b = os.path.basename(q)
     if "/.codex/" in q or b.startswith("rollout-"):
         return "codex"
+    if "/antigravity/brain/" in q or "/antigravity-cli/brain/" in q or b == "transcript.jsonl":
+        return "agy"
     if "/.gemini/" in q or b.startswith("session-"):
         return "gemini"
     return "claude"
@@ -570,6 +574,8 @@ def classify_turns(path, sub=False):
     prov = provider_of(path)
     if prov == "codex":
         return _codex_load(path)["turns"]
+    if prov == "agy":
+        return _agy_load(path)["turns"]
     if prov == "gemini":
         return _gemini_load(path)["turns"]
     out = []
@@ -762,6 +768,78 @@ def _gemini_load(path):
             "tok": tok, "models": models}
     return {"turns": turns, "meta": meta}
 
+# ---- Antigravity support (~/.gemini/antigravity/brain/<session>/.system_generated/logs/transcript.jsonl) --------
+def _agy_sid(path):
+    m = re.search(r"/brain/([0-9a-f\-]+)/", path.replace(os.sep, "/"))
+    return m.group(1) if m else os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+
+def classify_agy_line(o):
+    t = o.get("type")
+    content = o.get("content", "")
+    source = o.get("source")
+
+    def strip_eph(text):
+        if "<EPHEMERAL_MESSAGE>" in text:
+            text = re.sub(r"<EPHEMERAL_MESSAGE>.*?</EPHEMERAL_MESSAGE>", "", text, flags=re.DOTALL).strip()
+        return text
+
+    if t == "USER_INPUT" and source in ("USER_EXPLICIT", "SYSTEM", "USER"):
+        text = content
+        if "<USER_REQUEST>" in text:
+            m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", text, re.DOTALL)
+            if m:
+                text = m.group(1).strip()
+        else:
+            text = strip_eph(text)
+        return ("you", [("text", text)]) if text.strip() else None
+
+    if t == "PLANNER_RESPONSE" and source == "MODEL":
+        segs = []
+        if o.get("thinking"):
+            segs.append(("thinking", o.get("thinking").strip()))
+        if content.strip():
+            segs.append(("text", content))
+        for tc in o.get("tool_calls", []):
+            name = tc.get("name", "tool")
+            args = tc.get("arguments", tc.get("args", {}))
+            segs.append(("tool_use", f"{name}\n{json.dumps(args, ensure_ascii=False)}"))
+        return ("assistant", segs) if segs else None
+
+    if source == "MODEL" and t not in ("PLANNER_RESPONSE", "USER_INPUT"):
+        text = strip_eph(content)
+        return ("tool-result", [("tool_result", text)]) if text else None
+
+    if t == "SYSTEM_MESSAGE" or source == "SYSTEM":
+        text = strip_eph(content)
+        return ("system", [("injected", text)]) if text else None
+
+    return None
+
+def _agy_load(path):
+    cwd = model = last_ts = first_human = ""
+    n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
+    turns = []
+    for o in iter_lines(path):
+        if o.get("created_at"):
+            last_ts = o["created_at"]
+        r = classify_agy_line(o)
+        if not r:
+            continue
+        role, segs = r
+        turn = {"role": role, "segs": segs, "ts": o.get("created_at", ""), "tags": turn_tags(o, role, segs)}
+        if role == "assistant":
+            turn["model"] = "Antigravity"
+        turns.append(turn)
+        if role in n:
+            n[role] += 1
+        if role == "you" and not first_human:
+            first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
+    title = (first_human or tr("(untitled)")).strip()[:120]
+    meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
+            "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
+            "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": {"Antigravity": 1}}
+    return {"turns": turns, "meta": meta}
+
 # ---- subagents --------------------------------------------------------------
 def subagent_files(session_path):
     base = session_path[:-6] if session_path.endswith(".jsonl") else session_path
@@ -882,6 +960,8 @@ def summarize_file(path):
     prov = provider_of(path)
     if prov == "codex":
         return _codex_load(path)["meta"]
+    if prov == "agy":
+        return _agy_load(path)["meta"]
     if prov == "gemini":
         return _gemini_load(path)["meta"]
     ai_title = custom_title = last_prompt = first_human = ""
@@ -1013,6 +1093,8 @@ def load_session(path):
     prov = provider_of(path)
     if prov == "codex":
         data = _codex_load(path)
+    elif prov == "agy":
+        data = _agy_load(path)
     elif prov == "gemini":
         data = _gemini_load(path)
     else:
@@ -1035,11 +1117,17 @@ def is_gemini_root(root):
     q = (root or "").replace(os.sep, "/")
     return "/.gemini/" in q or q.rstrip("/").endswith("/.gemini/tmp")
 
+def is_agy_root(root):
+    q = (root or "").replace(os.sep, "/")
+    return "/.gemini/antigravity/brain" in q or "/.gemini/antigravity-cli/brain" in q or q.rstrip("/").endswith("/brain")
+
 def root_glyph(root):
-    """Provider glyph for a folder — by kind or by 'codex'/'gemini'/'claude' in its path."""
+    """Provider glyph for a folder — by kind or by 'codex'/'gemini'/'claude'/'agy' in its path."""
     q = (root or "").lower().replace(os.sep, "/")
     if is_codex_root(root) or "codex" in q:
         return "🌀 "
+    if is_agy_root(root) or "agy" in q or "antigravity" in q:
+        return "✨ "
     if is_gemini_root(root) or "gemini" in q:
         return "✨ "
     if "claude" in q:
@@ -1049,6 +1137,8 @@ def root_glyph(root):
 def session_files(root):
     if is_codex_root(root):
         return sorted(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))
+    if is_agy_root(root):
+        return sorted(glob.glob(os.path.join(root, "*", ".system_generated", "logs", "transcript.jsonl")))
     if is_gemini_root(root):
         return sorted(glob.glob(os.path.join(root, "*", "chats", "session-*.jsonl")))
     return sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
@@ -1062,6 +1152,9 @@ def find_session_by_sid(root, sid):
     """First transcript file named <sid>.jsonl anywhere under root (for branched-from links)."""
     if not re.fullmatch(r"[0-9a-f-]{8,36}", sid or ""):
         return None
+    p_agy = os.path.join(root, sid, ".system_generated", "logs", "transcript.jsonl")
+    if os.path.exists(p_agy):
+        return p_agy
     for p in sorted(glob.glob(os.path.join(root, "*", sid + ".jsonl"))):
         return p
     return None
@@ -1084,6 +1177,9 @@ def _index_item(path, st):
     if prov == "codex":                         # no project folders — group by workspace (cwd)
         proj = s["cwd"] or "codex"
         sid = _codex_sid(path)
+    elif prov == "agy":
+        proj = s["cwd"] or "agy"
+        sid = _agy_sid(path)
     elif prov == "gemini":
         proj = s["cwd"] or _gemini_projname(path) or "gemini"
         sid = _gemini_sid(path)
@@ -1445,14 +1541,14 @@ def session_api(path=None, sid=None, limit=400):
         if text:
             turns.append({"turn": gi, "role": t["role"], "text": text[:4000]})
     prov = provider_of(path)
-    real_sid = ({"codex": _codex_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
+    real_sid = ({"codex": _codex_sid, "agy": _agy_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
     return {"sid": real_sid, "provider": prov, "title": m["title"], "workspace": m.get("cwd", ""),
             "counts": m["n"], "tokens": m.get("tok"), "models": m.get("models"),
             "path": path, "turns": turns}
 
 def roots_api():
     return [{"path": r, "label": short_path(r), "provider":
-             ("codex" if is_codex_root(r) else "gemini" if is_gemini_root(r) else "claude")} for r in ROOTS]
+             ("codex" if is_codex_root(r) else "agy" if is_agy_root(r) else "gemini" if is_gemini_root(r) else "claude")} for r in ROOTS]
 
 # ---- render helpers ---------------------------------------------------------
 def esc(s):
@@ -1537,7 +1633,7 @@ def models_badge(models):
     for m, c in sorted((models or {}).items(), key=lambda kv: -kv[1]):
         sh = model_short(m)
         if sh:
-            out.append(f'<span class=mdl title="{esc(m)} · {c} {esc(tr('responses'))}">{esc(sh)}<span class=mdlc> {c}</span></span>')
+            out.append(f'<span class=mdl title="{esc(m)} · {c} {esc(tr("responses"))}">{esc(sh)}<span class=mdlc> {c}</span></span>')
     return " ".join(out)
 
 def agg_stats(items):
@@ -2480,6 +2576,8 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 @media(prefers-color-scheme:dark){.chip.kindchip{background:#3a3115;color:#f0d68a}}
 .provbadge.gemini{background:#efe6ff;color:#5a2ca0}
 @media(prefers-color-scheme:dark){.provbadge.gemini{background:#241a3a;color:#c2a8f0}}
+.provbadge.agy{background:#e0f2fe;color:#0369a1}
+@media(prefers-color-scheme:dark){.provbadge.agy{background:#0c4a6e;color:#7dd3fc}}
 .provbadge.codex{background:#e2f4fb;color:#0b6a8f}
 .provbadge.claude{background:#e8f7ee;color:#157038}
 @media(prefers-color-scheme:dark){.provbadge.codex{background:#0e2c39;color:#7fcbe6}.provbadge.claude{background:#15331f;color:#7ddfa1}}
@@ -3611,7 +3709,7 @@ class H(BaseHTTPRequestHandler):
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = star_btn(sid)
-        PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code"}
+        PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code", "agy": "✨ Antigravity"}
         pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
         # breadcrumb: folder › workspace › this session · id (folder/workspace click to filter, id copies)
         crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rt})}" title="{esc(tr("this folder"))}">📁 {esc(short_path(rt))}</a>'
@@ -3920,7 +4018,7 @@ MCP_TOOLS = [
      "description": "List the user's most recent past sessions (optionally one provider). Use to see what was "
                     "worked on lately across projects.",
      "inputSchema": {"type": "object", "properties": {
-         "provider": {"type": "string", "enum": ["claude", "codex", "gemini"]},
+         "provider": {"type": "string", "enum": ["claude", "codex", "gemini", "agy"]},
          "limit": {"type": "integer", "default": 20}}}},
 ]
 
