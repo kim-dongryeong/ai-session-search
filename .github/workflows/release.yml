@@ -150,8 +150,13 @@ jobs:
         run: |
           set -euo pipefail
           # Build the dmg FROM the (now stapled) .app so the notarization ticket rides inside it.
+          # Stage it next to an /Applications symlink so installing is one drag inside the window.
+          STAGE="$(mktemp -d)"
+          cp -R "dist/AI Session Search.app" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
           hdiutil create -volname "AI Session Search" \
-            -srcfolder "dist/AI Session Search.app" -ov -format UDZO "${{ matrix.asset }}"
+            -srcfolder "$STAGE" -ov -format UDZO "${{ matrix.asset }}"
+          rm -rf "$STAGE"
           # Sign the dmg itself when a Developer ID is available (no runtime/entitlements on a dmg).
           if [ -n "${SIGN_ID:-}" ]; then
             codesign --force --timestamp --sign "$SIGN_ID" "${{ matrix.asset }}"
