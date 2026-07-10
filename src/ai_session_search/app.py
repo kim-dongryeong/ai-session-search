@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.4"
+__version__ = "4.0.5"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -2880,11 +2880,17 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     }
     else{var h=document.getElementById('installhow');if(h)h.style.display='';}
   });
+  // ?welcome=1 — the macOS app launched us with no Chrome-app installed: re-greet with the modal.
+  var wantWelcome=false;
+  try{wantWelcome=new URLSearchParams(location.search).get('welcome')==='1';
+      if(wantWelcome&&!standalone){localStorage.removeItem('aiss:installed');localStorage.removeItem('aiss:installtip');}}catch(_){}
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;
+    // the browser firing this means the app is NOT installed — drop a stale "installed" flag
+    try{if(!standalone)localStorage.removeItem('aiss:installed');}catch(_){}
     if(installed()){return;}                         // already installed → no button, no auto-modal
     if(ibtn)ibtn.style.display='';                    // offer manual install (button) on any page…
     // …but only auto-pop the big modal on the home page — never on a deep permalink/session link.
-    try{if(location.pathname==='/'&&!localStorage.getItem('aiss:installtip')){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
+    try{if(location.pathname==='/'&&(wantWelcome||!localStorage.getItem('aiss:installtip'))){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
   });
   window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';closeInstall();});
   if(installed()&&ibtn)ibtn.style.display='none';
@@ -4236,6 +4242,42 @@ def _run_cli(args):
             print(f"    {who} {sn['text'][:200]}")
     return 0
 
+def _chrome_pwa(port):
+    """Path of the installed Chrome-app (PWA) bundle pointing at our port, else None."""
+    if sys.platform != "darwin":
+        return None
+    for app in glob.glob(os.path.expanduser("~/Applications/Chrome Apps.localized/*.app")):
+        pl = os.path.join(app, "Contents", "Info.plist")
+        try:
+            import subprocess
+            out = subprocess.run(["/usr/bin/plutil", "-extract", "CrAppModeShortcutURL", "raw", pl],
+                                 capture_output=True, text=True, timeout=3).stdout
+            if f"127.0.0.1:{port}" in out:
+                return app
+            if not out.strip():  # key missing — scan the plist itself
+                with open(pl, "rb") as f:
+                    if f"127.0.0.1:{port}".encode() in f.read():
+                        return app
+        except Exception:
+            continue
+    return None
+
+def _open_ui(url, port):
+    """--open target. macOS: prefer the installed Chrome app (own window, Cmd-Tab icon).
+    Without one, the frozen .app opens the browser on /?welcome=1 so the install
+    modal (welcome page) greets first instead of the bare app."""
+    pwa = _chrome_pwa(port)
+    if pwa:
+        try:
+            import subprocess
+            subprocess.Popen(["/usr/bin/open", pwa])
+            return
+        except Exception:
+            pass
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        url += "/?welcome=1"
+    webbrowser.open(url)
+
 def _port_file():
     """Well-known file where a running server records its port (single-instance reuse)."""
     import tempfile
@@ -4335,7 +4377,7 @@ def main(argv=None):
         if running:
             url = f"http://{args.host}:{running}"
             print(f"\n  AI Session Search already running \u2192 {url}")
-            webbrowser.open(url)
+            _open_ui(url, running)
             return 0
 
     port = args.port if args.port is not None else DEFAULT_PORT
@@ -4354,7 +4396,7 @@ def main(argv=None):
     print(f"  Browsing: {ROOT}" + (f"  (+{len(ROOTS)-1} more, switchable)" if len(ROOTS) > 1 else ""))
     print("  (close this window or press Ctrl-C to stop)\n")
     if args.open:
-        threading.Timer(0.8, webbrowser.open, [url]).start()
+        threading.Timer(0.8, _open_ui, [url, srv.server_address[1]]).start()
     # warm the index + search cache for every root in the background, so the FIRST
     # search is fast too (even after switching folders). Also prime the (throttled,
     # opt-out) update check so the notice, if any, is instant on first paint.
