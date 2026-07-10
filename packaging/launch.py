@@ -22,7 +22,9 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     if "--open" not in argv:
         argv = ["--open", *argv]
-    if _in_mac_app_bundle() and os.environ.get("AISS_SERVER") != "1":
+    # Detach only for the bare double-click launch; with CLI args (--version,
+    # --get, an explicit port...) stay in the foreground like a normal command.
+    if _in_mac_app_bundle() and not sys.argv[1:] and os.environ.get("AISS_SERVER") != "1":
         env = dict(os.environ, AISS_SERVER="1")
         subprocess.Popen([sys.executable, *argv], env=env, start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
