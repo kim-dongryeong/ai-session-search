@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.3"
+__version__ = "4.0.4"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1617,8 +1617,9 @@ def find_by_sid(sid):
                 return it["path"]
     return None
 
-def session_api(path=None, sid=None, limit=400):
-    """Full session content (meta + turns as plain text) for an agent to read."""
+def session_api(path=None, sid=None, limit=400, full=False):
+    """Full session content (meta + turns as plain text) for an agent to read.
+    full=True lifts the turn-count and per-turn text caps (CLI --full)."""
     if not path and sid:
         path = find_by_sid(sid)
     if not path:
@@ -1629,7 +1630,7 @@ def session_api(path=None, sid=None, limit=400):
     data = load_session(path)
     m = data["meta"]
     turns = []
-    for gi, t in enumerate(data["turns"][:max(1, min(int(limit or 400), 2000))]):
+    for gi, t in enumerate(data["turns"] if full else data["turns"][:max(1, min(int(limit or 400), 2000))]):
         parts = []
         for k, v in t["segs"]:
             if k == "channel":
@@ -1641,7 +1642,7 @@ def session_api(path=None, sid=None, limit=400):
                 parts.append(v)
         text = " ".join(parts).strip()
         if text:
-            turns.append({"turn": gi, "role": t["role"], "text": text[:4000]})
+            turns.append({"turn": gi, "role": t["role"], "text": text if full else text[:4000]})
     prov = provider_of(path)
     real_sid = ({"codex": _codex_sid, "agy": _agy_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
     return {"sid": real_sid, "provider": prov, "title": m["title"], "workspace": m.get("cwd", ""),
@@ -4192,7 +4193,7 @@ def _run_cli(args):
     if args.get is not None:
         p = args.get if os.path.exists(os.path.expanduser(args.get)) else None
         res = session_api(os.path.expanduser(args.get) if p else None,
-                          None if p else args.get, 2000)
+                          None if p else args.get, 2000, full=args.full)
         if res is None:
             print("session not found: " + args.get, file=sys.stderr)
             return 1
@@ -4204,7 +4205,7 @@ def _run_cli(args):
             if res.get("models"):
                 print("models: " + ", ".join(res["models"]))
             print("-" * 60)
-            for t in res["turns"][:lim]:
+            for t in (res["turns"] if args.full else res["turns"][:lim]):
                 who = {"you": "🧑 You", "assistant": "🤖 Assistant"}.get(t["role"], t["role"])
                 print(f"\n[{t['turn']}] {who}\n{t['text']}")
         return 0
@@ -4235,13 +4236,32 @@ def _run_cli(args):
             print(f"    {who} {sn['text'][:200]}")
     return 0
 
+def _port_file():
+    """Well-known file where a running server records its port (single-instance reuse)."""
+    import tempfile
+    uid = f"-{os.getuid()}" if hasattr(os, "getuid") else ""
+    return os.path.join(tempfile.gettempdir(), f"ai-session-search{uid}.port")
+
+def _running_server(ports, host="127.0.0.1"):
+    """First port in `ports` where one of our servers answers, else None."""
+    for port in ports:
+        if not port:
+            continue
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}/api/roots", timeout=1) as r:
+                if r.status == 200 and "roots" in json.loads(r.read().decode("utf-8", "replace")):
+                    return port
+        except Exception:
+            pass
+    return None
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="ai-session-search",
         description="Read-only local web viewer for Claude Code session transcripts.")
     ap.add_argument("root", nargs="?", default=None,
                     help="projects dir to browse (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port to listen on (default {DEFAULT_PORT})")
+    ap.add_argument("--port", type=int, default=None, help=f"port to listen on (default {DEFAULT_PORT})")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default 127.0.0.1; changing this exposes your transcripts to the network)")
     ap.add_argument("--roots", default="", metavar="DIR[,DIR...]",
@@ -4261,6 +4281,8 @@ def main(argv=None):
     ap.add_argument("--scope", default="all", choices=sorted(SCOPES),
                     help="search scope for --search (default: all)")
     ap.add_argument("--limit", type=int, default=20, help="max results for --search/--get/--sessions")
+    ap.add_argument("--full", action="store_true",
+                    help="with --get: print the whole session, lifting the turn-count and per-turn text caps")
     ap.add_argument("--json", action="store_true", help="emit JSON for --search/--get/--sessions")
     ap.add_argument("--lang", default=os.environ.get("CCH_LANG", "en"),
                     help="default UI language code (e.g. en, ko); needs locales/<code>.json. "
@@ -4302,11 +4324,31 @@ def main(argv=None):
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"  \u26a0\ufe0f  Binding {args.host}: your transcripts are exposed on the network. Use only on a trusted network.")
 
+    # Launched again (no explicit port/root) while a server is already up?
+    # Just focus the browser on it instead of starting a second instance.
+    if args.open and args.port is None and args.root is None:
+        try:
+            saved = int(open(_port_file()).read().strip())
+        except Exception:
+            saved = None
+        running = _running_server([saved, DEFAULT_PORT], args.host)
+        if running:
+            url = f"http://{args.host}:{running}"
+            print(f"\n  AI Session Search already running \u2192 {url}")
+            webbrowser.open(url)
+            return 0
+
+    port = args.port if args.port is not None else DEFAULT_PORT
     try:
-        srv = make_server(args.host, args.port)
+        srv = make_server(args.host, port)
     except OSError:
-        print(f"  \u26a0\ufe0f  Port {args.port} is in use — opening on a temporary port instead. (set one with --port)")
+        print(f"  \u26a0\ufe0f  Port {port} is in use — opening on a temporary port instead. (set one with --port)")
         srv = make_server(args.host, 0)
+    try:
+        with open(_port_file(), "w") as f:
+            f.write(str(srv.server_address[1]))
+    except Exception:
+        pass
     url = f"http://{args.host}:{srv.server_address[1]}"
     print(f"\n  AI Session Search v{__version__} → {url}")
     print(f"  Browsing: {ROOT}" + (f"  (+{len(ROOTS)-1} more, switchable)" if len(ROOTS) > 1 else ""))
