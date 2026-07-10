@@ -773,12 +773,19 @@ def _agy_sid(path):
     m = re.search(r"/brain/([0-9a-f\-]+)/", path.replace(os.sep, "/"))
     return m.group(1) if m else os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path))))
 
+def _agy_uri_to_path(uri):
+    from urllib.parse import unquote
+    m = re.search(r"file://(/[^\s\"']+)", uri or "")
+    return unquote(m.group(1)) if m else ""
+
 _AGY_TITLES = {"ts": {}, "data": {}}
-def get_agy_title(path):
+def get_agy_meta(path):
+    """(title, cwd) for an Antigravity session, from its summary stores."""
     root = root_for_path(path)
-    if not root: return None
+    if not root: return (None, "")
     sid = _agy_sid(path)
-    if not sid: return None
+    if not sid: return (None, "")
+    title, cwd = None, ""
 
     # 1. Check annotations/<sid>.pbtxt for renamed titles
     anno_path = os.path.join(root, "..", "annotations", f"{sid}.pbtxt")
@@ -788,26 +795,31 @@ def get_agy_title(path):
                 content = f.read()
             m = re.search(r'title\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', content)
             if m:
-                return json.loads('"' + m.group(1) + '"')
+                title = json.loads('"' + m.group(1) + '"')
         except Exception:
             pass
-    
+
     # 2. Check SQLite DB (used by CLI)
     db_path = os.path.join(root, "..", "conversation_summaries.db")
     if os.path.exists(db_path):
         import sqlite3
         try:
             mtime = os.stat(db_path).st_mtime_ns
-            if _AGY_TITLES["ts"].get(db_path) == mtime:
-                return _AGY_TITLES["data"].get(db_path, {}).get(sid)
-            conn = sqlite3.connect(db_path)
-            c = conn.cursor()
-            c.execute("SELECT conversation_id, title FROM conversation_summaries")
-            res = {row[0]: row[1] for row in c.fetchall()}
-            conn.close()
-            _AGY_TITLES["data"][db_path] = res
-            _AGY_TITLES["ts"][db_path] = mtime
-            return res.get(sid)
+            if _AGY_TITLES["ts"].get(db_path) != mtime:
+                conn = sqlite3.connect(db_path)
+                c = conn.cursor()
+                try:
+                    c.execute("SELECT conversation_id, title, workspace_uris FROM conversation_summaries")
+                    res = {row[0]: (row[1], _agy_uri_to_path(row[2])) for row in c.fetchall()}
+                except sqlite3.OperationalError:
+                    c.execute("SELECT conversation_id, title FROM conversation_summaries")
+                    res = {row[0]: (row[1], "") for row in c.fetchall()}
+                conn.close()
+                _AGY_TITLES["data"][db_path] = res
+                _AGY_TITLES["ts"][db_path] = mtime
+            hit = _AGY_TITLES["data"].get(db_path, {}).get(sid)
+            if hit:
+                return (title or hit[0], hit[1])
         except Exception:
             pass
 
@@ -816,31 +828,43 @@ def get_agy_title(path):
     if os.path.exists(pb_path):
         try:
             mtime = os.stat(pb_path).st_mtime_ns
-            if _AGY_TITLES["ts"].get(pb_path) == mtime:
-                return _AGY_TITLES["data"].get(pb_path, {}).get(sid)
-            with open(pb_path, "rb") as f:
-                data = f.read()
-            res = {}
-            for m in re.finditer(b"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", data):
-                m_sid = m.group(1).decode("utf-8")
-                idx = m.end()
-                n_idx = data.find(b'\n', idx, idx + 20)
-                if n_idx != -1:
-                    strlen = data[n_idx+1]
-                    title = data[n_idx+2:n_idx+2+strlen]
-                    try:
-                        dec = title.decode("utf-8")
-                        if len(dec) == strlen or len(dec) > 0:
-                            res[m_sid] = dec
-                    except:
-                        pass
-            _AGY_TITLES["data"][pb_path] = res
-            _AGY_TITLES["ts"][pb_path] = mtime
-            return res.get(sid)
+            if _AGY_TITLES["ts"].get(pb_path) != mtime:
+                with open(pb_path, "rb") as f:
+                    data = f.read()
+                res = {}
+                for m in re.finditer(b"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", data):
+                    m_sid = m.group(1).decode("utf-8")
+                    idx = m.end()
+                    pb_title, pb_cwd = res.get(m_sid, ("", ""))
+                    n_idx = data.find(b'\n', idx, idx + 20)
+                    if n_idx != -1:
+                        strlen = data[n_idx+1]
+                        try:
+                            dec = data[n_idx+2:n_idx+2+strlen].decode("utf-8")
+                            if dec:
+                                pb_title = dec
+                        except Exception:
+                            pass
+                    # a workspace mapping puts a length-prefixed file:// URI right after the sid
+                    w = data.find(b"file://", idx, idx + 20)
+                    if w != -1 and not pb_cwd:
+                        strlen = data[w-1]
+                        if strlen < 0x80 and w >= 2 and data[w-2] & 0x80:  # 2-byte varint length
+                            strlen = (data[w-2] & 0x7f) | (strlen << 7)
+                        pb_cwd = _agy_uri_to_path(data[w:w+strlen].decode("utf-8", "replace"))
+                    res[m_sid] = (pb_title, pb_cwd)
+                _AGY_TITLES["data"][pb_path] = res
+                _AGY_TITLES["ts"][pb_path] = mtime
+            hit = _AGY_TITLES["data"].get(pb_path, {}).get(sid)
+            if hit:
+                return (title or hit[0], hit[1])
         except Exception:
             pass
-            
-    return None
+
+    return (title, cwd)
+
+def get_agy_title(path):
+    return get_agy_meta(path)[0]
 
 
 def classify_agy_line(o):
@@ -892,6 +916,12 @@ def _agy_load(path):
     for o in iter_lines(path):
         if o.get("created_at"):
             last_ts = o["created_at"]
+        for tc in o.get("tool_calls") or []:
+            args = tc.get("arguments", tc.get("args", {}))
+            c = (args.get("Cwd") or "").strip().strip('"') if isinstance(args, dict) else ""
+            # keep the shortest ancestor seen, so a repo root beats its subdirs
+            if c.startswith("/") and (not cwd or cwd.startswith(c)):
+                cwd = c
         r = classify_agy_line(o)
         if not r:
             continue
@@ -904,7 +934,9 @@ def _agy_load(path):
             n[role] += 1
         if role == "you" and not first_human:
             first_human = " ".join(x[1] for x in segs if x[0] == "text").strip()
-    title = (get_agy_title(path) or first_human or tr("(untitled)")).strip()[:120]
+    meta_title, meta_cwd = get_agy_meta(path)
+    cwd = meta_cwd or cwd
+    title = (meta_title or first_human or tr("(untitled)")).strip()[:120]
     meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
             "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
             "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": {"Antigravity": 1}}
