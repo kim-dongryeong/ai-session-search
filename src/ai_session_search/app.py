@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.5"
+__version__ = "4.0.6"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -2370,6 +2370,8 @@ def render_turn(gi, t, q="", thread_link=None):
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<script>/* before first paint: ?welcome=1 → show the install modal from the very first frame */
+try{if(new URLSearchParams(location.search).get('welcome')==='1'&&!(window.matchMedia&&(matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: window-controls-overlay)').matches)))document.documentElement.classList.add('welcome');}catch(e){}</script>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -2422,6 +2424,10 @@ radial-gradient(1100px 750px at 46% -22%,rgba(124,58,237,.4),rgba(124,58,237,0) 
 radial-gradient(1100px 700px at 58% 122%,rgba(110,255,200,.25),rgba(110,255,200,0) 62%),
 linear-gradient(158deg,#4667ec 0%,#2b4fd8 46%,#0d8ec6 100%)}
 .modal-ov.open{display:flex}
+/* ?welcome=1 — modal visible from the very first frame; hide the app until it's parsed
+   (the modal sits at the end of the streamed HTML, so the app could paint first) */
+html.welcome body{visibility:hidden}
+html.welcome #installmodal{display:flex;visibility:visible}
 @media(prefers-color-scheme:dark){.modal-ov{background:
 radial-gradient(1600px 1100px at 6% -18%,rgba(255,96,210,.4),rgba(255,96,210,0) 64%),
 radial-gradient(1700px 1200px at 110% 115%,rgba(56,224,255,.4),rgba(56,224,255,0) 64%),
@@ -2864,7 +2870,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function installed(){try{return standalone||localStorage.getItem('aiss:installed')==='1';}catch(_){return standalone;}}
   if(standalone)mark();  // remember (per-origin) that this machine has the app installed
   function openInstall(){if(mov)mov.classList.add('open');}
-  function closeInstall(){if(mov)mov.classList.remove('open');}
+  function closeInstall(){if(mov)mov.classList.remove('open');document.documentElement.classList.remove('welcome');}
   if(ibtn)ibtn.addEventListener('click',openInstall);
   // No visible dismiss — only "Confirm" (or ESC as an escape hatch). Feels like a finish-setup step.
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mov&&mov.classList.contains('open'))closeInstall();});
