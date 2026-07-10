@@ -197,7 +197,7 @@ class Cli(unittest.TestCase):
 
     def _run(self, **kw):
         args = types.SimpleNamespace(search=None, get=None, sessions=False,
-                                     scope="all", limit=20, json=False)
+                                     scope="all", limit=20, json=False, full=False)
         for k, v in kw.items():
             setattr(args, k, v)
         buf = io.StringIO()
