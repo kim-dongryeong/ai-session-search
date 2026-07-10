@@ -46,13 +46,19 @@ PORT=8777
 URL="http://127.0.0.1:$PORT"
 # Already running? Just focus the browser and exit.
 if curl -s -o /dev/null "$URL" 2>/dev/null; then open "$URL"; exit 0; fi
-# Let the app open the browser itself (--open); exec so it stays the foreground process.
+# Start the server detached and exit 0. Never exec into python here: /usr/bin/python3
+# resolves to the Python.app binary inside Python3.framework, so exec swaps this
+# process's bundle identity and LaunchServices reports the app "is not open anymore".
 for CMD in ai-session-search aiss ass; do
-  if command -v "$CMD" >/dev/null 2>&1; then exec "$CMD" --open --port "$PORT"; fi
+  if command -v "$CMD" >/dev/null 2>&1; then
+    nohup "$CMD" --open --port "$PORT" >/dev/null 2>&1 &
+    exit 0
+  fi
 done
 REPO="__REPO__"
 if [ -d "$REPO/src/ai_session_search" ]; then
-  exec /usr/bin/env PYTHONPATH="$REPO/src" python3 -m ai_session_search --open --port "$PORT"
+  nohup /usr/bin/env PYTHONPATH="$REPO/src" python3 -m ai_session_search --open --port "$PORT" >/dev/null 2>&1 &
+  exit 0
 fi
 osascript -e 'display alert "AI Session Search" message "The ai-session-search command was not found.\nInstall it first:\n\npipx install ai-session-search"'
 LAUNCH
