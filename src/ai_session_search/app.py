@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.7"
+__version__ = "4.0.8"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1248,6 +1248,13 @@ def root_glyph(root):
     if "claude" in q:
         return "✴️ "
     return ""
+
+PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code", "agy": "✨ Antigravity"}
+
+def prov_badge(prov, root=None):
+    """Small provider chip; the tooltip names the folder (distinguishes e.g. agy GUI vs CLI)."""
+    t = f' title="{esc(short_path(root))}"' if root else ""
+    return f'<span class="chip provbadge {esc(prov)}"{t}>{PROV_LABEL.get(prov, prov)}</span>'
 
 def session_files(root):
     if is_codex_root(root):
@@ -3601,7 +3608,8 @@ class H(BaseHTTPRequestHandler):
                 f'<div class=card data-sid="{esc(it["sid"])}">'
                 f'{star_btn(it["sid"])} '
                 f'<a class=t href="{link}">{esc(it["title"])}</a>{loopchip}'
-                f'<div class=meta><a class="chip chiplink" href="{q(proj=it["proj"], sort=sort, dir=dir_)}" title="{esc(tr("show this workspace only"))}">{esc(proj_label(it))}</a> '
+                f'<div class=meta>{prov_badge(it.get("provider", ""), root_for_path(it["path"]))} '
+                f'<a class="chip chiplink" href="{q(proj=it["proj"], sort=sort, dir=dir_)}" title="{esc(tr("show this workspace only"))}">{esc(proj_label(it))}</a> '
                 f'{counts_html(it["n"])}{tokbit}{mdlbit} · '
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
@@ -3741,6 +3749,7 @@ class H(BaseHTTPRequestHandler):
                 score += 500
             score += 300 * bool(fields.get("file")) + 200 * bool(fields.get("code")) + 200 * bool(fields.get("cmd"))
             results.append({"path": path, "title": titles.get(path, tr("(untitled)")),
+                            "provider": it.get("provider") or provider_of(path),
                             "proj": it.get("proj") or os.path.basename(os.path.dirname(path)),
                             "n": len(hits), "score": score, "mtime": mt,
                             "all_word": bool(hit) and hit.get("all_word"),
@@ -3796,7 +3805,8 @@ class H(BaseHTTPRequestHandler):
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
             proj_href = "/?" + urllib.parse.urlencode({"proj": r["proj"], **({"root": rootp} if rootp else {})})
-            rows.append(f'<div class=card><a class=t href="{openurl}">{hl(r["title"], hlq)}</a> '
+            rows.append(f'<div class=card>{prov_badge(r["provider"], root_for_path(r["path"]))} '
+                        f'<a class=t href="{openurl}">{hl(r["title"], hlq)}</a> '
                         f'<span class=meta>{cnt}</span>{exact}{kchip}'
                         f'<div class=meta><a class="chip chiplink" href="{proj_href}" title="{esc(tr("show this workspace only"))}">{esc(short)}</a></div>{metaline}{snips}</div>')
 
@@ -3862,8 +3872,7 @@ class H(BaseHTTPRequestHandler):
         mrows.append(_srow(tr("Stored in"), f'📁 {esc(short_path(rt))} · {fmt_ts(meta["last_ts"])}'))
         refcard = f'<details class="card srefcard" open><summary>📍 {tr("Session info (Session Reference)")}</summary><div class=srefbody>{"".join(mrows)}</div></details>'
         star = star_btn(sid)
-        PROV_LABEL = {"codex": "🌀 Codex", "gemini": "✨ Gemini", "claude": "✴️ Claude Code", "agy": "✨ Antigravity"}
-        pbadge = f'<span class="chip provbadge {prov}">{PROV_LABEL.get(prov, prov)}</span> '
+        pbadge = prov_badge(prov, rt) + " "
         # breadcrumb: folder › workspace › this session · id (folder/workspace click to filter, id copies)
         crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rt})}" title="{esc(tr("this folder"))}">📁 {esc(short_path(rt))}</a>'
         crumb_ws = (f' <span class=crumbsep>›</span> <a class=crumb href="/?{urllib.parse.urlencode({"proj": proj, "root": rt})}" title="{esc(tr("this workspace"))}">📂 {esc(short_path(workspace) or proj)}</a>'
