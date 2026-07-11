@@ -51,7 +51,13 @@ class HttpSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.root, cls.session_path = build_fixture_root()
+        # pin to the fixture: "/" with no root param now browses ALL roots, and
+        # configure() auto-discovers the machine's real ~/.claude, ~/.codex, ~/.gemini
         app.configure(cls.root)
+        app.DEFAULT_ROOTS = [cls.root]
+        app.SAVED_ROOTS = []
+        app.ROOTS[:] = [cls.root]
+        app.ROOT = cls.root
         cls.srv = app.make_server(port=0)
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
