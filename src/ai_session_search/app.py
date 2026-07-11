@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.8"
+__version__ = "4.0.9"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -272,7 +272,14 @@ def normalize_root(path):
     Accepts the projects dir itself, a parent containing projects/, or a .claude dir."""
     if not path:
         return None
-    p = os.path.abspath(os.path.expanduser(path.strip()))
+    raw = path.strip()
+    # paths pasted from Finder/터미널 often arrive quoted ('/My Drive/…') or with
+    # shell-escaped spaces (My\ Drive) — unwrap both before resolving
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        raw = raw[1:-1].strip()
+    p = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isdir(p) and "\\ " in raw:
+        p = os.path.abspath(os.path.expanduser(raw.replace("\\ ", " ")))
     if not os.path.isdir(p):
         return None
     for cand in (p, os.path.join(p, "projects"), os.path.join(p, ".claude", "projects")):
@@ -2507,6 +2514,8 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .addroot{display:inline-flex;gap:5px;margin-left:4px}
 .addroot input{padding:5px 10px;border:1px solid #cfd4db;border-radius:14px;font-size:12px;width:min(46vw,300px)}
 .addroot button{padding:5px 11px;border:0;border-radius:14px;background:#16a34a;color:#fff;font-size:12px;cursor:pointer}
+.addroot a.pickbtn{padding:5px 11px;border-radius:14px;background:#e9edf2;color:#444;font-size:12px;text-decoration:none;border:1px solid #dfe3e8}
+@media(prefers-color-scheme:dark){.addroot a.pickbtn{background:#1b1e24;color:#cfd4db;border-color:#3a3f47}}
 @media(prefers-color-scheme:dark){.addroot input{background:#1b1e24;color:#e7e9ec;border-color:#3a3f47}}
 .card{background:#fff;border:1px solid #e4e7eb;border-radius:11px;padding:12px 16px;margin:9px 0}
 @media(prefers-color-scheme:dark){.card{background:#1b1e24;border-color:#2a2e35}}
@@ -3170,9 +3179,11 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         glyph = root_glyph(r)
         links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(param)}">'
                      f'{glyph}{esc(short_path(r))}</a>{rm}</span>')
+    pick = (f'<a class=pickbtn href="/pickroot" title="{esc(tr("choose a folder with Finder"))}">📂 {tr("Browse…")}</a>'
+            if sys.platform == "darwin" else "")
     addform = ('<form class=addroot action="/addroot" method=get>'
                f'<input name=path placeholder="{esc(tr("Add a folder — paste a path (…/.claude/projects)"))}">'
-               f'<button>{tr("➕ Add")}</button></form>')
+               f'<button>{tr("➕ Add")}</button>' + pick + '</form>')
     rootbar = f'<div class=rootbar><span class=lbl>📁 {tr("Folders")}:</span>{"".join(links)}{addform}</div>'
     scopeopts = "".join(f'<option value="{k}"{" selected" if k == scope else ""}>{esc(tr(v))}</option>'
                         for k, v in SCOPES.items())
@@ -3451,13 +3462,15 @@ class H(BaseHTTPRequestHandler):
                                            g("goto", ""), g("sq", ""), g("sqtools", "")))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
-        if u.path in ("/addroot", "/delroot"):
+        if u.path in ("/addroot", "/delroot", "/pickroot"):
             # CSRF guard for state-changing routes: modern browsers send
             # Sec-Fetch-Site; block explicit cross-site, allow same-origin,
             # direct navigation, and header-less clients (curl).
             sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
             if sfs in ("cross-site", "same-site"):
                 return self.send_error(403, "cross-site request rejected")
+            if u.path == "/pickroot":
+                return self.pickroot()
             return self.addroot(g("path")) if u.path == "/addroot" else self.delroot(g("path"))
         self.send_error(404)
 
@@ -3479,6 +3492,23 @@ class H(BaseHTTPRequestHandler):
                 f'{tr("e.g.")} <code>/Volumes/backup/.claude/projects</code></p>'
                 f'<p><a href="/">{tr("← Back")}</a></p></div>')
         return self._send(shell(tr("Add folder failed"), body))
+
+    def pickroot(self):
+        # native Finder folder picker — possible because the server runs on the same Mac
+        if sys.platform != "darwin":
+            return self._redirect("/")
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["/usr/bin/osascript", "-e",
+                 f'POSIX path of (choose folder with prompt "{tr("AI Session Search — choose a projects folder (e.g. .claude/projects, or a backup of it)")}")'],
+                capture_output=True, text=True, timeout=600)
+            picked = (r.stdout or "").strip()
+        except Exception:
+            picked = ""
+        if not picked:                      # cancelled (or timed out) — just go home
+            return self._redirect("/")
+        return self.addroot(picked)
 
     def delroot(self, path):
         p = os.path.abspath(os.path.expanduser(path or ""))

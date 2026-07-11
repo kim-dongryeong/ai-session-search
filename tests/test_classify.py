@@ -220,6 +220,15 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.normalize_root(os.path.join(d, ".claude")), expect)
         self.assertEqual(app.normalize_root(expect), expect)               # projects dir itself
         self.assertIsNone(app.normalize_root("/nonexistent-xyz"))
+        # quoted / shell-escaped paste forms (Finder "Copy as Pathname", terminal drag)
+        self.assertEqual(app.normalize_root(f"'{expect}'"), expect)
+        self.assertEqual(app.normalize_root(f'"{expect}"'), expect)
+        spaced = os.path.join(d, "my backup", ".claude", "projects", "-p")
+        os.makedirs(spaced)
+        with open(os.path.join(spaced, "s.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        sp_expect = os.path.dirname(spaced)
+        self.assertEqual(app.normalize_root(sp_expect.replace(" ", "\\ ")), sp_expect)
 
     def test_root_containment(self):
         d = tempfile.mkdtemp()
