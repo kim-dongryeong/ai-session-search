@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.6"
+__version__ = "4.0.7"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -322,6 +322,19 @@ def root_for_path(p):
 
 def active_root(v):
     return v if v in ROOTS else ROOT
+
+def active_roots(v):
+    """Selected roots from a `root` param — multi-select. None/''/'*' → all roots;
+    a comma-separated list (or a single root, back-compat) → that subset, in ROOTS order."""
+    if not v or v == "*":
+        return list(ROOTS)
+    picked = set(v.split(","))
+    sel = [r for r in ROOTS if r in picked]
+    return sel or list(ROOTS)
+
+def root_param(sel):
+    """Canonical `root` URL param for a selection: '' when it means all roots."""
+    return "" if len(sel) >= len(ROOTS) else ",".join(sel)
 DEFAULT_LIM = 10000
 LIM_OPTIONS = [1000, 2000, 5000, 10000, 20000, 50000]
 
@@ -3107,27 +3120,48 @@ SCOPES = {"all": "All", "human": "🧑 Only me", "claude": "✦ Only Claude",
           "chat": "Conversation only (no tools/system)", "code": "🧩 Code/edits", "tool": "🔧 Commands/files"}
 DAY_CHOICES = {"": "All time", "7": "Last 7 days", "30": "Last 30 days", "90": "Last 90 days"}
 
+def _roots_label(roots):
+    if len(roots) >= len(ROOTS) and len(ROOTS) > 1:
+        return tr("All folders")
+    return " · ".join(short_path(r) for r in roots)
+
 def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
-    root = root if root in ROOTS else ROOT
+    sel = active_roots(root)
+    rootp = root_param(sel)
+    all_on = len(sel) >= len(ROOTS)
     multi = len(ROOTS) > 1
-    home = ("/?root=" + urllib.parse.quote(root)) if multi else "/"
-    hidden = f'<input type=hidden name=root value="{esc(root)}">' if multi else ""
-    def _rootlink(r):
+    home = ("/?root=" + urllib.parse.quote(rootp)) if (multi and rootp) else "/"
+    hidden = f'<input type=hidden name=root value="{esc(rootp)}">' if (multi and rootp) else ""
+    def _rootlink(param):
         # on a search page, keep the query when switching folders (re-run search there)
         if q:
-            params = {"q": q, "scope": scope, "root": r}
+            params = {"q": q, "scope": scope}
+            if param:
+                params["root"] = param
             for k, v in (("days", days), ("from", from_), ("to", to)):
                 if v:
                     params[k] = v
             return "/search?" + urllib.parse.urlencode(params)
-        return "/?root=" + urllib.parse.quote(r)
+        return ("/?root=" + urllib.parse.quote(param)) if param else "/"
     links = []
+    if multi:
+        links.append(f'<span class=rootitem><a class="{"on" if all_on else ""}" href="{_rootlink("")}" '
+                     f'title="{esc(tr("all folders"))}">🗂 {tr("All")}</a></span>')
     for r in ROOTS:
-        on = "on" if r == root else ""
+        # toggle semantics, like the filter chips: from "All" a click drills down to
+        # one folder; from a subset it adds/removes that folder (empty → back to All)
+        if all_on:
+            target = [r]
+        elif r in sel:
+            target = [x for x in sel if x != r]
+        else:
+            target = sel + [r]
+        param = root_param([x for x in ROOTS if x in target])
+        on = "on" if (r in sel and not all_on) else ""
         rm = (f'<a class=rmroot href="/delroot?path={urllib.parse.quote(r)}" title="{esc(tr("remove from list"))}">✕</a>'
               if r in SAVED_ROOTS else "")
         glyph = root_glyph(r)
-        links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(r)}">'
+        links.append(f'<span class=rootitem><a class="{on}" href="{_rootlink(param)}">'
                      f'{glyph}{esc(short_path(r))}</a>{rm}</span>')
     addform = ('<form class=addroot action="/addroot" method=get>'
                f'<input name=path placeholder="{esc(tr("Add a folder — paste a path (…/.claude/projects)"))}">'
@@ -3398,7 +3432,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send_json({"query": g("q"), "count": len(res), "results": res})
             except Exception as e:
                 return self._send_json({"error": str(e)}, 500)
-        root = active_root(g("root"))
+        root = g("root")            # raw param — index/search accept multi-select ("a,b" / "" = all)
         if u.path == "/":
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
         if u.path == "/search":
@@ -3451,8 +3485,10 @@ class H(BaseHTTPRequestHandler):
 
     # ---- index ----
     def index(self, proj_filter="", sort="date", dir_="", root=None):
-        root = root if root in ROOTS else ROOT
-        all_items = get_index(root)
+        roots = active_roots(root)
+        rootp = root_param(roots)
+        rootlabel = _roots_label(roots)
+        all_items = [it for r in roots for it in get_index(r)]
         proj_cwd = {}
         for it in all_items:
             if it["proj"] not in proj_cwd and it.get("cwd"):
@@ -3473,8 +3509,8 @@ class H(BaseHTTPRequestHandler):
 
         def q(**kw):
             parts = [f"{k}={urllib.parse.quote(str(v))}" for k, v in kw.items() if v]
-            if len(ROOTS) > 1:
-                parts.append("root=" + urllib.parse.quote(root))
+            if rootp:
+                parts.append("root=" + urllib.parse.quote(rootp))
             return "/?" + "&".join(parts) if parts else "/"
 
         # ---- project insight ----
@@ -3485,7 +3521,7 @@ class H(BaseHTTPRequestHandler):
             st = agg_stats(items)
             label = proj_cwd.get(proj_filter, proj_filter)
             loopline = (f' · <span class=loopchip>🔁 {tr("autonomous build-loop")} {st["loop"]}</span>') if st["loop"] else ""
-            hidden_root = f'<input type=hidden name=root value="{esc(root)}">' if len(ROOTS) > 1 else ""
+            hidden_root = f'<input type=hidden name=root value="{esc(rootp)}">' if rootp else ""
             statsblock = (
                 f'<div class="card digest"><b>📁 {esc(label)}</b>{loopline}'
                 f'<div style="margin-top:6px">{tr("Total")} <b>{st["sessions"]}</b> {tr("sessions")} · '
@@ -3571,13 +3607,13 @@ class H(BaseHTTPRequestHandler):
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
                 + (f'<div class=preview>{esc(it["preview"])}</div>' if it["preview"] else "") + '</div>')
         head = (f'<p class=meta>{len(items)} {tr("sessions")} · <b>🧑 {tr("You")}</b> {tr("marks — by a verified ruleset —")} '
-                f'<b>{tr("only what you actually typed")}</b> · {esc(root)}</p>'
+                f'<b>{tr("only what you actually typed")}</b> · {esc(rootlabel)}</p>'
                 f'<p class=meta>{tr("Legend")}: 🧑 {tr("You")} · ✦ Claude · ⚙ {tr("Tool result")} · ⓘ {tr("System / injected")} '
                 f'<span class=hint>{tr("(hover a number for its meaning; expand ❓ below for the full legend)")}</span></p>'
                 + legend_html())
         if not items and not proj_filter:
             head += (f'<div class=card><b>{tr("No sessions.")}</b>'
-                     f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(root)}. '
+                     f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(rootlabel)}. '
                      + tr('Make sure this is a folder where Claude Code has run at least once, or add another folder with ➕ above.') + '</p></div>')
         favbar = (f'<div class=favbar>⭐ <b>{len(_STARS)}</b> {tr("favorites")} · '
                   f'<a href="/api/stars.json" download>⬇ {tr("export")}</a> · '
@@ -3585,16 +3621,18 @@ class H(BaseHTTPRequestHandler):
                   f' <span class=hint>{tr("kept on this machine; export to move to another computer")}</span></div>')
         # fixed bottom status bar — where you are (folder, and workspace when filtered)
         if proj_filter:
-            crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": root})}" title="{esc(tr("this folder"))}">📁 {esc(short_path(root))}</a>'
+            crumb_root = (f'<a class=crumb href="{("/?" + urllib.parse.urlencode({"root": rootp})) if rootp else "/"}" '
+                          f'title="{esc(tr("this folder"))}">📁 {esc(rootlabel)}</a>')
             crumb = (f'<div class=crumbs>{crumb_root} <span class=crumbsep>›</span> '
                      f'<span class=crumbcur>📂 {esc(proj_cwd.get(proj_filter, proj_filter))}</span></div>')
         else:
-            crumb = f'<div class=crumbs><span class=crumbcur>📁 {esc(short_path(root))}</span> <span class=hint>{len(items)} {tr("sessions")}</span></div>'
-        return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=root)
+            crumb = f'<div class=crumbs><span class=crumbcur>📁 {esc(rootlabel)}</span> <span class=hint>{len(items)} {tr("sessions")}</span></div>'
+        return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=rootp)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
-        root = root if root in ROOTS else ROOT
+        roots = active_roots(root)
+        rootp = root_param(roots)
         if scope not in SCOPES:
             scope = "all"
         if days not in DAY_CHOICES:
@@ -3613,9 +3651,9 @@ class H(BaseHTTPRequestHandler):
             return shell(tr("Search"), f'<p class=meta>{tr("Enter a query. Multiple words = all must match (AND), ")}'
                                  f'{tr("&quot;quotes&quot; = exact phrase. Each word gets its own color. ")}'
                                  f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>',
-                         q, scope, root, days, from_, to)
+                         q, scope, rootp, days, from_, to)
         t0 = time.perf_counter()
-        index = get_index(root)
+        index = [it for r in roots for it in get_index(r)]
         proj_cwd = {}
         for it in index:
             if it["proj"] not in proj_cwd and it.get("cwd"):
@@ -3632,7 +3670,7 @@ class H(BaseHTTPRequestHandler):
 
         RESULT_CAP = 300
         results = []
-        for path in session_files(root):
+        for path in (p_ for r_ in roots for p_ in session_files(r_)):
             mt = mtimes.get(path, 0)
             if (lo is not None and mt < lo) or (hi is not None and mt >= hi):
                 continue
@@ -3718,8 +3756,8 @@ class H(BaseHTTPRequestHandler):
             for k, v in (("days", days), ("from", from_), ("to", to)):
                 if v:
                     params[k] = v
-            if len(ROOTS) > 1:
-                params["root"] = root
+            if rootp:
+                params["root"] = rootp
             params.update({k: v for k, v in kw.items() if v})
             return "/search?" + urllib.parse.urlencode(params)
 
@@ -3757,7 +3795,7 @@ class H(BaseHTTPRequestHandler):
                 for gi, role, s in r["hits"])
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
-            proj_href = "/?" + urllib.parse.urlencode({"proj": r["proj"], "root": root})
+            proj_href = "/?" + urllib.parse.urlencode({"proj": r["proj"], **({"root": rootp} if rootp else {})})
             rows.append(f'<div class=card><a class=t href="{openurl}">{hl(r["title"], hlq)}</a> '
                         f'<span class=meta>{cnt}</span>{exact}{kchip}'
                         f'<div class=meta><a class="chip chiplink" href="{proj_href}" title="{esc(tr("show this workspace only"))}">{esc(short)}</a></div>{metaline}{snips}</div>')
@@ -3767,9 +3805,9 @@ class H(BaseHTTPRequestHandler):
                 (" · " + tr(DAY_CHOICES[days]) if days else ""))
         more = f' · <span class=hint>(+{truncated} {tr("more, refine to narrow")})</span>' if truncated > 0 else ""
         head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{more} · '
-                f'📁 {esc(short_path(root))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>')
+                f'📁 {esc(_roots_label(roots))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>')
         return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
-                     q, scope, root, days, from_, to)
+                     q, scope, rootp, days, from_, to)
 
     # ---- session ----
     def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq="", sqtools=""):

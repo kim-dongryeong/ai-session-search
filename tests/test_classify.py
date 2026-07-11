@@ -239,6 +239,38 @@ class Helpers(unittest.TestCase):
         self.assertEqual(app.parse_query("“한글 구문” 단어"), ["한글 구문", "단어"])
         self.assertEqual(app.parse_query("  "), [])
 
+    def test_active_roots_multi_select(self):
+        import tempfile
+        r1 = tempfile.mkdtemp(); os.makedirs(os.path.join(r1, "-a"))
+        r2 = tempfile.mkdtemp(); os.makedirs(os.path.join(r2, "-b"))
+        app.configure(r1, [r2])
+        app.ROOTS[:] = [r1, r2]; app.ROOT = r1   # pin: configure() also discovers real roots
+        self.assertEqual(app.active_roots(None), [r1, r2])          # no param → all
+        self.assertEqual(app.active_roots(""), [r1, r2])
+        self.assertEqual(app.active_roots("*"), [r1, r2])
+        self.assertEqual(app.active_roots(r2), [r2])                 # single (back-compat)
+        self.assertEqual(app.active_roots(f"{r2},{r1}"), [r1, r2])   # comma list, ROOTS order
+        self.assertEqual(app.active_roots("/bogus-xyz"), [r1, r2])   # unknown → all
+        self.assertEqual(app.root_param([r1, r2]), "")               # all → no param
+        self.assertEqual(app.root_param([r1]), r1)
+
+    def test_rootbar_has_all_chip_and_toggle_links(self):
+        import tempfile
+        import urllib.parse
+        r1 = tempfile.mkdtemp(); os.makedirs(os.path.join(r1, "-a"))
+        r2 = tempfile.mkdtemp(); os.makedirs(os.path.join(r2, "-b"))
+        r3 = tempfile.mkdtemp(); os.makedirs(os.path.join(r3, "-c"))
+        app.configure(r1, [r2, r3])
+        app.ROOTS[:] = [r1, r2, r3]; app.ROOT = r1   # pin: configure() also discovers real roots
+        html = app.shell("t", "body", root="")               # All selected
+        self.assertIn("🗂", html)                            # the All chip
+        # a subset selection renders another folder as an "add" link (comma list)…
+        html = app.shell("t", "body", root=r1)
+        self.assertIn(urllib.parse.quote(f"{r1},{r2}"), html)
+        # …and adding the last missing folder collapses back to All (no root param)
+        html = app.shell("t", "body", root=f"{r1},{r2}")
+        self.assertNotIn(urllib.parse.quote(f"{r1},{r2},{r3}"), html)
+
     def test_search_folder_link_preserves_query(self):
         import tempfile
         r1 = tempfile.mkdtemp(); os.makedirs(os.path.join(r1, "-a"))
