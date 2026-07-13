@@ -2415,7 +2415,7 @@ def render_turn(gi, t, q="", thread_link=None):
             if task:
                 summary = task["summary"] or tr("Background task completed")
                 status = f' <span class="tk-sum">· {esc(task["status"])}</span>' if task["status"] else ""
-                parts.append(f'<details class="fold tasknote"><summary>🤖 <b>{esc(summary)}</b>{status}</summary>'
+                parts.append(f'<details class="fold tasknote" open><summary>🤖 <b>{esc(summary)}</b>{status}</summary>'
                              f'<div class="seg md">{md_html(task["result"], q)}</div></details>')
     badges = "".join(f'<span class=badge title="{c}">{TAG_BADGE[c]}</span>' for c in
                      ("error", "edit", "command", "commit", "test", "url", "web") if c in tags)

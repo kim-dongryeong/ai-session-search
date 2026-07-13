@@ -94,6 +94,7 @@ class HttpSmoke(unittest.TestCase):
         self.assertIn("ⓘ System / injected", body)              # task-notification never rendered as 나
         self.assertEqual(body.count("Lifecycle finding that must remain visible."), 1)
         self.assertIn('Agent &quot;Audit&quot; finished', body)
+        self.assertIn('<details class="fold tasknote" open>', body)
         self.assertIn("&lt;b&gt;계획&lt;/b&gt;", body)     # user HTML is escaped
         self.assertIn("session-id", body)
 
