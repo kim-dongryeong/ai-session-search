@@ -460,6 +460,32 @@ def parse_channel(text):
         return None
     return dict(_ATTR_RE.findall(m.group(1))), m.group(2)
 
+_TASK_FIELD_RE = re.compile(
+    r"<(task-id|tool-use-id|output-file|status|summary|note|result|usage)>(.*?)</\1>", re.S)
+
+def parse_task_notification(text):
+    """Extract the useful payload from a Claude Code ``<task-notification>``.
+
+    Recent Claude Code versions persist completed background-agent results first as a
+    ``queue-operation/enqueue`` record, then mirror the same payload in attachment/remove
+    records.  Only the enqueue record should become a turn; the mirrors are duplicates.
+    """
+    if not isinstance(text, str) or not text.lstrip().startswith("<task-notification>"):
+        return None
+    fields = {k: html.unescape(v.strip()) for k, v in _TASK_FIELD_RE.findall(text)}
+    result = fields.get("result", "").strip()
+    if not result:
+        return None
+    return {"task_id": fields.get("task-id", ""), "status": fields.get("status", ""),
+            "summary": fields.get("summary", ""), "result": result}
+
+def task_notification_text(text):
+    """Search/API text for a parsed task notification."""
+    task = parse_task_notification(text)
+    if not task:
+        return str(text or "")
+    return "\n\n".join(x for x in (task["summary"], task["result"]) if x)
+
 _CHANNEL_NAMES = [("telegram", "Telegram"), ("slack", "Slack"), ("discord", "Discord"),
                   ("whatsapp", "WhatsApp"), ("sms", "SMS"), ("email", "Email")]
 
@@ -471,6 +497,12 @@ def channel_label(attrs):
 
 def classify_line(o, sub=False):
     t = o.get("type")
+    # Claude Code 2.x may store a completed background-agent result only in the queue
+    # lifecycle records.  Keep the first (enqueue) copy and skip attachment/remove mirrors.
+    if t == "queue-operation" and o.get("operation") == "enqueue":
+        content = o.get("content")
+        if parse_task_notification(content):
+            return ("system", [("task_notification", content)])
     if t in TITLE_TYPES or t in SKIP_TYPES:
         return None
     msg = o.get("message") or {}
@@ -519,6 +551,8 @@ def classify_line(o, sub=False):
             return ("system", [("injected", user_text(o))])
         if isinstance(content, str):
             s = content.lstrip()
+            if s.startswith("<task-notification>") and parse_task_notification(content):
+                return ("system", [("task_notification", content)])
             if s.startswith(STRING_INJECT_PREFIXES) or s.startswith(LOOP_PREFIXES):
                 return ("system", [("injected", content)])
             return (you_role, [("text", content)]) if content.strip() else None
@@ -1346,7 +1380,7 @@ def get_index(root):
 
 # ---- search cache: per-file searchable turn texts, keyed on (mtime_ns, size) --
 _SEARCH = {"by_path": {}, "lock": threading.Lock()}
-_SEARCH_KINDS = ("text", "tool_result", "thinking", "injected")
+_SEARCH_KINDS = ("text", "tool_result", "thinking", "injected", "task_notification")
 
 # search-row kind flags (bitmask), for scope/field filtering
 K_TEXT, K_TOOL, K_RESULT, K_CODE = 1, 2, 4, 8
@@ -1370,6 +1404,9 @@ def _rows_from_turns(turns):
                 out.append({"gi": gi, "role": role, "text": v, "kind": K_THINK, "label": ""})
             elif k == "injected":
                 out.append({"gi": gi, "role": role, "text": v, "kind": K_SYS, "label": ""})
+            elif k == "task_notification":
+                out.append({"gi": gi, "role": role, "text": task_notification_text(v),
+                            "kind": K_SYS, "label": ""})
             elif k == "tool_use":
                 name, inp = _toolinput(v)
                 kind = K_TOOL | (K_CMD if name == "Bash" else 0)
@@ -1667,6 +1704,8 @@ def session_api(path=None, sid=None, limit=400, full=False):
                 parts.append(_tool_use_search_text(v))
             elif k in ("text", "thinking", "tool_result", "injected"):
                 parts.append(v)
+            elif k == "task_notification":
+                parts.append(task_notification_text(v))
         text = " ".join(parts).strip()
         if text:
             turns.append({"turn": gi, "role": t["role"], "text": text if full else text[:4000]})
@@ -2371,6 +2410,13 @@ def render_turn(gi, t, q="", thread_link=None):
         elif kind == "injected":
             tt = txt if len(txt) < 4000 else txt[:4000] + "\n… (truncated)"
             parts.append(f'<details class=fold><summary>{tr("Show injected context")}</summary><div class="seg mono">{esc(tt)}</div></details>')
+        elif kind == "task_notification":
+            task = parse_task_notification(txt)
+            if task:
+                summary = task["summary"] or tr("Background task completed")
+                status = f' <span class="tk-sum">· {esc(task["status"])}</span>' if task["status"] else ""
+                parts.append(f'<details class="fold tasknote"><summary>🤖 <b>{esc(summary)}</b>{status}</summary>'
+                             f'<div class="seg md">{md_html(task["result"], q)}</div></details>')
     badges = "".join(f'<span class=badge title="{c}">{TAG_BADGE[c]}</span>' for c in
                      ("error", "edit", "command", "commit", "test", "url", "web") if c in tags)
     link = f'<a class=threadlink href="{thread_link}">{tr("↳ answer thread")}</a>' if thread_link else ""

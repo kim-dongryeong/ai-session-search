@@ -65,6 +65,28 @@ class ClassifyLine(unittest.TestCase):
         role, _ = app.classify_line(user_line("<task-notification>\n<task-id>x</task-id>"))
         self.assertEqual(role, "system")
 
+    def test_queue_task_notification_result_is_restored_once(self):
+        content = ("<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n"
+                   "<summary>Agent &quot;Auditor&quot; finished</summary>\n"
+                   "<result>## Ranked audit\n\nFull finding &amp; fix.</result>\n</task-notification>")
+        role, segs = app.classify_line({"type": "queue-operation", "operation": "enqueue",
+                                        "timestamp": "2026-07-13T02:51:27Z", "content": content})
+        self.assertEqual(role, "system")
+        self.assertEqual(segs[0][0], "task_notification")
+        parsed = app.parse_task_notification(segs[0][1])
+        self.assertEqual(parsed["summary"], 'Agent "Auditor" finished')
+        self.assertIn("Full finding & fix.", parsed["result"])
+        # The later queue/remove and attachment mirrors must remain suppressed.
+        self.assertIsNone(app.classify_line({"type": "queue-operation", "operation": "remove",
+                                             "content": content}))
+        self.assertIsNone(app.classify_line({"type": "attachment", "content": content}))
+
+    def test_queue_task_notification_without_result_stays_noise(self):
+        content = ("<task-notification><task-id>x</task-id><status>completed</status>"
+                   "<summary>Background command finished</summary></task-notification>")
+        self.assertIsNone(app.classify_line(
+            {"type": "queue-operation", "operation": "enqueue", "content": content}))
+
     def test_slash_command_wrapper(self):
         role, _ = app.classify_line(user_line("<command-name>/model</command-name>"))
         self.assertEqual(role, "system")
