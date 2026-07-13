@@ -2432,6 +2432,8 @@ header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
 .langsw a{color:#fff;text-decoration:none;padding:0 2px;opacity:.85}
 .langsw a:hover{text-decoration:underline}
 .langsw b{padding:0 2px}
+.verbadge{color:#fff;font-size:11px;opacity:.7;text-decoration:none;white-space:nowrap;text-shadow:0 1px 5px rgba(8,25,80,.4)}
+.verbadge:hover{opacity:1;text-decoration:underline}
 /* update notice bar (JS-inserted at very top when a newer release exists) */
 .updbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;font-size:13px;background:linear-gradient(90deg,#eef4ff,#e7fbf3);color:#12203a;border-bottom:1px solid rgba(0,0,0,.09)}
 @media(prefers-color-scheme:dark){.updbar{background:linear-gradient(90deg,#182234,#15302a);color:#e7e9ec;border-bottom-color:rgba(255,255,255,.08)}}
@@ -2791,6 +2793,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   <button type=button id=copyurl class=advbtn title="%%COPYURLTITLE%%">🔗</button>
   <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
   %%LANGSW%%
+  %%VERBADGE%%
 </header>
 %%ROOTBAR%%
 <div class=wrap>%%BODY%%</div>
@@ -3271,6 +3274,9 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to=""):
         "%%PERIODLBL%%": esc(tr("Period")), "%%DAYSTITLE%%": esc(tr("quick period")),
         "%%ORLBL%%": esc(tr("or exact")), "%%FROMTITLE%%": esc(tr("start date")),
         "%%TOTITLE%%": esc(tr("end date")), "%%LANGSW%%": langsw,
+        "%%VERBADGE%%": (f'<a class=verbadge href="https://github.com/{REPO_SLUG}/releases" '
+                         f'target=_blank rel=noopener title="{esc(tr("current version — release notes"))}">'
+                         f'v{__version__}</a>'),
         "%%INSTALLLBL%%": esc(tr("⬇ Install app")),
         "%%INSTALLTITLE%%": esc(tr("install as a standalone app (own window, shows in the app switcher)")),
         "%%COPYURLTITLE%%": esc(tr("copy this page's link (handy in the installed app — no address bar)")),

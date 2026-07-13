@@ -115,6 +115,7 @@
   "Total msgs = all messages · 🧑 you (typed) · ✦ assistant replies · ⚙ tool results (Bash/Edit/Read…) · ⓘ system / injected (not a human)": "전체 msgs = 모든 메시지 · 🧑 나(직접 입력) · ✦ 어시스턴트 답변 · ⚙ 툴 결과(Bash/Edit/Read…) · ⓘ 시스템/주입(사람 아님)",
   "Total size": "총 용량",
   "What's new": "변경사항",
+  "current version — release notes": "현재 버전 — 릴리즈 노트",
   "You": "나",
   "You — messages you actually typed (not tool output or injected text)": "나 — 내가 실제로 입력한 메시지 (툴 출력·주입된 텍스트 제외)",
   "_comment": "Korean (한국어) locale for ai-session-search. Copy this file to <code>.json (e.g. ja.json) and translate the values to add a language. Keys are the English UI strings; leave a value unchanged (or drop the key) to fall back to English. Drop the file into the package's locales/ or into <CONFIG_DIR>/locales/ (~/.config/ai-session-search/locales or %APPDATA%\\ai-session-search\\locales) — no rebuild needed.",
