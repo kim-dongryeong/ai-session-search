@@ -40,6 +40,16 @@ def build_fixture_root():
          "message": {"role": "user", "content": [
              {"type": "tool_result", "tool_use_id": "t1", "content": "Traceback: boom"}]}},
         {"type": "user", "message": {"role": "user", "content": "<task-notification>machine</task-notification>"}},
+        {"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-06-30T01:00:03Z",
+         "content": ("<task-notification><task-id>audit-1</task-id><status>completed</status>"
+                     "<summary>Agent &quot;Audit&quot; finished</summary>"
+                     "<result>## Ranked audit\n\nLifecycle finding that must remain visible.</result>"
+                     "</task-notification>")},
+        {"type": "queue-operation", "operation": "remove", "timestamp": "2026-06-30T01:00:04Z",
+         "content": ("<task-notification><task-id>audit-1</task-id><status>completed</status>"
+                     "<summary>Agent &quot;Audit&quot; finished</summary>"
+                     "<result>## Ranked audit\n\nLifecycle finding that must remain visible.</result>"
+                     "</task-notification>")},
     ]
     with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as fh:
         for o in lines:
@@ -82,6 +92,8 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(body.count("🧑 You"), 2)          # header count chip + the one human bubble
         self.assertIn("⚙ Tool result", body)
         self.assertIn("ⓘ System / injected", body)              # task-notification never rendered as 나
+        self.assertEqual(body.count("Lifecycle finding that must remain visible."), 1)
+        self.assertIn('Agent &quot;Audit&quot; finished', body)
         self.assertIn("&lt;b&gt;계획&lt;/b&gt;", body)     # user HTML is escaped
         self.assertIn("session-id", body)
 
