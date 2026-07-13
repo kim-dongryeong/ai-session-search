@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.10 — 2026-07-13
+
+- **Completed Claude Code background-agent reports are no longer missing.** Recent
+  transcripts may store the full result only in a `queue-operation/enqueue`
+  `<task-notification>` instead of a normal assistant turn. The viewer now restores the
+  first copy while suppressing the duplicate `attachment` and `remove` mirrors.
+- **Agent reports open in full by default.** These substantive results render as Markdown
+  without the generic 4,000-character injected-context cap, remain manually collapsible,
+  and are included in full-text search and the session API.
+
 ## 4.0.0 — 2026-07-07
 
 **First public release** — download-and-run native apps, in-app updates, and a demo mode.
