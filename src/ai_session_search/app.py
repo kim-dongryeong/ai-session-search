@@ -2467,9 +2467,10 @@ header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle a
   header{top:env(titlebar-area-height,33px)}
 }
 header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;white-space:nowrap}
-header form{margin:0;flex:1;display:flex;gap:7px;min-width:240px}
-header input[type=search]{flex:1;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
+header form{margin:0;flex:1;display:flex;flex-wrap:wrap;gap:7px;min-width:240px}
+header input[type=search]{flex:1;min-width:50px;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
+header select{flex:0 1 auto;min-width:74px;max-width:200px}
 header button{background:#fff;color:#0d4ea6;font-weight:600}
 header .advbtn{background:rgba(255,255,255,.18);color:#fff;font-weight:500;border:1px solid rgba(255,255,255,.34);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
@@ -2547,7 +2548,7 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
-.adv select,.adv input{padding:6px 9px;border:0;border-radius:7px;font-size:13px}
+.adv select,.adv input{padding:6px 9px;border:0;border-radius:7px;font-size:13px;min-width:0;max-width:100%}
 .wrap{max-width:940px;margin:0 auto;padding:16px}
 .rootbar{max-width:940px;margin:0 auto;padding:8px 16px 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .rootbar .lbl{font-size:11.5px;color:#8a8f98}
@@ -2597,7 +2598,8 @@ a.chiplink:hover{background:#dbe5ff;color:#1f6feb}
 .digest b{color:#1f6feb}
 .loopchip{display:inline-block;background:#fff3cd;color:#8a6d00;border:1px solid #ffe08a;border-radius:12px;padding:1px 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
 @media(prefers-color-scheme:dark){.loopchip{background:#3a3115;color:#f0d68a;border-color:#5c4d1c}}
-table.stab{border-collapse:collapse;width:100%;margin-top:8px;font-size:12.5px}
+.stabwrap{overflow-x:auto;margin-top:8px}
+table.stab{border-collapse:collapse;width:100%;font-size:12.5px}
 table.stab th,table.stab td{text-align:right;padding:4px 8px;border-bottom:1px solid #e8ebef}
 table.stab th:first-child,table.stab td:first-child{text-align:left}
 table.stab thead th{color:#8a8f98;font-weight:600;cursor:help}
@@ -3635,7 +3637,7 @@ class H(BaseHTTPRequestHandler):
                           f'<td data-v="{s["size"]}">{fmt_size(s["size"])}</td>'
                           f'<td data-v="{s["loop"]}">{lc}</td></tr>')
             tot = agg_stats(all_items)
-            table = (f'<table class=stab><thead><tr><th class=sortable>{tr("Project (folder)")}</th>'
+            table = (f'<div class=stabwrap><table class=stab><thead><tr><th class=sortable>{tr("Project (folder)")}</th>'
                      f'<th class=sortable title="{esc(tr("session count"))}">{tr("Sessions")}</th>'
                      f'<th class=sortable title="{esc(tr("sessions a human joined"))}">{tr("My part")}</th>'
                      f'<th class=sortable title="{esc(tr("my total messages"))}">{tr("My msgs")}</th>'
@@ -3646,7 +3648,7 @@ class H(BaseHTTPRequestHandler):
                      + f'<tr class=tot><td>{tr("Total")} {len(by)} {tr("folders")}</td><td>{tot["sessions"]}</td><td>{tot["my_sessions"]}</td>'
                      f'<td>{tot["my_msgs"]}</td><td title="{esc(_toktip(tot["tok"]))}">{fmt_tok(tot["tok"]["out"])}</td>'
                      f'<td class=mdlcell>{models_badge(tot["models"])}</td><td>{fmt_size(tot["size"])}</td>'
-                     f'<td>{tot["loop"] or ""}</td></tr></tbody></table>')
+                     f'<td>{tot["loop"] or ""}</td></tr></tbody></table></div>')
             statsblock = (f'<details class="card" open><summary style="cursor:pointer;font-weight:650;color:#1f6feb">'
                           f'📊 {tr("Project stats")} ({len(by)} {tr("folders")}) · {tr("click a column header to sort")}</summary>{table}'
                           f'<p class=meta style="padding:0 4px">💡 {tr("Cache-read tokens are reused each turn (cheap) — ")}'
