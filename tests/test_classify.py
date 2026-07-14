@@ -729,6 +729,40 @@ class ToolRender(unittest.TestCase):
         self.assertIn("<details class=fold>", h)
         self.assertNotIn(" open>", h)
 
+class RootIsolationAndDedupe(unittest.TestCase):
+    def test_dedupe_sids_keeps_freshest_copy(self):
+        a = {"sid": "s1", "mtime": 100, "path": "/r1/s1.jsonl"}
+        b = {"sid": "s1", "mtime": 200, "path": "/r2/s1.jsonl"}   # backup copy, newer
+        c = {"sid": "s2", "mtime": 50, "path": "/r1/s2.jsonl"}
+        d = {"sid": "", "mtime": 60, "path": "/r1/x.jsonl"}       # no sid: never collapsed
+        kept, copies = app.dedupe_sids([a, b, c, d])
+        self.assertEqual([it["path"] for it in kept], ["/r2/s1.jsonl", "/r1/s2.jsonl", "/r1/x.jsonl"])
+        self.assertEqual(copies, {"s1": 2})
+
+    def test_slow_root_serves_cached_items_without_scanning(self):
+        import tempfile, shutil
+        r = tempfile.mkdtemp()
+        try:
+            app.configure(r, [], exclusive=True)
+            with app._INDEX["lock"]:
+                app._INDEX["by_root"][r] = {"/x.jsonl": ((1, 1), {"mtime": 1, "path": "/x.jsonl"})}
+            app._INDEX["slow"][r] = True
+            real_stat = os.stat
+            def boom(*a, **k):
+                raise AssertionError("slow root must not be scanned on the request path")
+            os.stat = boom
+            try:
+                items = app.get_index(r)
+            finally:
+                os.stat = real_stat
+            self.assertEqual([it["path"] for it in items], ["/x.jsonl"])
+            # force=True (background refresher) does scan again
+            items = app.get_index(r, force=True)
+            self.assertEqual(items, [])   # the fake cached file does not exist on disk
+        finally:
+            shutil.rmtree(r, ignore_errors=True)
+            app.configure(None, [])
+
 
 if __name__ == "__main__":
     unittest.main()

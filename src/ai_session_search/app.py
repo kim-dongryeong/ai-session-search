@@ -316,6 +316,7 @@ def configure(primary_root=None, extra_roots=(), exclusive=False):
     load_locales()
     with _INDEX["lock"]:
         _INDEX["by_root"].clear()
+        _INDEX["slow"].clear()
     with _SEARCH["lock"]:
         _SEARCH["by_path"].clear()
     with _SESSION["lock"]:
@@ -1275,7 +1276,7 @@ def load_session(path):
     return data
 
 # ---- index cache (per root, incrementally refreshed) -------------------------
-_INDEX = {"by_root": {}, "lock": threading.Lock()}
+_INDEX = {"by_root": {}, "slow": {}, "lock": threading.Lock()}
 
 # ---- persistent cache (disk) -------------------------------------------------
 # The in-memory index/search caches are rebuilt from CONFIG_DIR/cache/ on start, so
@@ -1474,11 +1475,24 @@ def proj_canon(items):
             d[it["cwd"]] = d.get(it["cwd"], 0) + 1
     return {p: max(d.items(), key=lambda kv: kv[1])[0] for p, d in cnt.items()}
 
-def get_index(root):
+_SLOW_SCAN_S = 2.0   # a root whose scan exceeds this stops blocking requests
+
+def get_index(root, force=False):
     """Per-root index; re-summarizes only files whose (mtime, size) changed,
     picks up new sessions, and drops deleted ones — so a long-running server
-    always shows current data at ~one stat() per file per request."""
+    always shows current data at ~one stat() per file per request.
+
+    Root isolation: when a root's last scan blew the _SLOW_SCAN_S budget (network
+    filesystems like a Google Drive mount can stall for seconds), requests serve the
+    cached items instead and a background thread refreshes it (force=True). One slow
+    root must never hold every page hostage."""
     _load_disk_cache(root)
+    if not force and _INDEX["slow"].get(root):
+        with _INDEX["lock"]:
+            items = [v[1] for v in _INDEX["by_root"].get(root, {}).values()]
+        items.sort(key=lambda x: x["mtime"], reverse=True)
+        return items
+    t0 = time.monotonic()
     changed = False
     with _INDEX["lock"]:
         cache = _INDEX["by_root"].setdefault(root, {})
@@ -1501,8 +1515,39 @@ def get_index(root):
     if changed:
         with _DISK["lock"]:
             _DISK["dirty"].add(root)
+    _INDEX["slow"][root] = (time.monotonic() - t0) > _SLOW_SCAN_S
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
+
+def _refresh_slow_roots():
+    """Background loop: rescan roots that were demoted for being slow, off the
+    request path, so their data stays reasonably fresh."""
+    while True:
+        time.sleep(30)
+        for r in list(ROOTS):
+            if _INDEX["slow"].get(r):
+                try:
+                    get_index(r, force=True)
+                except Exception:
+                    pass
+
+def dedupe_sids(items):
+    """(kept, copies) — collapse sessions that exist in several roots (e.g. a backup
+    copy of ~/.claude/projects added as another folder). Keeps the freshest copy per
+    session id; copies maps sid -> total count for the ⧉ badge. Items without a sid
+    are never collapsed."""
+    best = {}
+    copies = {}
+    for it in items:
+        sid = it.get("sid") or ""
+        if not sid:
+            continue
+        copies[sid] = copies.get(sid, 0) + 1
+        cur = best.get(sid)
+        if cur is None or it["mtime"] > cur["mtime"]:
+            best[sid] = it
+    kept = [it for it in items if not it.get("sid") or best.get(it["sid"]) is it]
+    return kept, {sid: n for sid, n in copies.items() if n > 1}
 
 # ---- search cache: per-file searchable turn texts, keyed on (mtime_ns, size) --
 _SEARCH = {"by_path": {}, "lock": threading.Lock()}
@@ -1826,7 +1871,15 @@ def search_all(q, scope="all", limit=30):
     for r in ROOTS:
         merged += search_api(r, q, scope, "", limit)
     merged.sort(key=lambda x: x["score"], reverse=True)
-    return merged[:max(1, min(int(limit or 30), 100))]
+    seen = set()   # backup copies of a session in another root would double up
+    out = []
+    for m in merged:
+        sid = m.get("sid") or ""
+        if sid and sid in seen:
+            continue
+        seen.add(sid)
+        out.append(m)
+    return out[:max(1, min(int(limit or 30), 100))]
 
 def sessions_api(root=None, limit=100):
     """Recent sessions in a root (newest first)."""
@@ -3783,6 +3836,7 @@ class H(BaseHTTPRequestHandler):
         rootp = root_param(roots)
         rootlabel = _roots_label(roots)
         all_items = [it for r in roots for it in get_index(r)]
+        all_items, dup_copies = dedupe_sids(all_items)
         canon = proj_canon(all_items)
         ckey = lambda p: canon.get(p, p)
         proj_cwd = {p: short_path(c) for p, c in canon.items()}
@@ -3890,6 +3944,10 @@ class H(BaseHTTPRequestHandler):
         for it in items:
             link = "/session?p=" + urllib.parse.quote(it["path"])
             loopchip = f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if it.get("loop") else ""
+            ncopy = dup_copies.get(it.get("sid") or "", 0)
+            if ncopy:
+                loopchip += (' <span class=chip title="' + esc(tr("this session exists in multiple folders; showing the freshest copy"))
+                             + f'">⧉ {ncopy}</span>')
             tk = it.get("tok")
             tokbit = f' · {tok_badge(tk)}' if (tk and any(tk.values())) else ""
             mdlbit = ""
@@ -4054,6 +4112,9 @@ class H(BaseHTTPRequestHandler):
                             "hit_kind": hit["kind"] if hit else "", "hits": hits,
                             "meta_hit": meta_hit, "sid": sid, "forked": forked, "cwd": it.get("cwd", "")})
         results.sort(key=lambda x: (x["score"], x["mtime"]), reverse=True)
+        seen_sids = set()   # collapse duplicate copies across roots (backup folders)
+        results = [r_ for r_ in results
+                   if not r_.get("sid") or r_["sid"] not in seen_sids and not seen_sids.add(r_["sid"])]
         truncated = len(results) - RESULT_CAP
         results = results[:RESULT_CAP]
         ms = int((time.perf_counter() - t0) * 1000)
@@ -4843,6 +4904,7 @@ def main(argv=None):
     # search is fast too (even after switching folders). Also prime the (throttled,
     # opt-out) update check so the notice, if any, is instant on first paint.
     threading.Thread(target=lambda: [_warm_cache(r) for r in ROOTS], daemon=True).start()
+    threading.Thread(target=_refresh_slow_roots, daemon=True).start()
     if not update_disabled():
         threading.Thread(target=check_update, daemon=True).start()
     try:
