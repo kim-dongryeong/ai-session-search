@@ -1285,7 +1285,8 @@ _INDEX = {"by_root": {}, "slow": {}, "lock": threading.Lock()}
 # as always — a stale disk entry is simply reparsed. Bump _CACHE_SCHEMA whenever the
 # shape of _index_item() output or search rows changes, so old caches are discarded.
 _CACHE_SCHEMA = 6
-_DISK = {"loaded": set(), "rows_loaded": set(), "dirty": set(), "lock": threading.Lock()}
+_DISK = {"loaded": set(), "rows_loaded": set(), "dirty": set(), "lock": threading.Lock(),
+         "io_idx": threading.Lock(), "io_rows": threading.Lock()}
 _EXCLUSIVE = False   # set by configure(); demo/exclusive data never touches the cache
 
 def _cache_base(root):
@@ -1298,16 +1299,31 @@ def _load_disk_cache(root, rows=False):
     The tiny index cache always loads; the big search-rows cache only when rows=True
     (search entry points / warm-up) so the landing page never waits on it.
     Best-effort: a missing/corrupt/old-schema file is ignored and rebuilt by parsing."""
-    with _DISK["lock"]:
-        if _EXCLUSIVE:
-            return
-        need_idx = root not in _DISK["loaded"]
-        need_rows = rows and root not in _DISK["rows_loaded"]
-        if not (need_idx or need_rows):
-            return
-        _DISK["loaded"].add(root)
-        if rows:
-            _DISK["rows_loaded"].add(root)
+    if _EXCLUSIVE:
+        return
+    # The io locks serialize loads AND make concurrent callers wait for completion —
+    # marking the root loaded up front let a racing search thread skip the load and
+    # reparse hundreds of files while the warm thread was still merging (40s search).
+    # idx and rows lock separately so the tiny index load never queues behind the
+    # multi-hundred-MB rows load.
+    with _DISK["io_idx"]:
+        with _DISK["lock"]:
+            need_idx = root not in _DISK["loaded"]
+        if need_idx:
+            _load_disk_cache_locked(root, True, False)
+            with _DISK["lock"]:
+                _DISK["loaded"].add(root)
+    if not rows:
+        return
+    with _DISK["io_rows"]:
+        with _DISK["lock"]:
+            need_rows = root not in _DISK["rows_loaded"]
+        if need_rows:
+            _load_disk_cache_locked(root, False, True)
+            with _DISK["lock"]:
+                _DISK["rows_loaded"].add(root)
+
+def _load_disk_cache_locked(root, need_idx, need_rows):
     base = _cache_base(root)
     if need_idx:
         try:
