@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.11 — 2026-07-14
+
+- **Installed updates now take effect on relaunch.** The detached local server used to
+  outlive the app bundle, so a freshly installed version kept opening the old server
+  until logout/reboot. A relaunch now checks the running server's version (new local
+  `/api/status`) and, on mismatch, replaces it via an authenticated `POST /api/shutdown`
+  (per-instance token, loopback-only). Same-version relaunches still reuse the server.
+- **'All folders' now treats one workspace as one project across providers.** Claude keys
+  projects by folder slug, Codex/Gemini/Antigravity by workspace path; the same folder
+  used to show as duplicate rows, and a project filter from one provider dropped the
+  others' sessions. Project keys now resolve to the canonical workspace for grouping,
+  filtering, and folder-scoped search.
+
 ## 4.0.10 — 2026-07-14
 
 - **Completed Claude Code background-agent reports are no longer missing.** Recent
