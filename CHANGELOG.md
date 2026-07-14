@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.0.13 — 2026-07-14
+
+Measured on 907MB of real history (5 folders, ~300 sessions):
+
+- **Instant start.** The index and search caches now persist to
+  `CONFIG_DIR/cache/` and reload on start, revalidated by the same
+  (mtime, size) keys — a fresh server (reboot, update, relaunch) no longer
+  reparses everything. First page: **53s → 0.1s**; first search: **54s →
+  ~10s** (loading the cache) and ~1s afterwards. Demo mode never touches the
+  cache; corrupt or old-format cache files are ignored and rebuilt.
+- **Faster search.** Relevance counting no longer rescans each matched
+  session's full text per term, whole-word scoring uses packed 8-byte token
+  hashes instead of ~1.3GB of word sets, and matching runs on blob offsets
+  with zero per-query allocations. Warm search: **3.4s → ~1s**.
+- **One slow folder can't freeze the app.** A folder whose scan exceeds 2s
+  (e.g. a Google Drive mount) serves cached data to requests while a
+  background thread refreshes it.
+- **Duplicate copies collapse.** A session that exists in several folders
+  (e.g. a backup of `~/.claude/projects` added as a folder) now shows once —
+  the freshest copy, with a `⧉ n` badge — in lists and search.
+- **The session list is paged** (100 cards per page) instead of rendering
+  every card at once.
+
 ## 4.0.12 — 2026-07-14
 
 - **Large sessions stay responsive while resizing.** A session now shows 1,000 turns per
