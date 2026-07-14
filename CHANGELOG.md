@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.0.10 — 2026-07-13
+## 4.0.10 — 2026-07-14
 
 - **Completed Claude Code background-agent reports are no longer missing.** Recent
   transcripts may store the full result only in a `queue-operation/enqueue`
@@ -9,6 +9,11 @@
 - **Agent reports open in full by default.** These substantive results render as Markdown
   without the generic 4,000-character injected-context cap, remain manually collapsible,
   and are included in full-text search and the session API.
+- **No more jittery layout while resizing the window.** The header search form, the
+  project-stats table, and the Tools panel could force page-level horizontal overflow
+  below ~750px; with space-taking scrollbars this made the layout oscillate instead of
+  settling. Everything now shrinks or wraps, and wide tables scroll inside their card.
+- **The current version is always visible in the header** and links to the release notes.
 
 ## 4.0.0 — 2026-07-07
 
