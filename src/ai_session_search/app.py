@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.11"
+__version__ = "4.0.12"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -343,7 +343,7 @@ def active_roots(v):
 def root_param(sel):
     """Canonical `root` URL param for a selection: '' when it means all roots."""
     return "" if len(sel) >= len(ROOTS) else ",".join(sel)
-DEFAULT_LIM = 10000
+DEFAULT_LIM = 1000
 LIM_OPTIONS = [1000, 2000, 5000, 10000, 20000, 50000]
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -2474,7 +2474,7 @@ try{if(new URLSearchParams(location.search).get('welcome')==='1'&&!(window.match
 *{box-sizing:border-box}
 body{font:14.5px/1.65 -apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;margin:0;background:#f5f6f8;color:#1a1a1a}
 @media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
-header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);color:#fff;padding:11px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);color:#fff;padding:11px 18px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center}
 /* Installed-app window chrome (no effect in a normal browser tab) */
 .titlebar{display:none}
 @media(display-mode:window-controls-overlay){
@@ -2483,8 +2483,8 @@ header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle a
   header{top:env(titlebar-area-height,33px)}
 }
 header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:15px;white-space:nowrap}
-header form{margin:0;flex:1;display:flex;flex-wrap:wrap;gap:7px;min-width:240px}
-header input[type=search]{flex:1;min-width:50px;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
+header form{margin:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:7px;min-width:0}
+header input[type=search]{min-width:50px;padding:7px 12px;border:0;border-radius:8px;font-size:14px}
 header select,header button{padding:7px 11px;border:0;border-radius:8px;font-size:13px;cursor:pointer}
 header select{flex:0 1 auto;min-width:74px;max-width:200px}
 header button{background:#fff;color:#0d4ea6;font-weight:600}
@@ -2496,6 +2496,16 @@ header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
 .langsw b{padding:0 2px}
 .verbadge{color:#fff;font-size:11px;opacity:.7;text-decoration:none;white-space:nowrap;text-shadow:0 1px 5px rgba(8,25,80,.4)}
 .verbadge:hover{opacity:1;text-decoration:underline}
+.header-tools{display:flex;align-items:center;gap:8px;white-space:nowrap}
+@media(max-width:760px){
+  header{grid-template-columns:minmax(0,1fr) auto}
+  header form{grid-column:1/-1;grid-row:2}
+}
+@media(max-width:520px){
+  header{padding-inline:12px}
+  header form{grid-template-columns:minmax(0,1fr) auto auto}
+  header input[type=search]{grid-column:1/-1}
+}
 /* update notice bar (JS-inserted at very top when a newer release exists) */
 .updbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;font-size:13px;background:linear-gradient(90deg,#eef4ff,#e7fbf3);color:#12203a;border-bottom:1px solid rgba(0,0,0,.09)}
 @media(prefers-color-scheme:dark){.updbar{background:linear-gradient(90deg,#182234,#15302a);color:#e7e9ec;border-bottom-color:rgba(255,255,255,.08)}}
@@ -2563,7 +2573,7 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .ext-av{width:20px;height:20px;border-radius:6px;flex:none}
 .ext-bar{height:9px;border-radius:5px;background:#e9edf2;flex:1}
 .ext-bar.hit{flex:none;width:54px;background:#ffe08a}
-.adv{flex-basis:100%;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
+.adv{grid-column:1/-1;display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px 2px}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
 .adv select,.adv input{padding:6px 9px;border:0;border-radius:7px;font-size:13px;min-width:0;max-width:100%}
@@ -2629,7 +2639,7 @@ table.stab tr.tot td{font-weight:700;border-top:2px solid #cdd2d8;border-bottom:
 @media(prefers-color-scheme:dark){table.stab th,table.stab td{border-color:#2a2e35}}
 .dfile{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#555;display:block}
 @media(prefers-color-scheme:dark){.dfile{color:#9aa0a8}}
-.msg{margin:12px 0;border:1px solid #e4e7eb;border-radius:11px;overflow:hidden;scroll-margin-top:64px}
+.msg{margin:12px 0;border:1px solid #e4e7eb;border-radius:11px;overflow:hidden;scroll-margin-top:64px;contain:layout paint style}
 @media(prefers-color-scheme:dark){.msg{border-color:#2a2e35}}
 .who{padding:5px 14px;font-weight:700;font-size:12px;letter-spacing:.02em;display:flex;justify-content:space-between;align-items:center}
 .you .who{background:#e3efff;color:#10488f}
@@ -2852,10 +2862,12 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       <input type=date name=to value="%%TO%%" title="%%TOTITLE%%">
     </div>
   </form>
-  <button type=button id=copyurl class=advbtn title="%%COPYURLTITLE%%">🔗</button>
-  <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
-  %%LANGSW%%
-  %%VERBADGE%%
+  <div class=header-tools>
+    <button type=button id=copyurl class=advbtn title="%%COPYURLTITLE%%">🔗</button>
+    <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
+    %%LANGSW%%
+    %%VERBADGE%%
+  </div>
 </header>
 %%ROOTBAR%%
 <div class=wrap>%%BODY%%</div>

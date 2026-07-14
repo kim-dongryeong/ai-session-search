@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.0.12 — 2026-07-14
+
+- **Large sessions stay responsive while resizing.** A session now shows 1,000 turns per
+  page by default instead of eventually inserting as many as 10,000 message cards into
+  the DOM. Larger limits and `All` remain available when explicitly selected.
+- **The header changes layout only at defined breakpoints.** Its search controls and
+  utility buttons use a stable grid instead of independently wrapping whenever a control
+  crosses its minimum width. Message cards also isolate their layout and paint work.
+
 ## 4.0.11 — 2026-07-14
 
 - **Installed updates now take effect on relaunch.** The detached local server used to
