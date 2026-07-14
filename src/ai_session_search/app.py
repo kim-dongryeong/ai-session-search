@@ -24,10 +24,13 @@ import base64
 import datetime
 import difflib
 import glob
+import gzip
+import hashlib
 import hmac
 import html
 import json
 import os
+import pickle
 import re
 import sys
 import threading
@@ -292,7 +295,8 @@ def configure(primary_root=None, extra_roots=(), exclusive=False):
     """(Re)initialize app state. Called by main(); tests call it directly.
     exclusive=True uses ONLY primary + extra_roots (no auto-discovery, no saved roots) —
     used by --demo so it never touches your real Claude/Codex/Gemini history."""
-    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS
+    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS, _EXCLUSIVE
+    _EXCLUSIVE = exclusive   # demo/test data must never read or write the disk cache
     _STARS = load_stars()
     primary = os.path.abspath(os.path.expanduser(primary_root or default_primary_root()))
     if exclusive:
@@ -314,6 +318,10 @@ def configure(primary_root=None, extra_roots=(), exclusive=False):
         _SEARCH["by_path"].clear()
     with _SESSION["lock"]:
         _SESSION["by_path"].clear()
+    with _DISK["lock"]:
+        _DISK["loaded"].clear()
+        _DISK["rows_loaded"].clear()
+        _DISK["dirty"].clear()
     return ROOT
 
 def root_for_path(p):
@@ -1266,6 +1274,96 @@ def load_session(path):
 
 # ---- index cache (per root, incrementally refreshed) -------------------------
 _INDEX = {"by_root": {}, "lock": threading.Lock()}
+
+# ---- persistent cache (disk) -------------------------------------------------
+# The in-memory index/search caches are rebuilt from CONFIG_DIR/cache/ on start, so
+# a fresh server (reboot, update, relaunch) skips reparsing unchanged transcripts.
+# Safety: entries loaded from disk go through the SAME (mtime_ns, size) revalidation
+# as always — a stale disk entry is simply reparsed. Bump _CACHE_SCHEMA whenever the
+# shape of _index_item() output or search rows changes, so old caches are discarded.
+_CACHE_SCHEMA = 1
+_DISK = {"loaded": set(), "rows_loaded": set(), "dirty": set(), "lock": threading.Lock()}
+_EXCLUSIVE = False   # set by configure(); demo/exclusive data never touches the cache
+
+def _cache_base(root):
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", root).strip("-")[-80:]
+    h = hashlib.md5(root.encode("utf-8")).hexdigest()[:8]
+    return os.path.join(CONFIG_DIR, "cache", f"{slug}-{h}")
+
+def _load_disk_cache(root, rows=False):
+    """Merge the on-disk cache for `root` into the in-memory caches (once per root).
+    The tiny index cache always loads; the big search-rows cache only when rows=True
+    (search entry points / warm-up) so the landing page never waits on it.
+    Best-effort: a missing/corrupt/old-schema file is ignored and rebuilt by parsing."""
+    with _DISK["lock"]:
+        if _EXCLUSIVE:
+            return
+        need_idx = root not in _DISK["loaded"]
+        need_rows = rows and root not in _DISK["rows_loaded"]
+        if not (need_idx or need_rows):
+            return
+        _DISK["loaded"].add(root)
+        if rows:
+            _DISK["rows_loaded"].add(root)
+    base = _cache_base(root)
+    if need_idx:
+        try:
+            with gzip.open(base + ".idx.json.gz", "rt", encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("schema") == _CACHE_SCHEMA:
+                entries = {p: (tuple(v[0]), v[1]) for p, v in d["items"].items()}
+                with _INDEX["lock"]:
+                    cache = _INDEX["by_root"].setdefault(root, {})
+                    for p, v in entries.items():
+                        cache.setdefault(p, v)
+        except Exception:
+            pass
+    if need_rows:
+        try:
+            with gzip.open(base + ".rows.pkl.gz", "rb") as f:
+                d = pickle.load(f)
+            if d.get("schema") == _CACHE_SCHEMA:
+                # blob is derivable from rows — rebuilt here (outside the lock) to halve disk size
+                entries = {}
+                for p, (key, rws, tokens) in d["items"].items():
+                    blob = "\n".join(r["low"] for r in rws)
+                    entries[p] = (key, rws, blob, tokens)
+                with _SEARCH["lock"]:
+                    for p, v in entries.items():
+                        _SEARCH["by_path"].setdefault(p, v)
+        except Exception:
+            pass
+
+def _save_disk_cache(root):
+    """Persist `root`'s caches (atomic replace). Called after warm-up and on exit."""
+    if _EXCLUSIVE:
+        return
+    try:
+        os.makedirs(os.path.join(CONFIG_DIR, "cache"), exist_ok=True)
+        base = _cache_base(root)
+        with _INDEX["lock"]:
+            idx = {p: [list(v[0]), v[1]] for p, v in _INDEX["by_root"].get(root, {}).items()}
+        tmp = base + ".idx.json.gz.tmp"
+        with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as f:
+            json.dump({"schema": _CACHE_SCHEMA, "items": idx}, f, ensure_ascii=False)
+        os.replace(tmp, base + ".idx.json.gz")
+        with _SEARCH["lock"]:   # only this root's files; tokens saved, blob rebuilt on load
+            rows = {p: (v[0], v[1], v[3]) for p, v in _SEARCH["by_path"].items() if p in idx}
+        tmp = base + ".rows.pkl.gz.tmp"
+        with gzip.open(tmp, "wb", compresslevel=1) as f:   # level 1: big data, speed wins
+            pickle.dump({"schema": _CACHE_SCHEMA, "items": rows}, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, base + ".rows.pkl.gz")
+        with _DISK["lock"]:
+            _DISK["dirty"].discard(root)
+    except Exception:
+        pass
+
+def _save_dirty_caches():
+    with _DISK["lock"]:
+        dirty = list(_DISK["dirty"])
+    for r in dirty:
+        _save_disk_cache(r)
+
 def is_codex_root(root):
     q = (root or "").replace(os.sep, "/")
     return "/.codex/" in q or q.rstrip("/").endswith("/.codex/sessions")
@@ -1375,6 +1473,8 @@ def get_index(root):
     """Per-root index; re-summarizes only files whose (mtime, size) changed,
     picks up new sessions, and drops deleted ones — so a long-running server
     always shows current data at ~one stat() per file per request."""
+    _load_disk_cache(root)
+    changed = False
     with _INDEX["lock"]:
         cache = _INDEX["by_root"].setdefault(root, {})
         seen = set()
@@ -1388,9 +1488,14 @@ def get_index(root):
             hit = cache.get(path)
             if hit is None or hit[0] != key:
                 cache[path] = (key, _index_item(path, st))
+                changed = True
         for gone in set(cache) - seen:
             del cache[gone]
+            changed = True
         items = [v[1] for v in cache.values()]
+    if changed:
+        with _DISK["lock"]:
+            _DISK["dirty"].add(root)
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
 
@@ -1459,6 +1564,10 @@ def _rows_blob(path):
     tokens = frozenset(_WORD_RE.findall(blob))
     with _SEARCH["lock"]:
         _SEARCH["by_path"][path] = (key, rows, blob, tokens)
+    r = root_for_path(path)
+    if r:
+        with _DISK["lock"]:
+            _DISK["dirty"].add(r)
     return rows, blob, tokens
 
 def search_rows(path):
@@ -1606,6 +1715,7 @@ def _snippet(text, terms):
 def search_api(root, q, scope="all", proj="", limit=30):
     """Search one root → list of result dicts (no HTML). Mirrors the web search."""
     root = root if root in ROOTS else ROOT
+    _load_disk_cache(root, rows=True)
     if scope not in SCOPES:
         scope = "all"
     sq = parse_search_query((q or "")[:200])
@@ -3805,6 +3915,8 @@ class H(BaseHTTPRequestHandler):
                                  f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>',
                          q, scope, rootp, days, from_, to)
         t0 = time.perf_counter()
+        for r_ in roots:
+            _load_disk_cache(r_, rows=True)
         index = [it for r in roots for it in get_index(r)]
         canon = proj_canon(index)
         ckey = lambda p: canon.get(p, p)
@@ -4288,11 +4400,17 @@ def make_server(host="127.0.0.1", port=DEFAULT_PORT):
     return ThreadingHTTPServer((host, port), H)
 
 def _warm_cache(root):
-    """Pre-parse index + search rows so the first request isn't cold. Best-effort."""
+    """Pre-parse index + search rows so the first request isn't cold. Best-effort.
+    Persists the result so the NEXT start skips the parse entirely."""
     try:
+        _load_disk_cache(root, rows=True)
         get_index(root)
         for p in session_files(root):
             _rows_blob(p)
+        with _DISK["lock"]:
+            dirty = root in _DISK["dirty"]
+        if dirty:
+            _save_disk_cache(root)
     except Exception:
         pass
 
@@ -4693,6 +4811,7 @@ def main(argv=None):
         pass
     finally:
         _cleanup_runtime_file()
+        _save_dirty_caches()
     return 0
 
 if __name__ == "__main__":
