@@ -3762,7 +3762,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send_json({"error": str(e)}, 500)
         root = g("root")            # raw param — index/search accept multi-select ("a,b" / "" = all)
         if u.path == "/":
-            return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root))
+            return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root, gint("off")))
         if u.path == "/search":
             return self._send(self.search(g("q"), g("scope", "all"), root,
                                           g("days", ""), g("proj", ""), g("from", ""), g("to", "")))
@@ -3831,7 +3831,7 @@ class H(BaseHTTPRequestHandler):
         return self._redirect("/")
 
     # ---- index ----
-    def index(self, proj_filter="", sort="date", dir_="", root=None):
+    def index(self, proj_filter="", sort="date", dir_="", root=None, off=0):
         roots = active_roots(root)
         rootp = root_param(roots)
         rootlabel = _roots_label(roots)
@@ -3940,8 +3940,13 @@ class H(BaseHTTPRequestHandler):
             projbar.append(f'<a class="{"on" if p==ckey(proj_filter) else ""}" '
                            f'href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a>')
         projbar.append("</div>")
+        # server-side paging: hundreds of cards at once made the landing page heavy
+        IDX_PAGE = 100
+        total = len(items)
+        off = max(0, min(off, max(0, total - 1)))
+        page_items = items[off:off + IDX_PAGE]
         rows = []
-        for it in items:
+        for it in page_items:
             link = "/session?p=" + urllib.parse.quote(it["path"])
             loopchip = f' <span class=loopchip>🔁 {tr("autonomous build-loop")}</span>' if it.get("loop") else ""
             ncopy = dup_copies.get(it.get("sid") or "", 0)
@@ -3965,6 +3970,13 @@ class H(BaseHTTPRequestHandler):
                 f'{fmt_mtime(it["mtime"])} · {fmt_size(it["size"])} · '
                 f'<span class=sid>id {esc(it["sid"])}</span></div>'
                 + (f'<div class=preview>{esc(it["preview"])}</div>' if it["preview"] else "") + '</div>')
+        if total > IDX_PAGE:
+            pl = (f'<a href="{q(proj=proj_filter, sort=sort, dir=dir_, off=max(0, off - IDX_PAGE) or None)}">'
+                  f'← {tr("newer")}</a>' if off > 0 else '<span></span>')
+            nl = (f'<a href="{q(proj=proj_filter, sort=sort, dir=dir_, off=off + IDX_PAGE)}">{tr("older")} →</a>'
+                  if off + IDX_PAGE < total else '<span></span>')
+            rows.append(f'<div class="bar sessnav">{pl}'
+                        f'<span class=meta>{off + 1}–{min(off + IDX_PAGE, total)} / {total}</span>{nl}</div>')
         head = (f'<p class=meta>{len(items)} {tr("sessions")} · <b>🧑 {tr("You")}</b> {tr("marks — by a verified ruleset —")} '
                 f'<b>{tr("only what you actually typed")}</b> · {esc(rootlabel)}</p>'
                 f'<p class=meta>{tr("Legend")}: 🧑 {tr("You")} · ✦ Claude · ⚙ {tr("Tool result")} · ⓘ {tr("System / injected")} '
