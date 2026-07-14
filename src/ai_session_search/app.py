@@ -1668,15 +1668,20 @@ def match_session(active, terms, phrases, blob="", tokens=frozenset()):
     if not need:
         return None
     # which terms appear in each turn — one pass over rows' precomputed lowercase text,
-    # no big per-turn string joins (that was the hot spot on large sessions).
+    # no big per-turn string joins (that was the hot spot on large sessions). Term
+    # counts for scoring are folded into the same pass (a full blob.count() per term
+    # was the next hot spot — it rescanned the whole session per term).
     gi_terms = {}
+    cnt = dict.fromkeys(need, 0)
     for r in active:
         low = r["low"]
         for t in need:
-            if t in low:
+            c = low.count(t)
+            if c:
                 gi_terms.setdefault(r["gi"], set()).add(t)
+                cnt[t] += c
     ntot = len(need)
-    ww = [blob.count(t) for t in terms]
+    ww = [cnt[t] for t in terms]
     all_word = bool(terms) and all(t in tokens for t in terms)   # O(1) whole-word test
     row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == ntot)
     if row_gis:
