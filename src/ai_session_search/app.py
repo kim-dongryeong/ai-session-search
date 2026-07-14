@@ -24,6 +24,7 @@ import base64
 import datetime
 import difflib
 import glob
+import hmac
 import html
 import json
 import os
@@ -3367,6 +3368,23 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def do_POST(self):
+        # POST /api/shutdown — replace-on-update handshake (see main()). A newer build
+        # relaunched by the user asks the stale detached server to exit. Guarded by:
+        # loopback-only client + loopback-only bind, and a per-instance 256-bit token
+        # readable only by the same user (runtime file, 0600). Never a GET.
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/api/shutdown":
+            return self.send_error(404)
+        if not _SHUTDOWN_TOKEN or self.client_address[0] not in ("127.0.0.1", "::1"):
+            return self._send_json({"error": "forbidden"}, 403)
+        sent = (self.headers.get("X-Shutdown-Token") or "").strip()
+        if not hmac.compare_digest(sent, _SHUTDOWN_TOKEN):
+            return self._send_json({"error": "forbidden"}, 403)
+        self._send_json({"ok": True, "pid": os.getpid()})
+        _cleanup_runtime_file()
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
     def do_GET(self):
         # DNS-rebinding guard: a hostile site pointing its own hostname at
         # 127.0.0.1 would send its Host header — reject anything non-local.
@@ -3424,6 +3442,11 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/update":
             # "is there a newer release?" — throttled to 1 GitHub hit/day, no data sent. See check_update().
             return self._send_json(check_update())
+        if u.path == "/api/status":
+            # local instance identity (no network, no cache) — lets a relaunch detect a
+            # stale old-version server and replace it (see main()).
+            return self._send_json({"app": "ai-session-search", "version": __version__,
+                                    "pid": os.getpid()})
         if u.path == "/api/star":
             # star/unstar sessions (persisted to CONFIG_DIR/stars.json). sid may be comma-separated.
             sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
@@ -4421,18 +4444,92 @@ def _port_file():
     uid = f"-{os.getuid()}" if hasattr(os, "getuid") else ""
     return os.path.join(tempfile.gettempdir(), f"ai-session-search{uid}.port")
 
+def _runtime_file():
+    """Per-user runtime record of the running server: port, pid, version, shutdown token.
+    0600 — the token must be readable only by the same user."""
+    return _port_file() + ".json"
+
+_SHUTDOWN_TOKEN = None   # set at server start when bound to loopback; None disables /api/shutdown
+
+def _write_runtime_file(port):
+    global _SHUTDOWN_TOKEN
+    import secrets
+    _SHUTDOWN_TOKEN = secrets.token_hex(32)
+    path = _runtime_file()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"port": port, "pid": os.getpid(), "version": __version__,
+                       "token": _SHUTDOWN_TOKEN}, f)
+    except Exception:
+        pass
+
+def _cleanup_runtime_file():
+    # only remove records THIS process wrote — a replacement server may already
+    # have written its own by the time the old one finishes exiting
+    try:
+        with open(_runtime_file(), encoding="utf-8") as f:
+            if json.load(f).get("pid") != os.getpid():
+                return
+    except Exception:
+        return
+    for p in (_runtime_file(), _port_file()):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
 def _running_server(ports, host="127.0.0.1"):
-    """First port in `ports` where one of our servers answers, else None."""
+    """(port, version|None) of the first port where one of our servers answers, else
+    (None, None). Identity via the cheap /api/status (also yields the version); servers
+    older than 4.0.11 lack it, so fall back to /api/roots — that one lists roots on
+    disk, hence the longer timeout."""
     for port in ports:
         if not port:
             continue
         try:
-            with urllib.request.urlopen(f"http://{host}:{port}/api/roots", timeout=1) as r:
-                if r.status == 200 and "roots" in json.loads(r.read().decode("utf-8", "replace")):
-                    return port
+            with urllib.request.urlopen(f"http://{host}:{port}/api/status", timeout=2) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+                if d.get("app") == "ai-session-search":
+                    return port, d.get("version")
         except Exception:
             pass
-    return None
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}/api/roots", timeout=3) as r:
+                if r.status == 200 and "roots" in json.loads(r.read().decode("utf-8", "replace")):
+                    return port, None
+        except Exception:
+            pass
+    return None, None
+
+def _replace_stale_server(port, host="127.0.0.1"):
+    """Ask the old-version server on `port` to exit (authenticated POST), then wait for
+    the port to free up. True if the port was released."""
+    import socket
+    try:
+        with open(_runtime_file(), encoding="utf-8") as f:
+            rt = json.load(f)
+        token = rt.get("token", "") if rt.get("port") == port else ""
+    except Exception:
+        token = ""
+    if not token:
+        return False   # pre-4.0.11 server (no token/endpoint) — can't ask it to exit
+    try:
+        req = urllib.request.Request(f"http://{host}:{port}/api/shutdown", data=b"",
+                                     headers={"X-Shutdown-Token": token}, method="POST")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            if r.status != 200:
+                return False
+    except Exception:
+        return False
+    for _ in range(50):   # up to ~5s for the socket to be released
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                pass
+        except OSError:
+            return True
+        time.sleep(0.1)
+    return False
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -4504,18 +4601,27 @@ def main(argv=None):
         print(f"  \u26a0\ufe0f  Binding {args.host}: your transcripts are exposed on the network. Use only on a trusted network.")
 
     # Launched again (no explicit port/root) while a server is already up?
-    # Just focus the browser on it instead of starting a second instance.
+    # Same version \u2192 just focus the browser on it instead of starting a second instance.
+    # Different version (user installed an update) \u2192 ask the stale server to exit and
+    # start fresh, so an update actually takes effect without a reboot.
     if args.open and args.port is None and args.root is None:
         try:
             saved = int(open(_port_file()).read().strip())
         except Exception:
             saved = None
-        running = _running_server([saved, DEFAULT_PORT], args.host)
+        running, running_ver = _running_server([saved, DEFAULT_PORT], args.host)
         if running:
-            url = f"http://{args.host}:{running}"
-            print(f"\n  AI Session Search already running \u2192 {url}")
-            _open_ui(url, running)
-            return 0
+            if running_ver == __version__:
+                url = f"http://{args.host}:{running}"
+                print(f"\n  AI Session Search already running \u2192 {url}")
+                _open_ui(url, running)
+                return 0
+            print(f"  \u267b\ufe0f  Replacing a running older version on port {running} \u2026")
+            if not _replace_stale_server(running, args.host):
+                # too old to ask (pre-4.0.11) or it refused \u2014 don't reuse it; a fresh
+                # server starts below (on a temporary port if needed).
+                print(f"  \u26a0\ufe0f  Old server on port {running} could not be stopped; "
+                      f"it will keep running until logout/reboot.")
 
     port = args.port if args.port is not None else DEFAULT_PORT
     try:
@@ -4528,6 +4634,8 @@ def main(argv=None):
             f.write(str(srv.server_address[1]))
     except Exception:
         pass
+    if args.host in ("127.0.0.1", "localhost", "::1"):
+        _write_runtime_file(srv.server_address[1])   # enables the replace-on-update handshake
     url = f"http://{args.host}:{srv.server_address[1]}"
     print(f"\n  AI Session Search v{__version__} → {url}")
     print(f"  Browsing: {ROOT}" + (f"  (+{len(ROOTS)-1} more, switchable)" if len(ROOTS) > 1 else ""))
@@ -4544,6 +4652,8 @@ def main(argv=None):
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        _cleanup_runtime_file()
     return 0
 
 if __name__ == "__main__":
