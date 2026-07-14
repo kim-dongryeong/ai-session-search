@@ -21,6 +21,7 @@ Defaults to $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
 """
 import argparse
 import base64
+import bisect
 import datetime
 import difflib
 import glob
@@ -36,6 +37,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from array import array
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1281,7 +1283,7 @@ _INDEX = {"by_root": {}, "lock": threading.Lock()}
 # Safety: entries loaded from disk go through the SAME (mtime_ns, size) revalidation
 # as always — a stale disk entry is simply reparsed. Bump _CACHE_SCHEMA whenever the
 # shape of _index_item() output or search rows changes, so old caches are discarded.
-_CACHE_SCHEMA = 1
+_CACHE_SCHEMA = 6
 _DISK = {"loaded": set(), "rows_loaded": set(), "dirty": set(), "lock": threading.Lock()}
 _EXCLUSIVE = False   # set by configure(); demo/exclusive data never touches the cache
 
@@ -1319,18 +1321,19 @@ def _load_disk_cache(root, rows=False):
         except Exception:
             pass
     if need_rows:
+        # one pickle record per file, merged as we go — a single giant dict load
+        # fragments the allocator and retains ~1.4GB it never gives back
         try:
             with gzip.open(base + ".rows.pkl.gz", "rb") as f:
-                d = pickle.load(f)
-            if d.get("schema") == _CACHE_SCHEMA:
-                # blob is derivable from rows — rebuilt here (outside the lock) to halve disk size
-                entries = {}
-                for p, (key, rws, tokens) in d["items"].items():
-                    blob = "\n".join(r["low"] for r in rws)
-                    entries[p] = (key, rws, blob, tokens)
-                with _SEARCH["lock"]:
-                    for p, v in entries.items():
-                        _SEARCH["by_path"].setdefault(p, v)
+                head = pickle.load(f)
+                if head.get("schema") == _CACHE_SCHEMA:
+                    while True:
+                        try:
+                            p, key, rws, blob, tokens = pickle.load(f)
+                        except EOFError:
+                            break
+                        with _SEARCH["lock"]:
+                            _SEARCH["by_path"].setdefault(p, (key, rws, blob, tokens))
         except Exception:
             pass
 
@@ -1347,11 +1350,13 @@ def _save_disk_cache(root):
         with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as f:
             json.dump({"schema": _CACHE_SCHEMA, "items": idx}, f, ensure_ascii=False)
         os.replace(tmp, base + ".idx.json.gz")
-        with _SEARCH["lock"]:   # only this root's files; tokens saved, blob rebuilt on load
-            rows = {p: (v[0], v[1], v[3]) for p, v in _SEARCH["by_path"].items() if p in idx}
-        tmp = base + ".rows.pkl.gz.tmp"
+        with _SEARCH["lock"]:   # only this root's files; blob stored too — rebuilding it on
+            rows = {p: v for p, v in _SEARCH["by_path"].items() if p in idx}   # load churned
+        tmp = base + ".rows.pkl.gz.tmp"                    # ~1GB the allocator never returned
         with gzip.open(tmp, "wb", compresslevel=1) as f:   # level 1: big data, speed wins
-            pickle.dump({"schema": _CACHE_SCHEMA, "items": rows}, f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump({"schema": _CACHE_SCHEMA}, f, protocol=pickle.HIGHEST_PROTOCOL)
+            for p, (key, rws, blob, tokens) in rows.items():   # one record per file (streamed load)
+                pickle.dump((p, key, rws, blob, tokens), f, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp, base + ".rows.pkl.gz")
         with _DISK["lock"]:
             _DISK["dirty"].discard(root)
@@ -1540,12 +1545,40 @@ def _rows_from_turns(turns):
         body = str(art["body"])
         out.append({"gi": art["gi"], "role": "assistant", "text": body[:_CODE_CAP],
                     "kind": K_CODE | (K_FILE if art["kind"] == "edit" else 0), "label": art.get("label", "")})
-    out = [r for r in out if r["text"].strip()]
-    for r in out:
-        r["low"] = r["text"].lower()          # precompute once (matching never re-lowers)
-    return out
+    return [r for r in out if r["text"].strip()]
 
 _WORD_RE = re.compile(r"\w+")
+
+def _join_blob(rows):
+    """Lowercased search blob for `rows`, stamping each row's [s,e) slice offsets.
+    Matching then runs as blob.find/count(term, s, e) — no per-search allocations
+    (a per-row text.lower() at query time churned hundreds of MB per search, which
+    macOS's allocator never returned). Lowering is per row, NOT join-then-lower:
+    a few Unicode chars change length when lowered, which would skew the offsets."""
+    pieces = []
+    off = 0
+    for r in rows:
+        low = r["text"].lower()
+        r["s"] = off
+        r["e"] = off + len(low)
+        off = r["e"] + 1
+        pieces.append(low)
+    return "\n".join(pieces)
+
+def _tok_hash(w):
+    # stable across processes (the packed set is persisted in the disk cache) —
+    # builtin hash() is randomized per process, so it can't be used here
+    return int.from_bytes(hashlib.blake2b(w.encode("utf-8"), digest_size=8).digest(), "big")
+
+def _tok_pack(blob):
+    """Whole-word set of `blob` as a sorted array of 8-byte stable hashes.
+    A frozenset of the word strings held ~1.3GB on 907MB of history; this is ~80MB."""
+    return array("Q", sorted({_tok_hash(m.group()) for m in _WORD_RE.finditer(blob)}))
+
+def _tok_has(tokens, w):
+    h = _tok_hash(w)
+    i = bisect.bisect_left(tokens, h)
+    return i < len(tokens) and tokens[i] == h
 
 def _rows_blob(path):
     """(rows, blob, tokens) for a session — cached. blob = all lowercased text (cheap
@@ -1553,15 +1586,15 @@ def _rows_blob(path):
     try:
         st = os.stat(path)
     except OSError:
-        return [], "", frozenset()
+        return [], "", array("Q")
     key = (st.st_mtime_ns, st.st_size)
     with _SEARCH["lock"]:
         hit = _SEARCH["by_path"].get(path)
         if hit is not None and hit[0] == key:
             return hit[1], hit[2], hit[3]
     rows = _rows_from_turns(classify_turns(path))
-    blob = "\n".join(r["low"] for r in rows)
-    tokens = frozenset(_WORD_RE.findall(blob))
+    blob = _join_blob(rows)
+    tokens = _tok_pack(blob)
     with _SEARCH["lock"]:
         _SEARCH["by_path"][path] = (key, rows, blob, tokens)
     r = root_for_path(path)
@@ -1630,11 +1663,11 @@ def _scope_ok(r, scope):
         return bool(kind & (K_TOOL | K_RESULT | K_CMD | K_FILE))
     return True                                    # all (includes code rows)
 
-def _fields_ok(active, field_terms):
+def _fields_ok(active, field_terms, blob):
     for f, vals in field_terms.items():
         mask = FIELD_KIND[f]
         for val in vals:
-            if not any((r["kind"] & mask) and val in r["low"] for r in active):
+            if not any((r["kind"] & mask) and blob.find(val, r["s"], r["e"]) != -1 for r in active):
                 return False
     return True
 
@@ -1660,7 +1693,7 @@ def _best_window(term_gis, need):
             left += 1
     return best
 
-def match_session(active, terms, phrases, blob="", tokens=frozenset()):
+def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     """Return the best hit for one session: row (same-turn) → cluster (nearby turns)
     → session (anywhere). None if not all terms/phrases are present. `blob`/`tokens` (the
     file's cached lowercased text and whole-word set) are used only for cheap score counts."""
@@ -1674,15 +1707,15 @@ def match_session(active, terms, phrases, blob="", tokens=frozenset()):
     gi_terms = {}
     cnt = dict.fromkeys(need, 0)
     for r in active:
-        low = r["low"]
+        a, b = r["s"], r["e"]
         for t in need:
-            c = low.count(t)
+            c = blob.count(t, a, b)
             if c:
                 gi_terms.setdefault(r["gi"], set()).add(t)
                 cnt[t] += c
     ntot = len(need)
     ww = [cnt[t] for t in terms]
-    all_word = bool(terms) and all(t in tokens for t in terms)   # O(1) whole-word test
+    all_word = bool(terms) and all(_tok_has(tokens, t) for t in terms)   # whole-word test (bisect)
     row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == ntot)
     if row_gis:
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
@@ -1755,7 +1788,8 @@ def search_api(root, q, scope="all", proj="", limit=30):
         active = [r for r in rows if _scope_ok(r, scope)]
         if neg and any(nt in blob for nt in neg):
             continue
-        fields_ok = (not field_terms) or _fields_ok(active, field_terms)
+        fields_ok = (not field_terms) or (all(v in blob for vs in field_terms.values() for v in vs)
+                                           and _fields_ok(active, field_terms, blob))
         hit = match_session(active, terms, phrases, blob, tokens) if (fields_ok and need) else None
         field_only = fields_ok and bool(field_terms) and not need
         if not hit and not field_only and not meta_hit:
@@ -1764,11 +1798,11 @@ def search_api(root, q, scope="all", proj="", limit=30):
         for r in active:
             by_gi.setdefault(r["gi"], []).append(r)
         hit_gis = hit["gis"][:5] if hit else (
-            [r["gi"] for r in active if any(v in r["low"] for v in fvals)][:5] if field_only else [])
+            [r["gi"] for r in active if any(blob.find(v, r["s"], r["e"]) != -1 for v in fvals)][:5] if field_only else [])
         snips = []
         for gi in hit_gis:
             rs = by_gi.get(gi, [])
-            row = next((r for r in rs if any(t in r["low"] for t in snip_terms)), rs[0] if rs else None)
+            row = next((r for r in rs if any(blob.find(t, r["s"], r["e"]) != -1 for t in snip_terms)), rs[0] if rs else None)
             if row:
                 snips.append({"turn": gi, "role": row["role"], "text": _snippet(row["text"], snip_terms).strip()})
         title_low = (it.get("title", "") or "").lower()
@@ -3968,7 +4002,8 @@ class H(BaseHTTPRequestHandler):
             active = [r for r in rows if _scope_ok(r, scope)]
             if neg and any(nt in blob for nt in neg):
                 continue
-            fields_ok = (not field_terms) or _fields_ok(active, field_terms)
+            fields_ok = (not field_terms) or (all(v in blob for vs in field_terms.values() for v in vs)
+                                           and _fields_ok(active, field_terms, blob))
             hit = match_session(active, terms, phrases, blob, tokens) if (fields_ok and (terms or phrases)) else None
             field_only = fields_ok and bool(field_terms) and not (terms or phrases)
             if not hit and not field_only and not meta_hit:
@@ -3981,11 +4016,11 @@ class H(BaseHTTPRequestHandler):
             for r in active:
                 by_gi.setdefault(r["gi"], []).append(r)
             hit_gis = hit["gis"][:6] if hit else (
-                [r["gi"] for r in active if any(v in r["text"].lower() for v in fvals)][:6] if field_only else [])
+                [r["gi"] for r in active if any(blob.find(v, r["s"], r["e"]) != -1 for v in fvals)][:6] if field_only else [])
             hits = []
             for gi in hit_gis:
                 rs = by_gi.get(gi, [])
-                row = next((r for r in rs if any(t in r["text"].lower() for t in snip_terms)), rs[0] if rs else None)
+                row = next((r for r in rs if any(blob.find(t, r["s"], r["e"]) != -1 for t in snip_terms)), rs[0] if rs else None)
                 if row:
                     hits.append((gi, row["role"], _snippet(row["text"], snip_terms)))
 
