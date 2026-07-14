@@ -1356,6 +1356,21 @@ def _index_item(path, st):
             "start_cwd": s["start_cwd"], "branch": s["branch"], "forked": s["forked"], "loop": s["loop"],
             "tok": s["tok"], "models": s["models"]}
 
+def proj_canon(items):
+    """Map each provider-specific project key to a canonical workspace path.
+
+    Providers key projects differently — Claude by transcript-folder slug
+    (``-Users-me-dev-app``), Codex/Gemini/AGY by workspace path — so the same
+    workspace shows up under several keys and a ``?proj=`` filter from one provider
+    misses the others. Canonical key = the project's most common session cwd
+    (callers fall back to the key itself when no session recorded a cwd)."""
+    cnt = {}
+    for it in items:
+        if it.get("cwd"):
+            d = cnt.setdefault(it["proj"], {})
+            d[it["cwd"]] = d.get(it["cwd"], 0) + 1
+    return {p: max(d.items(), key=lambda kv: kv[1])[0] for p, d in cnt.items()}
+
 def get_index(root):
     """Per-root index; re-summarizes only files whose (mtime, size) changed,
     picks up new sessions, and drops deleted ones — so a long-running server
@@ -3603,12 +3618,18 @@ class H(BaseHTTPRequestHandler):
         rootp = root_param(roots)
         rootlabel = _roots_label(roots)
         all_items = [it for r in roots for it in get_index(r)]
-        proj_cwd = {}
-        for it in all_items:
-            if it["proj"] not in proj_cwd and it.get("cwd"):
-                proj_cwd[it["proj"]] = short_path(it["cwd"])
-        projs = sorted({it["proj"] for it in all_items}, key=lambda p: proj_cwd.get(p, p).lower())
-        items = [it for it in all_items if it["proj"] == proj_filter] if proj_filter else list(all_items)
+        canon = proj_canon(all_items)
+        ckey = lambda p: canon.get(p, p)
+        proj_cwd = {p: short_path(c) for p, c in canon.items()}
+        for c in canon.values():
+            proj_cwd.setdefault(c, short_path(c))
+        # one chip/row per workspace (the canonical key), merging providers in 'All'
+        projs = sorted({ckey(it["proj"]) for it in all_items}, key=lambda p: proj_cwd.get(p, p).lower())
+        if proj_filter:
+            pf = ckey(proj_filter)
+            items = [it for it in all_items if it["proj"] == proj_filter or ckey(it["proj"]) == pf]
+        else:
+            items = list(all_items)
 
         # sort: field + direction
         SORTF = {"date": "Date", "mine": "My messages", "title": "Title", "size": "Size"}
@@ -3652,7 +3673,7 @@ class H(BaseHTTPRequestHandler):
         else:
             by = {}
             for it in all_items:
-                by.setdefault(it["proj"], []).append(it)
+                by.setdefault(ckey(it["proj"]), []).append(it)
             proj_stats = {p: agg_stats(its) for p, its in by.items()}
             ov = []
             for p, s in sorted(proj_stats.items(), key=lambda kv: -kv[1]["tok"]["out"]):
@@ -3697,7 +3718,7 @@ class H(BaseHTTPRequestHandler):
         projbar = [f'<div class=bar><span class=meta>{tr("Projects")}:</span>',
                    f'<a class="{"" if proj_filter else "on"}" href="{q(sort=sort, dir=dir_)}">{tr("All")}</a>']
         for p in projs:
-            projbar.append(f'<a class="{"on" if p==proj_filter else ""}" '
+            projbar.append(f'<a class="{"on" if p==ckey(proj_filter) else ""}" '
                            f'href="{q(proj=p, sort=sort, dir=dir_)}">{esc(proj_cwd.get(p, p))}</a>')
         projbar.append("</div>")
         rows = []
@@ -3769,10 +3790,12 @@ class H(BaseHTTPRequestHandler):
                          q, scope, rootp, days, from_, to)
         t0 = time.perf_counter()
         index = [it for r in roots for it in get_index(r)]
-        proj_cwd = {}
-        for it in index:
-            if it["proj"] not in proj_cwd and it.get("cwd"):
-                proj_cwd[it["proj"]] = short_path(it["cwd"])
+        canon = proj_canon(index)
+        ckey = lambda p: canon.get(p, p)
+        proj_cwd = {p: short_path(c) for p, c in canon.items()}
+        for c in canon.values():
+            proj_cwd.setdefault(c, short_path(c))
+        pf = ckey(proj) if proj else ""
         mtimes = {it["path"]: it["mtime"] for it in index}
         titles = {it["path"]: it["title"] for it in index}
         metas = {it["path"]: it for it in index}
@@ -3790,7 +3813,7 @@ class H(BaseHTTPRequestHandler):
             if (lo is not None and mt < lo) or (hi is not None and mt >= hi):
                 continue
             it = metas.get(path, {})
-            if proj and it.get("proj") != proj:
+            if proj and it.get("proj") != proj and ckey(it.get("proj", "")) != pf:
                 continue
             sid = it.get("sid") or os.path.basename(path)[:-6]
             forked = it.get("forked", "")
@@ -3878,12 +3901,12 @@ class H(BaseHTTPRequestHandler):
             return "/search?" + urllib.parse.urlencode(params)
 
         projbar = ""
-        matched_projs = sorted({r["proj"] for r in results} | ({proj} if proj else set()),
+        matched_projs = sorted({ckey(r["proj"]) for r in results} | ({pf} if proj else set()),
                                key=lambda p: proj_cwd.get(p, p).lower())
         if matched_projs and (len(matched_projs) > 1 or proj):
             chips = [f'<a class="{"on" if not proj else ""}" href="{searchurl()}">{tr("All")}</a>']
             for p in matched_projs:
-                chips.append(f'<a class="{"on" if p == proj else ""}" href="{searchurl(proj=p)}">'
+                chips.append(f'<a class="{"on" if p == pf else ""}" href="{searchurl(proj=p)}">'
                              f'{esc(proj_cwd.get(p, p))}</a>')
             projbar = f'<div class=bar><span class=meta>{tr("Projects")}:</span>' + "".join(chips) + '</div>'
 
