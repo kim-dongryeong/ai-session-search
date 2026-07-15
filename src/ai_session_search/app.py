@@ -3739,7 +3739,7 @@ class H(BaseHTTPRequestHandler):
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
             man = json.dumps({
                 "name": "AI Session Search", "short_name": "AI Search",
-                "start_url": "/", "scope": "/", "display": "standalone",
+                "id": "/", "start_url": "/", "scope": "/", "display": "standalone",
                 "display_override": ["window-controls-overlay"],
                 "background_color": "#0b1220", "theme_color": "#8a9dff",
                 "icons": [
@@ -4735,6 +4735,47 @@ def _runtime_file():
     0600 — the token must be readable only by the same user."""
     return _port_file() + ".json"
 
+# Ports we try, in order, when this machine hasn't committed to one yet. A committed
+# port (below) always wins over this scan.
+PORT_CANDIDATES = list(range(DEFAULT_PORT, DEFAULT_PORT + 16))   # 8777..8792
+
+def _committed_port_file():
+    """Persistent (survives reboot, unlike the /tmp port file) record of THE port this
+    machine settled on. The installed Chrome PWA is keyed by origin (host:port), so once
+    we've bound a port we must keep using it forever — otherwise the PWA breaks and Chrome
+    mints a duplicate app. See _choose_port()."""
+    return os.path.join(CONFIG_DIR, "port")
+
+def _read_committed_port():
+    try:
+        with open(_committed_port_file(), encoding="utf-8") as f:
+            p = int(f.read().strip())
+        return p if 1 <= p <= 65535 else None
+    except Exception:
+        return None
+
+def _commit_port(port):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        tmp = _committed_port_file() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(port))
+        os.replace(tmp, _committed_port_file())
+    except Exception:
+        pass
+
+def _port_free(port, host="127.0.0.1"):
+    """True if `port` can be bound right now (nobody is listening)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
 _SHUTDOWN_TOKEN = None   # set at server start when bound to loopback; None disables /api/shutdown
 
 def _write_runtime_file(port):
@@ -4886,16 +4927,25 @@ def main(argv=None):
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"  \u26a0\ufe0f  Binding {args.host}: your transcripts are exposed on the network. Use only on a trusted network.")
 
-    # Launched again (no explicit port/root) while a server is already up?
-    # Same version \u2192 just focus the browser on it instead of starting a second instance.
-    # Different version (user installed an update) \u2192 ask the stale server to exit and
-    # start fresh, so an update actually takes effect without a reboot.
-    if args.open and args.port is None and args.root is None:
+    # The app-launch path (double-clicked .app: --open, no explicit port/root) pins a
+    # STABLE per-machine port. The installed Chrome PWA is keyed by origin (host:port);
+    # a changing port makes Chrome mint a duplicate app and orphans the old window, so we
+    # commit one port to CONFIG_DIR and reuse it forever \u2014 even after the port that forced
+    # our hand (a foreign app on 8777) later frees up.
+    app_launch = args.open and args.port is None and args.root is None
+    committed = _read_committed_port() if app_launch else None
+    if app_launch:
         try:
             saved = int(open(_port_file()).read().strip())
         except Exception:
             saved = None
-        running, running_ver = _running_server([saved, DEFAULT_PORT], args.host)
+        # look for one of OUR servers on the committed port first, then the /tmp hint,
+        # then the deterministic candidate range \u2014 never a random port.
+        probe, seen = [], set()
+        for p in [committed, saved] + PORT_CANDIDATES:
+            if p and p not in seen:
+                seen.add(p); probe.append(p)
+        running, running_ver = _running_server(probe, args.host)
         if running:
             if running_ver == __version__:
                 url = f"http://{args.host}:{running}"
@@ -4903,18 +4953,28 @@ def main(argv=None):
                 _open_ui(url, running)
                 return 0
             print(f"  \u267b\ufe0f  Replacing a running older version on port {running} \u2026")
-            if not _replace_stale_server(running, args.host):
-                # too old to ask (pre-4.0.11) or it refused \u2014 don't reuse it; a fresh
-                # server starts below (on a temporary port if needed).
-                print(f"  \u26a0\ufe0f  Old server on port {running} could not be stopped; "
-                      f"it will keep running until logout/reboot.")
+            if _replace_stale_server(running, args.host) and committed is None:
+                committed = running   # adopt the freed port as ours
 
-    port = args.port if args.port is not None else DEFAULT_PORT
+    if args.port is not None:
+        port = args.port
+    elif app_launch:
+        # committed port wins; first run picks the lowest free candidate and commits it.
+        port = committed or next((p for p in PORT_CANDIDATES if _port_free(p, args.host)),
+                                 DEFAULT_PORT)
+    else:
+        port = DEFAULT_PORT
     try:
         srv = make_server(args.host, port)
     except OSError:
-        print(f"  \u26a0\ufe0f  Port {port} is in use — opening on a temporary port instead. (set one with --port)")
+        # Our committed/target port is held by a FOREIGN app (we never kill those \u2014 only
+        # servers that answer /api/status as ours). Fall back to an ephemeral port for this
+        # session, but do NOT commit it, so we return to the stable port once the foreign
+        # app is gone. (This is the one case a PWA can still be transiently wrong.)
+        print(f"  \u26a0\ufe0f  Port {port} is in use by another app \u2014 using a temporary port this time.")
         srv = make_server(args.host, 0)
+    if app_launch and committed is None and srv.server_address[1] in PORT_CANDIDATES:
+        _commit_port(srv.server_address[1])   # remember this machine's port for next launch
     try:
         with open(_port_file(), "w") as f:
             f.write(str(srv.server_address[1]))

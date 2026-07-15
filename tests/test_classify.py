@@ -763,6 +763,43 @@ class RootIsolationAndDedupe(unittest.TestCase):
             shutil.rmtree(r, ignore_errors=True)
             app.configure(None, [])
 
+class PortCommit(unittest.TestCase):
+    def setUp(self):
+        self._cfg = app.CONFIG_DIR
+        app.CONFIG_DIR = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(app.CONFIG_DIR, ignore_errors=True)
+        app.CONFIG_DIR = self._cfg
+
+    def test_commit_is_persistent_and_atomic(self):
+        self.assertIsNone(app._read_committed_port())
+        app._commit_port(8778)
+        self.assertEqual(app._read_committed_port(), 8778)   # survives a fresh read
+        app._commit_port(8781)
+        self.assertEqual(app._read_committed_port(), 8781)   # overwrite
+
+    def test_garbage_committed_port_is_ignored(self):
+        with open(os.path.join(app.CONFIG_DIR, "port"), "w") as f:
+            f.write("nope")
+        self.assertIsNone(app._read_committed_port())
+        with open(os.path.join(app.CONFIG_DIR, "port"), "w") as f:
+            f.write("70000")
+        self.assertIsNone(app._read_committed_port())
+
+    def test_candidate_range_is_deterministic(self):
+        self.assertEqual(app.PORT_CANDIDATES[0], app.DEFAULT_PORT)
+        self.assertEqual(app.PORT_CANDIDATES, list(range(app.DEFAULT_PORT, app.DEFAULT_PORT + 16)))
+
+    def test_port_free_detects_a_bound_socket(self):
+        import socket
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)
+        try:
+            self.assertFalse(app._port_free(s.getsockname()[1]))
+        finally:
+            s.close()
+
 
 if __name__ == "__main__":
     unittest.main()
