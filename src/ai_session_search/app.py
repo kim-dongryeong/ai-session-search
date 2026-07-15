@@ -44,7 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.15"
+__version__ = "4.0.16"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -4859,33 +4859,66 @@ def _running_server(ports, host="127.0.0.1"):
     return None, None
 
 def _replace_stale_server(port, host="127.0.0.1"):
-    """Ask the old-version server on `port` to exit (authenticated POST), then wait for
-    the port to free up. True if the port was released."""
+    """Free `port` when it's held by one of OUR own (stale, different-version) servers.
+    True if the port was released.
+
+    Two stages, because the on-disk shutdown token is a single file that any of our
+    servers may overwrite — when an ephemeral-port server clobbers it, the committed-port
+    server's token is lost and the graceful handshake 403s. So we ALSO take the live PID
+    from /api/status (always accurate) and, if graceful shutdown doesn't free the port,
+    kill that PID. We only ever touch a process that /api/status confirms is ours, on
+    loopback, owned by this user — killing our own orphan is exactly what the user would
+    do by hand, and it's what keeps the committed port (hence the single PWA) stable."""
     import socket
+    def freed():
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return False
+        except OSError:
+            return True
+    # live identity + PID (accurate even when the on-disk token file is stale)
+    pid = None
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/api/status", timeout=2) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        if d.get("app") != "ai-session-search":
+            return False   # NOT ours — never kill a foreign app
+        pid = d.get("pid")
+    except Exception:
+        # no /api/status = a pre-4.0.11 server of ours (or unreachable); fall through to
+        # the token path, which is all those old versions understand.
+        pass
+    # 1) graceful: authenticated shutdown, if our runtime file still holds this port's token
     try:
         with open(_runtime_file(), encoding="utf-8") as f:
             rt = json.load(f)
         token = rt.get("token", "") if rt.get("port") == port else ""
     except Exception:
         token = ""
-    if not token:
-        return False   # pre-4.0.11 server (no token/endpoint) — can't ask it to exit
-    try:
-        req = urllib.request.Request(f"http://{host}:{port}/api/shutdown", data=b"",
-                                     headers={"X-Shutdown-Token": token}, method="POST")
-        with urllib.request.urlopen(req, timeout=3) as r:
-            if r.status != 200:
-                return False
-    except Exception:
-        return False
-    for _ in range(50):   # up to ~5s for the socket to be released
+    if token:
         try:
-            with socket.create_connection((host, port), timeout=0.2):
-                pass
-        except OSError:
-            return True
-        time.sleep(0.1)
-    return False
+            req = urllib.request.Request(f"http://{host}:{port}/api/shutdown", data=b"",
+                                         headers={"X-Shutdown-Token": token}, method="POST")
+            urllib.request.urlopen(req, timeout=3).read()
+        except Exception:
+            pass
+        for _ in range(20):   # ~2s for a graceful exit
+            if freed():
+                return True
+            time.sleep(0.1)
+    # 2) fallback: kill our own server by the PID /api/status reported
+    if pid and hasattr(os, "kill"):
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                break   # already gone
+            for _ in range(20):
+                if freed():
+                    return True
+                time.sleep(0.1)
+    return freed()
 
 def main(argv=None):
     ap = argparse.ArgumentParser(

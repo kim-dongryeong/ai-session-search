@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.16 — 2026-07-15
+
+- **Updates reliably reclaim the app's port (no more duplicate app windows).** The
+  server that must step aside for an update is identified by a shutdown token in a
+  single file that any of our servers can overwrite; when it got clobbered, the new
+  version couldn't stop the old one, fell back to a random port, and Chrome made yet
+  another duplicate app. A relaunch now also reads the running server's live PID from
+  `/api/status` and, if the graceful shutdown doesn't free the port, stops that PID —
+  but only a process `/api/status` confirms is ours, on loopback, owned by this user. A
+  foreign app on the port is still never touched.
+
 ## 4.0.15 — 2026-07-15
 
 - **The app is never shown in a browser tab during install.** On the first-run
