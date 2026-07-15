@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.15 — 2026-07-15
+
+- **The app is never shown in a browser tab during install.** On the first-run
+  install page, finishing the install used to reveal the bare app in that
+  browser tab (visible behind Chrome's "Successfully installed" toast) before
+  the standalone app window opened. The install page now stays up as a
+  "✓ Installed — you can close this tab" screen; the app only ever appears in
+  its own window. (The number of Chrome install dialogs is set by Chrome and
+  can't be reduced by the page — that flow is unchanged.)
+
 ## 4.0.14 — 2026-07-15
 
 - **Updates no longer spawn duplicate app windows.** The local server used to
