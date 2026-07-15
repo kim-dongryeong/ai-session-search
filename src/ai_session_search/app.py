@@ -3197,6 +3197,22 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   if(standalone)mark();  // remember (per-origin) that this machine has the app installed
   function openInstall(){if(mov)mov.classList.add('open');}
   function closeInstall(){if(mov)mov.classList.remove('open');document.documentElement.classList.remove('welcome');}
+  // live re-check (display-mode can flip if Chrome reparents this tab into the app window)
+  var dmMQ=window.matchMedia('(display-mode: standalone),(display-mode: window-controls-overlay),(display-mode: minimal-ui),(display-mode: fullscreen)');
+  function liveStandalone(){return dmMQ.matches||navigator.standalone===true;}
+  // after a successful install in a BROWSER tab: keep the opaque full-screen overlay up so
+  // the app is never revealed here (it opens in its own PWA window); swap to a done message.
+  function showInstalledMsg(){
+    if(liveStandalone()){closeInstall();return;}   // we ARE the app window → show the app
+    var main=document.getElementById('installmain'), done=document.getElementById('installdone');
+    if(main)main.style.display='none';
+    if(done)done.style.display='';
+    if(mov)mov.classList.add('open');
+  }
+  // if Chrome "Open in app" reparents this very tab into the app window, reveal the app
+  try{dmMQ.addEventListener('change',function(){if(liveStandalone())closeInstall();});}catch(_){}
+  var iclose=document.getElementById('installclose');
+  if(iclose)iclose.addEventListener('click',function(){window.close();});   // works: script-adjacent tab
   if(ibtn)ibtn.addEventListener('click',openInstall);
   // No visible dismiss — only "Confirm" (or ESC as an escape hatch). Feels like a finish-setup step.
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&mov&&mov.classList.contains('open'))closeInstall();});
@@ -3204,10 +3220,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   if(inow)inow.addEventListener('click',function(){
     if(deferredPrompt){
       var dp=deferredPrompt;deferredPrompt=null;dp.prompt();
-      // keep our full-screen behind the native prompt; close only AFTER the user chooses,
-      // so the real app never shows through the browser's install dialog.
+      // keep our full-screen overlay behind the native prompt until the user chooses.
+      // accepted → keep it up as a "done, close this tab" screen (never reveal the app in
+      // this browser tab); dismissed → drop it so they can use the app here in the browser.
       if(dp.userChoice&&dp.userChoice.then){
-        dp.userChoice.then(function(res){if(res&&res.outcome==='accepted'){mark();if(ibtn)ibtn.style.display='none';}closeInstall();});
+        dp.userChoice.then(function(res){
+          if(res&&res.outcome==='accepted'){mark();if(ibtn)ibtn.style.display='none';showInstalledMsg();}
+          else{closeInstall();}
+        });
       }
     }
     else{var h=document.getElementById('installhow');if(h)h.style.display='';}
@@ -3224,7 +3244,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     // …but only auto-pop the big modal on the home page — never on a deep permalink/session link.
     try{if(location.pathname==='/'&&(wantWelcome||!localStorage.getItem('aiss:installtip'))){localStorage.setItem('aiss:installtip','1');openInstall();}}catch(_){}
   });
-  window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';closeInstall();});
+  window.addEventListener('appinstalled',function(){mark();if(ibtn)ibtn.style.display='none';showInstalledMsg();});
   if(installed()&&ibtn)ibtn.style.display='none';
   // Project-stats table: click a column header to sort (client-side; Total row stays last)
   document.querySelectorAll('table.stab thead th.sortable').forEach(function(th){
@@ -3523,6 +3543,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         '</div></div></div>')
     install_modal = (
         '<div id=installmodal class=modal-ov><div class=modal role=dialog aria-modal=true>'
+        '<div id=installmain>'
         f'<h2 class=modal-h>{esc(tr("Almost done!"))}</h2>'
         f'<p class=modal-sub>{esc(tr("One last step — click Confirm to finish setting up the app."))}</p>'
         '<div class=modal-ills>'
@@ -3531,6 +3552,14 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         '</div>'
         f'<div class=modal-actions><button id=installnow class=modal-primary>{esc(tr("Confirm"))}</button></div>'
         f'<p class=modal-note id=installhow style="display:none">{tr("If it does not prompt, use the Chrome ⋮ menu → “Cast, save &amp; share” → “Install page as app”.")}</p>'
+        '</div>'
+        # shown after a successful install so the app is NEVER revealed in this browser
+        # tab — the app opens in its own PWA window; this tab is disposable.
+        '<div id=installdone style="display:none">'
+        f'<h2 class=modal-h>✓ {esc(tr("Installed!"))}</h2>'
+        f'<p class=modal-sub>{esc(tr("The app opened in its own window. You can close this browser tab."))}</p>'
+        f'<div class=modal-actions><button id=installclose class=modal-primary>{esc(tr("Close this tab"))}</button></div>'
+        '</div>'
         '</div></div>')
     kbrows = [
         ("j / k", tr("down / up — session-list rows, or prev / next session")),
