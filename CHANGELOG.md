@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.0.14 — 2026-07-15
+
+- **Updates no longer spawn duplicate app windows.** The local server used to
+  fall back to a random port whenever 8777 was busy, and Chrome keys an
+  installed app (PWA) by its address — so each random port looked like a brand
+  new app: reinstalling piled up `AI Session Search 2.app`, `… 3.app` bundles,
+  orphaned the old window, opened a browser tab instead of the app, and re-ran
+  the install prompt every time. The app now commits one port for the machine
+  (`~/.config/ai-session-search/port`) and reuses it forever — even after the
+  other app that was on 8777 quits. First run scans 8777–8792 in order (never
+  random); a busy port is only reclaimed if it's our own server (verified via
+  `/api/status`), never another app's; updates replace the old server on the
+  same port, so the installed app keeps working and no duplicate is created.
+
 ## 4.0.13 — 2026-07-14
 
 Measured on 907MB of real history (5 folders, ~300 sessions):
