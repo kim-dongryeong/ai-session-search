@@ -1609,6 +1609,7 @@ def _rows_from_turns(turns):
     return [r for r in out if r["text"].strip()]
 
 _WORD_RE = re.compile(r"\w+")
+_WS_RE = re.compile(r"\s+")   # collapse runs of whitespace so a wrapped pasted phrase still matches
 
 def _join_blob(rows):
     """Lowercased search blob for `rows`, stamping each row's [s,e) slice offsets.
@@ -1768,6 +1769,7 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     # implicit contiguous phrase: a turn that contains the words verbatim in order is almost
     # certainly the intended target, and we prefer it over any scattered word-cluster.
     cand = " ".join(terms) if (len(terms) >= 3 and not phrases) else ""
+    ntot = len(need)
     # which terms appear in each turn — one pass over rows' precomputed lowercase text,
     # no big per-turn string joins (that was the hot spot on large sessions). Term
     # counts for scoring are folded into the same pass (a full blob.count() per term
@@ -1777,14 +1779,22 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     phrase_gis = []
     for r in active:
         a, b = r["s"], r["e"]
-        if cand and blob.find(cand, a, b) != -1:
-            phrase_gis.append(r["gi"])
+        row_has = 0
         for t in need:
             c = blob.count(t, a, b)
             if c:
                 gi_terms.setdefault(r["gi"], set()).add(t)
                 cnt[t] += c
-    ntot = len(need)
+                row_has += 1
+        # implicit exact-phrase: only worth checking when this row holds every query word.
+        # Try the cheap single-line substring first; if that misses, retry with whitespace
+        # collapsed so a pasted sentence that got wrapped (newlines / double spaces in the
+        # transcript) still matches. The regex runs only on all-words-present rows, so it
+        # stays off the hot path on large sessions.
+        if cand and row_has == ntot and (
+                blob.find(cand, a, b) != -1
+                or cand in _WS_RE.sub(" ", r["text"].lower())):
+            phrase_gis.append(r["gi"])
     ww = [cnt[t] for t in terms]
     all_word = bool(terms) and all(_tok_has(tokens, t) for t in terms)   # whole-word test (bisect)
     if phrase_gis:
@@ -4102,6 +4112,10 @@ class H(BaseHTTPRequestHandler):
             lo = time.time() - int(days) * 86400
 
         RESULT_CAP = 300
+        # a 3+ word unquoted query is read as an implicit contiguous phrase (see match_session);
+        # track whether any session actually contained it, to hint the fallback otherwise.
+        implicit_phrase = len(terms) >= 3 and not phrases and not field_terms
+        any_phrase = False
         results = []
         for path in (p_ for r_ in roots for p_ in session_files(r_)):
             mt = mtimes.get(path, 0)
@@ -4133,6 +4147,8 @@ class H(BaseHTTPRequestHandler):
             fields_ok = (not field_terms) or (all(v in blob for vs in field_terms.values() for v in vs)
                                            and _fields_ok(active, field_terms, blob))
             hit = match_session(active, terms, phrases, blob, tokens) if (fields_ok and (terms or phrases)) else None
+            if hit and hit.get("phrase"):
+                any_phrase = True
             field_only = fields_ok and bool(field_terms) and not (terms or phrases)
             if not hit and not field_only and not meta_hit:
                 continue
@@ -4243,8 +4259,12 @@ class H(BaseHTTPRequestHandler):
         when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
                 (" · " + tr(DAY_CHOICES[days]) if days else ""))
         more = f' · <span class=hint>(+{truncated} {tr("more, refine to narrow")})</span>' if truncated > 0 else ""
+        # when a pasted sentence wasn't found verbatim anywhere, say so — the jumps below
+        # fall back to wherever the separate words co-occur, which is easy to misread as a bug.
+        phrase_note = (f'<p class=meta>💡 {tr("No session contains that as an exact phrase — showing where the words appear separately. Wrap it in &quot;quotes&quot; to require the exact phrase.")}</p>'
+                       if (implicit_phrase and results and not any_phrase) else "")
         head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{more} · '
-                f'📁 {esc(_roots_label(roots))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>')
+                f'📁 {esc(_roots_label(roots))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>{phrase_note}')
         return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
                      q, scope, rootp, days, from_, to, proj=proj)
 
@@ -4390,8 +4410,16 @@ class H(BaseHTTPRequestHandler):
         # ---- in-session search (sq) ----
         if sq.strip():
             terms = parse_query(sq)
-            hits = [(gi, role) for gi, role, txt in search_turns(path)
-                    if terms and all(t in txt.lower() for t in terms)]
+            rows_t = [(gi, role, txt.lower()) for gi, role, txt in search_turns(path)]
+            # same implicit-phrase rule as the cross-session search: 3+ unquoted words are
+            # first tried as one contiguous phrase (whitespace-tolerant). Only if no turn
+            # contains them verbatim do we fall back to AND-of-words.
+            cand = " ".join(terms) if (len(terms) >= 3 and all(" " not in t for t in terms)) else ""
+            phrase_hits = ([(gi, role) for gi, role, txt in rows_t if cand in _WS_RE.sub(" ", txt)]
+                           if cand else [])
+            phrase_mode = bool(phrase_hits)
+            hits = phrase_hits or [(gi, role) for gi, role, txt in rows_t
+                                   if terms and all(t in txt for t in terms)]
             noise = {"tool-result", "system"}      # tool output / injected — usually search noise
             n_noise = sum(1 for _, role in hits if role in noise)
             show = [gi for gi, role in hits if sqtools or role not in noise]
@@ -4404,8 +4432,12 @@ class H(BaseHTTPRequestHandler):
                 extra = f' · <a href="{url(sq=sq)}">{tr("hide tool results / system")}</a>'
             else:
                 extra = ""
+            # tell the user which way the query was read: exact phrase vs. degraded word-AND
+            mode = (f' · <span class=hint>📌 {tr("exact phrase")}</span>' if phrase_mode
+                    else (f' · <span class=hint>{tr("no exact phrase — matched as separate words (wrap in &quot;quotes&quot; for exact)")}</span>'
+                          if cand else ""))
             bar = (f'<div class=bar><a class=backfull href="{url()}">← {tr("full conversation")}</a>'
-                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(show)} {tr("messages matched in this session")}{extra} · {ms}ms'
+                   f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(show)} {tr("messages matched in this session")}{mode}{extra} · {ms}ms'
                    f'<span id=perf></span></span></div>')
             return shell(meta["title"][:50], head + bar
                          + ("".join(body) or f"<p class=meta>{tr('No matches in the conversation (try “+… in tool results” above).')}</p>"), q, root=rt)

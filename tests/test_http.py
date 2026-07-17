@@ -323,5 +323,75 @@ class HttpSmoke(unittest.TestCase):
         self.assertEqual(status, 200)
 
 
+def build_phrase_root():
+    """A root whose one session contains a distinctive sentence verbatim in a late turn,
+    while its individual words also scatter across an earlier turn (the trap)."""
+    root = tempfile.mkdtemp()
+    proj = os.path.join(root, "-Users-x-phrase")
+    os.makedirs(proj)
+    sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    sentence = "Inspired by and building on the ideas of the original folder plugin."
+    lines = [
+        {"type": "user", "timestamp": "2026-07-01T00:00:00Z",
+         "message": {"role": "user", "content": "by and on the of building ideas folder plugin original"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+    ]
+    # pad so the verbatim sentence lands well past the first page → goto must page to it
+    for i in range(30):
+        lines.append({"type": "user", "message": {"role": "user", "content": f"filler {i}"}})
+    lines.append({"type": "user", "timestamp": "2026-07-01T00:05:00Z",
+                  "message": {"role": "user", "content": f"Credits\n{sentence}\n==> keep this?"}})
+    with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as fh:
+        for o in lines:
+            fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+    return root, os.path.join(proj, sid + ".jsonl"), sentence
+
+
+class ImplicitPhraseHttp(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.path, cls.sentence = build_phrase_root()
+        app.configure(cls.root)
+        app.DEFAULT_ROOTS = [cls.root]; app.SAVED_ROOTS = []
+        app.ROOTS[:] = [cls.root]; app.ROOT = cls.root
+        cls.srv = app.make_server(port=0)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def get(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
+            return r.status, r.read().decode("utf-8")
+
+    def _target_gi(self):
+        rows = app.search_rows(self.path)
+        return next(r["gi"] for r in rows if self.sentence.lower() in r["text"].lower())
+
+    def test_unquoted_sentence_jumps_to_verbatim_turn(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote(self.sentence))
+        self.assertEqual(status, 200)
+        self.assertIn(f"goto={self._target_gi()}", body)      # not the early word-scatter turn
+
+    def test_fallback_note_when_no_exact_phrase(self):
+        # three words that never appear contiguously anywhere
+        status, body = self.get("/search?q=" + urllib.parse.quote("building plugin filler"))
+        self.assertEqual(status, 200)
+        self.assertIn("No session contains that as an exact phrase", body)
+
+    def test_no_fallback_note_when_phrase_found(self):
+        status, body = self.get("/search?q=" + urllib.parse.quote(self.sentence))
+        self.assertNotIn("No session contains that as an exact phrase", body)
+
+    def test_in_session_search_prefers_phrase(self):
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.path)
+                                + "&sq=" + urllib.parse.quote(self.sentence))
+        self.assertEqual(status, 200)
+        self.assertIn("1 messages matched in this session", body)   # only the verbatim turn, not the scatter
+        self.assertIn("exact phrase", body)
+
+
 if __name__ == "__main__":
     unittest.main()

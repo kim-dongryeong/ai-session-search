@@ -824,6 +824,16 @@ class ImplicitPhraseJump(unittest.TestCase):
         self.assertTrue(hit.get("phrase"))
         self.assertEqual(hit["gis"][0], 2)       # jump lands on the verbatim occurrence
 
+    def test_wrapped_phrase_still_matches(self):
+        # the stored transcript wrapped the sentence across lines / double spaces
+        texts = ["by and the of on scattered drive link",
+                 "Credits\nInspired by and\nbuilding  on the ideas of Google Drive\n"
+                 "Folder Link by Andrew Marconi."]
+        hit = self._match(texts, "Inspired by and building on the ideas of "
+                                 "Google Drive Folder Link by Andrew Marconi.")
+        self.assertTrue(hit.get("phrase"))
+        self.assertEqual(hit["gis"][0], 1)
+
     def test_non_contiguous_words_do_not_become_a_phrase(self):
         texts = ["alpha beta gamma scattered here", "and gamma alpha beta elsewhere"]
         hit = self._match(texts, "alpha gamma zebra_missing")   # zebra_missing absent

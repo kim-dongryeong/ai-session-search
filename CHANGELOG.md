@@ -11,6 +11,15 @@
   them verbatim in order is treated as an implicit exact phrase: the jump lands on that
   turn and the session is ranked accordingly. Short queries (< 3 words) and normal
   AND-of-words search are unchanged.
+  - **Wrapped pastes still match.** The verbatim check collapses runs of whitespace, so a
+    sentence that got line-wrapped or double-spaced in the transcript still counts as the
+    exact phrase (the check runs only on turns that already contain every word, so large
+    sessions stay fast).
+  - **In-session search (🔎 Search this session) uses the same rule** and shows every
+    matching turn, so one session surfaces all of its matching spots — not just one.
+  - **It says how it read your query.** When no session (or turn) contains the words as an
+    exact phrase, a note explains that it fell back to matching the words separately and
+    suggests wrapping the text in quotes — so an off-target jump no longer looks like a bug.
 
 ## 4.0.16 — 2026-07-15
 
