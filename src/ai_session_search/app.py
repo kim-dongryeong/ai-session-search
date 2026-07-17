@@ -44,7 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.16"
+__version__ = "4.0.17"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1761,14 +1761,24 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     need = terms + phrases
     if not need:
         return None
+    # Pasting a distinctive sentence (unquoted) is a common way to relocate a message.
+    # Splitting it into AND-of-words then jumping to the earliest turn where those words
+    # happen to co-occur lands on the wrong place when the words are common (by/and/the/…).
+    # So when several plain words were given without quotes, treat the whole query as an
+    # implicit contiguous phrase: a turn that contains the words verbatim in order is almost
+    # certainly the intended target, and we prefer it over any scattered word-cluster.
+    cand = " ".join(terms) if (len(terms) >= 3 and not phrases) else ""
     # which terms appear in each turn — one pass over rows' precomputed lowercase text,
     # no big per-turn string joins (that was the hot spot on large sessions). Term
     # counts for scoring are folded into the same pass (a full blob.count() per term
     # was the next hot spot — it rescanned the whole session per term).
     gi_terms = {}
     cnt = dict.fromkeys(need, 0)
+    phrase_gis = []
     for r in active:
         a, b = r["s"], r["e"]
+        if cand and blob.find(cand, a, b) != -1:
+            phrase_gis.append(r["gi"])
         for t in need:
             c = blob.count(t, a, b)
             if c:
@@ -1777,6 +1787,9 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     ntot = len(need)
     ww = [cnt[t] for t in terms]
     all_word = bool(terms) and all(_tok_has(tokens, t) for t in terms)   # whole-word test (bisect)
+    if phrase_gis:
+        return {"kind": "row", "gis": sorted(set(phrase_gis)), "ww": ww,
+                "all_word": all_word, "span": 0, "phrase": True}
     row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == ntot)
     if row_gis:
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
@@ -4156,7 +4169,7 @@ class H(BaseHTTPRequestHandler):
                     score += (400 if hit["span"] <= 3 else 250) + sum(5 * min(c, 5) for c in ww)
                 else:
                     score += 100
-                if phrases:
+                if phrases or hit.get("phrase"):   # exact-phrase (quoted or implicit) is a strong intent signal
                     score += 300
             elif field_only:
                 score += 500

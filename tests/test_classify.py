@@ -801,5 +801,38 @@ class PortCommit(unittest.TestCase):
             s.close()
 
 
+class ImplicitPhraseJump(unittest.TestCase):
+    """An unquoted multi-word query should jump to where the words appear verbatim in
+    order, not to the earliest turn where the (often common) words happen to co-occur."""
+
+    def _match(self, texts, query):
+        rows = [{"gi": i, "role": "assistant", "text": t, "kind": app.K_TEXT, "label": ""}
+                for i, t in enumerate(texts)]
+        blob = app._join_blob(rows)              # stamps s/e offsets on each row
+        tokens = app._tok_pack(blob)
+        sq = app.parse_search_query(query)
+        return app.match_session(rows, sq["terms"], sq["phrases"], blob, tokens)
+
+    def test_prefers_contiguous_phrase_over_scattered_cluster(self):
+        texts = [
+            "by and on the of building ideas link drive google",   # all words, scrambled — the trap
+            "unrelated turn",
+            "Inspired by and building on the ideas of Google Drive Folder Link by Andrew Marconi.",
+        ]
+        hit = self._match(texts, "Inspired by and building on the ideas of "
+                                 "Google Drive Folder Link by Andrew Marconi.")
+        self.assertTrue(hit.get("phrase"))
+        self.assertEqual(hit["gis"][0], 2)       # jump lands on the verbatim occurrence
+
+    def test_non_contiguous_words_do_not_become_a_phrase(self):
+        texts = ["alpha beta gamma scattered here", "and gamma alpha beta elsewhere"]
+        hit = self._match(texts, "alpha gamma zebra_missing")   # zebra_missing absent
+        self.assertIsNone(hit)
+
+    def test_short_query_unaffected(self):
+        hit = self._match(["drive folder here", "folder then drive"], "drive folder")
+        self.assertIsNone(hit.get("phrase"))     # < 3 words → normal AND behavior
+
+
 if __name__ == "__main__":
     unittest.main()

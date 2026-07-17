@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.0.17 — 2026-07-17
+
+- **Pasting a distinctive sentence jumps to where it actually appears.** An unquoted
+  multi-word query was split into an AND-of-words and the result jumped to the earliest
+  turn where those words *happened* to co-occur — which, for a sentence full of common
+  words (`by`, `and`, `the`, `of`, …), was almost never the real occurrence. You'd land
+  on an unrelated spot and then page through thousands of messages to find the one you
+  meant. Now, when several plain words are given without quotes, a turn that contains
+  them verbatim in order is treated as an implicit exact phrase: the jump lands on that
+  turn and the session is ranked accordingly. Short queries (< 3 words) and normal
+  AND-of-words search are unchanged.
+
 ## 4.0.16 — 2026-07-15
 
 - **Updates reliably reclaim the app's port (no more duplicate app windows).** The
