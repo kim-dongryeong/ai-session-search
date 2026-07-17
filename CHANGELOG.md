@@ -21,6 +21,14 @@
     exact phrase, a note explains that it fell back to matching the words separately and
     suggests wrapping the text in quotes — so an off-target jump no longer looks like a bug.
 
+- **The conversation view scrolls continuously — no more "Next 1000" clicking.** Jumping to
+  a match used to drop you onto a fixed 1000-message page; reading around it, or reaching a
+  match on a later page, meant clicking through pages. Now the view is a window that fills in
+  as you scroll: forward automatically to the end of the session, earlier on demand (a "↑ Load
+  earlier messages" control, also on scroll-up). A jump lands centered in its window, with
+  context on both sides. Loading is chunked in the background, so even multi-thousand-message
+  sessions stay responsive. The human-only (🧑) filtered view keeps classic paging.
+
 ## 4.0.16 — 2026-07-15
 
 - **Updates reliably reclaim the app's port (no more duplicate app windows).** The

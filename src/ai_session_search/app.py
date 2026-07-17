@@ -3024,6 +3024,10 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .msg:target{outline:3px solid #f59e0b;outline-offset:2px}
 .pg{display:flex;gap:10px;justify-content:center;margin:18px 0}
 .pg a{padding:7px 16px;border-radius:9px;background:#1f6feb;color:#fff;text-decoration:none;font-size:13px}
+.loadmore{display:flex;justify-content:center;margin:10px 0}
+.loadmore button{padding:6px 16px;border-radius:9px;border:1px solid #1f6feb;background:transparent;color:#1f6feb;cursor:pointer;font-size:12.5px}
+.loadmore button:hover{background:#1f6feb;color:#fff}
+.loadspin{color:#8a93a3;letter-spacing:3px;font-size:16px;padding:8px}
 .snip{color:#666;font-size:12.5px;margin:4px 0 0;padding-left:10px;border-left:2px solid #d9dde2}
 .snip a.snipjump{text-decoration:none}
 .snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
@@ -3303,23 +3307,55 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
   }
-  // progressive load: the server paints the first chunk instantly; stream the rest in the background
-  var lz=document.getElementById('lazyload');
-  if(lz){
-    var lp=lz.getAttribute('data-p'),lsince=+lz.getAttribute('data-since'),lend=+lz.getAttribute('data-end'),lq=lz.getAttribute('data-q')||'';
-    var idle=window.requestIdleCallback||function(f){return setTimeout(f,40);};
-    var loadChunk=function(){
-      if(!lz||lsince>=lend){if(lz){lz.remove();lz=null;}return;}
-      var take=Math.min(400,lend-lsince);
-      fetch('/api/session_tail?p='+encodeURIComponent(lp)+'&since='+lsince+'&limit='+take+(lq?'&q='+encodeURIComponent(lq):''))
+  // continuous conversation view: the server paints a window; the rest of the session
+  // streams in as you scroll — forward automatically to the end, earlier on demand — so
+  // there are no 1000-message pages to click through to reach or read around a match.
+  var inView=function(el){var r=el.getBoundingClientRect();return r.top<innerHeight+800&&r.bottom>-800;};
+  var markTools=function(){if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});};
+  // forward: append [since,end) in chunks, auto-triggered while the sentinel is near the viewport
+  var fwd=document.getElementById('loadfwd');
+  if(fwd){
+    var fp=fwd.getAttribute('data-p'),fsince=+fwd.getAttribute('data-since'),fend=+fwd.getAttribute('data-end'),fq=fwd.getAttribute('data-q')||'',fbusy=false,fo=null;
+    var floadMore=function(){
+      if(!fwd||fbusy||fsince>=fend)return; fbusy=true;
+      var take=Math.min(200,fend-fsince);
+      fetch('/api/session_tail?p='+encodeURIComponent(fp)+'&since='+fsince+'&limit='+take+(fq?'&q='+encodeURIComponent(fq):''))
         .then(function(r){return r.json();}).then(function(d){
-          if(d&&d.html&&lz)lz.insertAdjacentHTML('beforebegin',d.html);
-          lsince=(d&&d.end)?d.end:(lsince+take);
-          if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});
-          if(lz&&lsince<lend)idle(loadChunk); else if(lz){lz.remove();lz=null;}
-        }).catch(function(){});
+          if(d&&d.html&&fwd)fwd.insertAdjacentHTML('beforebegin',d.html);
+          fsince=(d&&d.end)?d.end:(fsince+take); markTools(); fbusy=false;
+          if(!fwd)return;
+          if(fsince>=fend){if(fo)fo.disconnect();fwd.remove();fwd=null;return;}
+          if(inView(fwd))floadMore();            // keep pulling on fast scroll / short chunks
+        }).catch(function(){fbusy=false;});
     };
-    idle(loadChunk);
+    fo=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)floadMore();});},{rootMargin:'800px 0px'});
+    fo.observe(fwd);
+  }
+  // backward: prepend [from-take,from) with scroll anchoring so the view doesn't jump
+  var prv=document.getElementById('loadprev');
+  if(prv){
+    var pp=prv.getAttribute('data-p'),pfrom=+prv.getAttribute('data-from'),pq=prv.getAttribute('data-q')||'',pbusy=false,po=null;
+    var ploadMore=function(){
+      if(!prv||pbusy||pfrom<=0)return; pbusy=true;
+      var take=Math.min(200,pfrom),since=pfrom-take;
+      fetch('/api/session_tail?p='+encodeURIComponent(pp)+'&since='+since+'&limit='+take+(pq?'&q='+encodeURIComponent(pq):''))
+        .then(function(r){return r.json();}).then(function(d){
+          if(d&&d.html&&prv){
+            var h0=document.documentElement.scrollHeight;
+            prv.insertAdjacentHTML('afterend',d.html); markTools();
+            window.scrollTo(0,window.scrollY+(document.documentElement.scrollHeight-h0));
+          }
+          pfrom=since; pbusy=false;
+          if(prv&&pfrom<=0){if(po)po.disconnect();prv.remove();prv=null;}
+        }).catch(function(){pbusy=false;});
+    };
+    var pbtn=prv.querySelector('button'); if(pbtn)pbtn.addEventListener('click',ploadMore);
+    // auto-load on scroll-to-top too, but not until the initial (goto) scroll has settled
+    setTimeout(function(){
+      if(!prv)return;
+      po=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)ploadMore();});},{rootMargin:'300px 0px'});
+      po.observe(prv);
+    },600);
   }
   // live-update: poll the session file and APPEND new messages in place, like a chat — no reload.
   try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}
@@ -4500,19 +4536,34 @@ class H(BaseHTTPRequestHandler):
                 total = len(view_turns)
                 pos = goto_gi if goto_gi < total else None
             if pos is not None and lim is not None:
-                off = (pos // lim) * lim
+                # center the window on the match so it has context on both sides, instead of
+                # landing at a page edge; forward/backward streaming fills in the rest.
+                off = max(0, min(pos - lim // 2, max(0, total - lim)))
         page = view_turns if lim is None else view_turns[off:off + lim]
-        # progressive render: paint the first chunk instantly, stream the rest in the background
-        # (only for the plain conversation view — filtered/goto/search need everything up front)
+        # Continuous conversation view (filt=all): the rendered page is just a *window*.
+        # The rest of the session streams in as you scroll — forward automatically to the
+        # end, earlier on demand — so you never click through 1000-message pages to reach or
+        # read around a match. (filtered/human view keeps classic Prev/Next paging.)
+        continuous = filt == "all"
         INIT_CHUNK = 120
-        lazy = filt == "all" and goto_gi is None and len(page) > INIT_CHUNK
+        # paint the whole window for a goto (the target must be in the DOM to scroll to it);
+        # otherwise paint the first chunk instantly and stream the window's remainder.
+        lazy = continuous and goto_gi is None and len(page) > INIT_CHUNK
+        shown = page[:INIT_CHUNK] if lazy else page
         body = []
-        for gi, t in (page[:INIT_CHUNK] if lazy else page):
+        if continuous and page and page[0][0] > 0:
+            # top sentinel — scrolling up (or clicking) prepends the earlier messages inline
+            body.append(f'<div id=loadprev class=loadmore data-p="{esc(path)}" data-from="{page[0][0]}" '
+                        f'data-q="{esc(q)}"><button type=button>↑ {tr("Load earlier messages")}</button></div>')
+        for gi, t in shown:
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
             body.append(render_turn(gi, t, q, tl))
-        if lazy:
-            body.append(f'<div id=lazyload hidden data-p="{esc(path)}" data-since="{page[INIT_CHUNK][0]}" '
-                        f'data-end="{page[-1][0] + 1}" data-q="{esc(q)}"></div>')
+        if continuous and shown and shown[-1][0] + 1 < len(turns):
+            # forward sentinel — auto-loads to the end of the session as you scroll down.
+            # Must NOT be display:none (an IntersectionObserver never fires on a hidden node),
+            # so it's a visible, self-removing "loading" row.
+            body.append(f'<div id=loadfwd class=loadmore data-p="{esc(path)}" data-since="{shown[-1][0] + 1}" '
+                        f'data-end="{len(turns)}" data-q="{esc(q)}"><span class=loadspin>· · ·</span></div>')
         if goto_gi is not None:
             body.append(
                 '<script>window.addEventListener("load",function(){'
@@ -4557,11 +4608,12 @@ class H(BaseHTTPRequestHandler):
                     + (f'<input type=hidden name=q value="{esc(q)}">' if q else "")
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
                     + f'{tr("per page")} <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
-                    + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · {tr("showing")} {len(page)}/{total} {tr("msgs")} · '
+                    + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · '
+                    + (f'{total} {tr("msgs")} · {tr("scroll to load")}' if continuous else f'{tr("showing")} {len(page)}/{total} {tr("msgs")}') + ' · '
                       f'<kbd>n</kbd>/<kbd>p</kbd> {tr("my messages")} · <kbd>j</kbd>/<kbd>k</kbd> {tr("sessions")} · <kbd>?</kbd> {tr("all shortcuts")}</span>'
                     + '</form>')
         pg = []
-        if lim is not None:
+        if lim is not None and not continuous:      # continuous view scrolls instead of paging
             if off > 0:
                 pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim))}">← {tr("Prev")}</a>')
             if off + lim < total:
@@ -4571,8 +4623,8 @@ class H(BaseHTTPRequestHandler):
         def _sh(s): return f'/session?p={urllib.parse.quote(s["path"])}' if s else ""
         navkeys = ('<span id=navkeys hidden'
                    f' data-prevsess="{esc(_sh(prev))}" data-nextsess="{esc(_sh(nxt))}"'
-                   f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
-                   f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
+                   f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0 and not continuous) else "")}"'
+                   f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total and not continuous) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
                    f' data-list="{esc((("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/") + "#" + sid)}"'
                    f' data-code="{esc(url(view="code", q=q))}" data-filt="{esc(filt)}"></span>')
