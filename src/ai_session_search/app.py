@@ -44,7 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.17"
+__version__ = "4.0.18"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -140,7 +140,7 @@ def check_update(force=False):
     frozen = bool(getattr(sys, "frozen", False))
     info = {"current": __version__, "latest": None, "newer": False, "frozen": frozen,
             "url": f"https://github.com/{REPO_SLUG}/releases/latest", "checked": 0,
-            "disabled": update_disabled()}
+            "disabled": update_disabled(), "can_self_update": self_update_supported()}
     if info["disabled"]:
         return info
     with _UPDLOCK:
@@ -177,6 +177,197 @@ def check_update(force=False):
     if info["latest"]:
         info["newer"] = _ver_tuple(info["latest"]) > _ver_tuple(__version__)
     return info
+
+# ---- in-app self-update (macOS) ---------------------------------------------
+# One-click "Update & restart" for the signed+notarized macOS .app: download the
+# release .dmg for this arch, verify it is signed by the SAME Apple Team as the
+# running app AND notarized (spctl), then a detached helper swaps the bundle in
+# /Applications and relaunches — the new build reclaims the port via the usual
+# replace-on-update handshake. Refuses to install anything that fails verification.
+_UPDATE = {"state": "idle", "detail": "", "pct": 0, "target": None, "lock": threading.Lock()}
+
+def _frozen_app_bundle():
+    """Path to the running `.app` bundle when frozen on macOS, else None."""
+    if not (getattr(sys, "frozen", False) and sys.platform == "darwin"):
+        return None
+    p = os.path.abspath(sys.executable)
+    while p and p != "/":
+        if p.endswith(".app") and os.path.isdir(p):
+            return p
+        p = os.path.dirname(p)
+    return None
+
+def _dmg_asset_name():
+    """Release asset name for this machine's architecture."""
+    import platform
+    arch = platform.machine().lower()
+    if arch in ("arm64", "aarch64"):
+        return "ai-session-search-macos-arm64.dmg"
+    if arch in ("x86_64", "amd64"):
+        return "ai-session-search-macos-x86_64.dmg"
+    return None
+
+def self_update_supported():
+    return bool(_frozen_app_bundle()) and _dmg_asset_name() is not None
+
+def _codesign_field(path, field):
+    """Read one `codesign -dv` field (e.g. 'TeamIdentifier', 'Identifier'). None on failure."""
+    import subprocess
+    try:
+        out = subprocess.run(["/usr/bin/codesign", "-dv", "--verbose=4", path],
+                             capture_output=True, text=True, timeout=20)
+        for line in (out.stderr + out.stdout).splitlines():
+            if line.startswith(field + "="):
+                return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
+def _our_identity():
+    """(team_id, bundle_id) of the running app — the trust anchor an update must match."""
+    app = _frozen_app_bundle()
+    if not app:
+        return None, None
+    return _codesign_field(app, "TeamIdentifier"), _codesign_field(app, "Identifier")
+
+def _verify_bundle(app_path):
+    """(ok, detail): the downloaded .app must be notarized+Developer-ID accepted by
+    Gatekeeper (spctl) AND signed by the same Team + bundle id as the running app."""
+    import subprocess
+    try:
+        cs = subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--deep", app_path],
+                            capture_output=True, text=True, timeout=60)
+        if cs.returncode != 0:
+            return False, "codesign verify failed: " + (cs.stderr or "").strip()[:200]
+        sp = subprocess.run(["/usr/sbin/spctl", "-a", "-t", "exec", "-vv", app_path],
+                            capture_output=True, text=True, timeout=60)
+        if sp.returncode != 0:
+            return False, "notarization/Gatekeeper check failed: " + (sp.stderr or "").strip()[:200]
+    except Exception as e:
+        return False, f"verification error: {e}"
+    want_team, want_bid = _our_identity()
+    got_team = _codesign_field(app_path, "TeamIdentifier")
+    got_bid = _codesign_field(app_path, "Identifier")
+    if want_team and got_team != want_team:
+        return False, f"team mismatch (got {got_team}, expected {want_team})"
+    if want_bid and got_bid != want_bid:
+        return False, f"bundle-id mismatch (got {got_bid}, expected {want_bid})"
+    return True, f"verified: team {got_team}, {got_bid}"
+
+def _latest_release_asset():
+    """(tag, download_url) for this arch's .dmg on the latest release, or (None, None)."""
+    name = _dmg_asset_name()
+    if not name:
+        return None, None
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO_SLUG}/releases/latest",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": f"ai-session-search/{__version__}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.load(r)
+    except Exception as e:
+        return None, None
+    tag = (data.get("tag_name") or "").lstrip("vV").strip() or None
+    url = next((a.get("browser_download_url") for a in data.get("assets", [])
+                if a.get("name") == name), None)
+    return tag, url
+
+def _set_update(state, detail="", pct=None, target=None):
+    with _UPDATE["lock"]:
+        _UPDATE["state"] = state
+        _UPDATE["detail"] = detail
+        if pct is not None:
+            _UPDATE["pct"] = pct
+        if target is not None:
+            _UPDATE["target"] = target
+
+def _install_helper(mount_app, dst_app, mount_point):
+    """Write + spawn a detached helper that swaps the bundle and relaunches. The running
+    server keeps going; the relaunched build reclaims the port via _replace_stale_server."""
+    import subprocess, tempfile
+    script = f'''#!/bin/bash
+set -e
+SRC={_shq(mount_app)}
+DST={_shq(dst_app)}
+MNT={_shq(mount_point)}
+# stage next to the target, then swap in place (can't overwrite a running bundle directly)
+ditto "$SRC" "$DST.new"
+xattr -dr com.apple.quarantine "$DST.new" 2>/dev/null || true
+rm -rf "$DST.bak"
+mv "$DST" "$DST.bak" 2>/dev/null || true
+mv "$DST.new" "$DST"
+rm -rf "$DST.bak"
+hdiutil detach "$MNT" -quiet 2>/dev/null || true
+sleep 1
+open "$DST"
+'''
+    fd, path = tempfile.mkstemp(suffix="-aiss-update.sh")
+    with os.fdopen(fd, "w") as f:
+        f.write(script)
+    os.chmod(path, 0o755)
+    # start_new_session so it outlives this server if the handshake stops us mid-swap
+    subprocess.Popen(["/bin/bash", path], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _shq(s):
+    """Single-quote a string for safe embedding in the bash helper."""
+    return "'" + str(s).replace("'", "'\\''") + "'"
+
+def run_self_update(dry_run=False):
+    """Background worker: download → verify → install. Updates _UPDATE state throughout.
+    Never raises; every failure lands in state='error' with a human detail."""
+    import subprocess, tempfile
+    dst = _frozen_app_bundle()
+    if not dst:
+        return _set_update("error", "not a frozen macOS app")
+    _set_update("checking", tr("Checking for the latest release…"), 5)
+    tag, url = _latest_release_asset()
+    if not url:
+        return _set_update("error", tr("No matching download found for this release."))
+    if tag and _ver_tuple(tag) <= _ver_tuple(__version__):
+        return _set_update("uptodate", tr("Already up to date."), 100, target=tag)
+    _set_update("downloading", tr("Downloading the update…"), 10, target=tag)
+    tmpdir = tempfile.mkdtemp(prefix="aiss-upd-")
+    dmg = os.path.join(tmpdir, "update.dmg")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"ai-session-search/{__version__}"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(dmg, "wb") as out:
+            total = int(r.headers.get("Content-Length") or 0)
+            got = 0
+            while True:
+                chunk = r.read(262144)
+                if not chunk:
+                    break
+                out.write(chunk)
+                got += len(chunk)
+                if total:
+                    _set_update("downloading", tr("Downloading the update…"), 10 + int(70 * got / total))
+    except Exception as e:
+        return _set_update("error", f"download failed: {e}")
+    _set_update("verifying", tr("Verifying the signature…"), 85)
+    mount = os.path.join(tmpdir, "mnt")
+    os.makedirs(mount, exist_ok=True)
+    try:
+        subprocess.run(["/usr/bin/hdiutil", "attach", dmg, "-nobrowse", "-quiet",
+                        "-mountpoint", mount], check=True, timeout=60,
+                       capture_output=True, text=True)
+    except Exception as e:
+        return _set_update("error", f"could not mount the update: {e}")
+    src_app = next((os.path.join(mount, n) for n in os.listdir(mount) if n.endswith(".app")), None)
+    if not src_app:
+        subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
+        return _set_update("error", "no app found inside the update image")
+    ok, detail = _verify_bundle(src_app)
+    if not ok:
+        subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
+        return _set_update("error", tr("Refusing to install: ") + detail)
+    if dry_run:
+        subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
+        return _set_update("verified", detail, 100, target=tag)
+    _set_update("installing", tr("Installing and restarting…"), 95, target=tag)
+    _install_helper(src_app, dst, mount)
+    _set_update("relaunching", tr("Restarting into the new version…"), 100, target=tag)
 
 # ---- i18n -------------------------------------------------------------------
 # The UI is authored in English; the English string is its own translation key.
@@ -2751,7 +2942,8 @@ header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
 .updbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;font-size:13px;background:linear-gradient(90deg,#eef4ff,#e7fbf3);color:#12203a;border-bottom:1px solid rgba(0,0,0,.09)}
 @media(prefers-color-scheme:dark){.updbar{background:linear-gradient(90deg,#182234,#15302a);color:#e7e9ec;border-bottom-color:rgba(255,255,255,.08)}}
 .updtxt{flex:1;min-width:190px}.updcur{opacity:.6}
-.updbtn{background:#1061b7;color:#fff;text-decoration:none;padding:5px 12px;border-radius:7px;font-weight:600;white-space:nowrap}
+.updbtn{background:#1061b7;color:#fff;text-decoration:none;padding:5px 12px;border:0;border-radius:7px;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.updbtn:disabled{opacity:.7;cursor:default}
 .updcmd{background:rgba(0,0,0,.06);padding:4px 9px;border-radius:6px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
 @media(prefers-color-scheme:dark){.updcmd{background:rgba(255,255,255,.1)}}
 .updnotes{color:#1061b7;text-decoration:none;white-space:nowrap}
@@ -3487,12 +3679,17 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   });
   // ---- update notice: async, unobtrusive; server throttles the real GitHub hit to 1/day ----
   function updDismissed(){try{return localStorage.getItem('aiss:updok');}catch(_){return null;}}
+  var updTok='%%UPD_TOKEN%%';
   fetch('/api/update').then(function(r){return r.json();}).then(function(d){
     if(!d||!d.newer||!d.latest||updDismissed()===d.latest)return;
     var bar=document.createElement('div');bar.className='updbar';
-    var act = d.frozen
-      ? '<a class=updbtn href="'+d.url+'" target=_blank rel=noopener>\u2b07\ufe0f %%UPD_DL%%</a>'
-      : '<code class=updcmd title="%%UPD_COPY%%">pipx upgrade ai-session-search</code>';
+    // macOS signed app \u2192 one-click self-update; pip install \u2192 upgrade command; else \u2192 download link
+    var act = (d.can_self_update && updTok)
+      ? '<button type=button class=updbtn id=updgo>\u2b06\ufe0f %%UPD_NOW%%</button>'
+        +'<a class=updnotes id=updmanual href="'+d.url+'" target=_blank rel=noopener>%%UPD_MANUAL%%</a>'
+      : (d.frozen
+        ? '<a class=updbtn href="'+d.url+'" target=_blank rel=noopener>\u2b07\ufe0f %%UPD_DL%%</a>'
+        : '<code class=updcmd title="%%UPD_COPY%%">pipx upgrade ai-session-search</code>');
     bar.innerHTML='<span class=updtxt>\u2b06\ufe0f ai-session-search <b>v'+d.latest+'</b> %%UPD_AVAIL%%'
       +' <span class=updcur>(%%UPD_ON%% v'+d.current+')</span></span>'+act
       +'<a class=updnotes href="'+d.url+'" target=_blank rel=noopener>%%UPD_WHATS%%</a>'
@@ -3503,7 +3700,44 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var o=cc.textContent;cc.textContent='%%UPD_COPIED%%';setTimeout(function(){cc.textContent=o;},1200);});
     bar.querySelector('.updx').addEventListener('click',function(){
       try{localStorage.setItem('aiss:updok',d.latest);}catch(_){}bar.remove();});
+    var go=bar.querySelector('#updgo');
+    if(go)go.addEventListener('click',function(){startSelfUpdate(bar,go,d);});
   }).catch(function(){});
+  function startSelfUpdate(bar,go,d){
+    if(!confirm('%%UPD_CONFIRM%%'))return;
+    go.disabled=true;
+    var txt=bar.querySelector('.updtxt');
+    var mn=bar.querySelector('#updmanual'); if(mn)mn.remove();
+    function setMsg(s){go.textContent=s;}
+    setMsg('%%UPD_WORKING%%');
+    fetch('/api/self_update',{method:'POST',headers:{'X-Shutdown-Token':updTok}})
+      .then(function(r){if(!r.ok)throw new Error('start');return r.json();})
+      .then(function(){poll();})
+      .catch(function(){setMsg('%%UPD_FAILED%%');go.disabled=false;});
+    function poll(){
+      fetch('/api/self_update').then(function(r){return r.json();}).then(function(s){
+        if(!s){return setTimeout(poll,1000);}
+        if(s.pct)setMsg('%%UPD_WORKING%% '+s.pct+'%');
+        if(s.state==='error'||s.state==='uptodate'){
+          setMsg((s.state==='error'?'%%UPD_FAILED%%':'')+(s.detail?(' \u2014 '+s.detail):''));
+          go.disabled=false; return;
+        }
+        if(s.state==='relaunching'||s.state==='installing'){
+          setMsg('%%UPD_RESTART%%'); return waitForRelaunch(s.target||d.latest);
+        }
+        setTimeout(poll,1000);
+      }).catch(function(){ // server may have gone down for the swap \u2014 start watching for the new one
+        setMsg('%%UPD_RESTART%%'); waitForRelaunch(d.latest);
+      });
+    }
+    function waitForRelaunch(want){
+      // the new build reclaims the same port; poll /api/status until its version changes, then reload
+      fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
+        if(st&&st.version&&st.version!==d.current){location.reload();return;}
+        setTimeout(function(){waitForRelaunch(want);},1500);
+      }).catch(function(){setTimeout(function(){waitForRelaunch(want);},1500);});
+    }
+  }
 })();
 </script>
 </body></html>"""
@@ -3668,6 +3902,14 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         "%%UPD_DL%%": esc(tr("Download")), "%%UPD_WHATS%%": esc(tr("What's new")),
         "%%UPD_DISMISS%%": esc(tr("dismiss")), "%%UPD_COPY%%": esc(tr("click to copy")),
         "%%UPD_COPIED%%": esc(tr("copied ✓")),
+        # token lets the same-origin page trigger the loopback-only self-updater (macOS app only)
+        "%%UPD_TOKEN%%": (_SHUTDOWN_TOKEN or "") if self_update_supported() else "",
+        "%%UPD_NOW%%": esc(tr("Update & restart")),
+        "%%UPD_CONFIRM%%": esc(tr("Download the update, verify it, and restart into the new version?")),
+        "%%UPD_WORKING%%": esc(tr("Updating…")),
+        "%%UPD_RESTART%%": esc(tr("Restarting into the new version…")),
+        "%%UPD_FAILED%%": esc(tr("Update failed")),
+        "%%UPD_MANUAL%%": esc(tr("download manually")),
     }
     out = SHELL
     for k, v in repl.items():
@@ -3711,13 +3953,25 @@ class H(BaseHTTPRequestHandler):
         # loopback-only client + loopback-only bind, and a per-instance 256-bit token
         # readable only by the same user (runtime file, 0600). Never a GET.
         u = urllib.parse.urlparse(self.path)
-        if u.path != "/api/shutdown":
+        if u.path not in ("/api/shutdown", "/api/self_update"):
             return self.send_error(404)
+        # both are loopback-only + token-guarded (same per-instance 256-bit token)
         if not _SHUTDOWN_TOKEN or self.client_address[0] not in ("127.0.0.1", "::1"):
             return self._send_json({"error": "forbidden"}, 403)
         sent = (self.headers.get("X-Shutdown-Token") or "").strip()
         if not hmac.compare_digest(sent, _SHUTDOWN_TOKEN):
             return self._send_json({"error": "forbidden"}, 403)
+        if u.path == "/api/self_update":
+            # kick off the in-app updater (download → verify → swap → relaunch) in the
+            # background; the page polls GET /api/self_update for progress.
+            if not self_update_supported():
+                return self._send_json({"error": "unsupported"}, 400)
+            with _UPDATE["lock"]:
+                busy = _UPDATE["state"] in ("checking", "downloading", "verifying", "installing", "relaunching")
+            if not busy:
+                dry = bool(os.environ.get("AISS_UPDATE_DRYRUN"))
+                threading.Thread(target=run_self_update, kwargs={"dry_run": dry}, daemon=True).start()
+            return self._send_json({"ok": True})
         self._send_json({"ok": True, "pid": os.getpid()})
         _cleanup_runtime_file()
         threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -3779,6 +4033,10 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/update":
             # "is there a newer release?" — throttled to 1 GitHub hit/day, no data sent. See check_update().
             return self._send_json(check_update())
+        if u.path == "/api/self_update":
+            # progress of an in-flight in-app update (started via POST /api/self_update)
+            with _UPDATE["lock"]:
+                return self._send_json({k: _UPDATE[k] for k in ("state", "detail", "pct", "target")})
         if u.path == "/api/status":
             # local instance identity (no network, no cache) — lets a relaunch detect a
             # stale old-version server and replace it (see main()).

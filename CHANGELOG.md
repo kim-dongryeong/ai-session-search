@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.0.18 — 2026-07-17
+
+- **One-click "Update & restart" for the macOS app.** The update banner used to only link
+  to the download page (drag-install by hand). On the signed + notarized macOS app it now
+  shows an **Update & restart** button: confirm once and it downloads the release `.dmg`
+  for your architecture, **verifies the signature**, swaps the app in `/Applications`, and
+  relaunches into the new version on the same port — the Stats/Shottr-style experience.
+  - **Refuses to install anything it can't trust.** Before swapping, the download must pass
+    Gatekeeper (`spctl`, i.e. Apple-notarized) *and* be signed by the **same Apple Team and
+    bundle id** as the running app. A mismatch aborts the update — a build signed by anyone
+    else can never be installed over yours.
+  - Reuses the existing replace-on-update handshake for the restart, so the port and the
+    single installed PWA stay stable. The pip/pipx install still shows the `pipx upgrade`
+    command; other builds still show the manual download link. Fully gated behind the
+    loopback-only, token-guarded `/api/self_update` endpoint.
+
 ## 4.0.17 — 2026-07-17
 
 - **Pasting a distinctive sentence jumps to where it actually appears.** An unquoted

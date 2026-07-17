@@ -289,5 +289,18 @@
   "scroll to load": "스크롤하면 로드",
   "exact phrase": "정확한 문구",
   "no exact phrase — matched as separate words (wrap in &quot;quotes&quot; for exact)": "정확한 문구 없음 — 단어를 따로 매칭했어요 (정확히 찾으려면 &quot;따옴표&quot;로 감싸세요)",
-  "No session contains that as an exact phrase — showing where the words appear separately. Wrap it in &quot;quotes&quot; to require the exact phrase.": "이 문구를 그대로 담은 세션이 없어요 — 단어들이 각각 나타나는 곳을 보여줘요. 정확한 문구로 찾으려면 &quot;따옴표&quot;로 감싸세요."
+  "No session contains that as an exact phrase — showing where the words appear separately. Wrap it in &quot;quotes&quot; to require the exact phrase.": "이 문구를 그대로 담은 세션이 없어요 — 단어들이 각각 나타나는 곳을 보여줘요. 정확한 문구로 찾으려면 &quot;따옴표&quot;로 감싸세요.",
+  "Update & restart": "업데이트하고 재시작",
+  "Download the update, verify it, and restart into the new version?": "업데이트를 내려받아 검증하고 새 버전으로 재시작할까요?",
+  "Updating…": "업데이트 중…",
+  "Restarting into the new version…": "새 버전으로 재시작 중…",
+  "Update failed": "업데이트 실패",
+  "download manually": "수동 다운로드",
+  "Checking for the latest release…": "최신 릴리스 확인 중…",
+  "No matching download found for this release.": "이 릴리스에 맞는 다운로드를 찾지 못했어요.",
+  "Already up to date.": "이미 최신이에요.",
+  "Downloading the update…": "업데이트 내려받는 중…",
+  "Verifying the signature…": "서명 검증 중…",
+  "Refusing to install: ": "설치 거부: ",
+  "Installing and restarting…": "설치하고 재시작 중…"
 }
