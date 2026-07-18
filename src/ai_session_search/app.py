@@ -2088,7 +2088,9 @@ _FTS_ENABLED = True          # feature flag: set False to force the classic full
 _FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock()}
 
 def _fts_db_path():
-    return os.path.join(CONFIG_DIR, "cache", f"search-v{_FTS_SCHEMA}.sqlite3")
+    # include _CACHE_SCHEMA: the payload stores _rows_blob output, so any row/blob/token
+    # format bump must rebuild this DB too (agy review — else stale pickles load).
+    return os.path.join(CONFIG_DIR, "cache", f"search-v{_FTS_SCHEMA}-c{_CACHE_SCHEMA}.sqlite3")
 
 def fts_capable():
     """FTS5 + trigram tokenizer + contentless_delete all available? (probed once)."""
@@ -3588,18 +3590,25 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     var form=document.querySelector('header form[role=search]');
     var wrap=document.getElementById('wrap');
     if(!form||!wrap||!window.fetch||!window.history.pushState)return;
-    var ctrl=null;
+    var ctrl=null, swapped=false;
     function esc(s){return (s||'').replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
     function clean(p){var q=new URLSearchParams(p);q.delete('ajax');var s=q.toString();return s?('/search?'+s):'/search';}
+    function syncForm(params){   // keep the header controls matching what's shown (back/forward, chips)
+      var qi=form.querySelector('[name=q]'); if(qi)qi.value=params.get('q')||'';
+      var sc=form.querySelector('[name=scope]'); if(sc)sc.value=params.get('scope')||'all';
+      ['days','from','to'].forEach(function(k){var el=form.querySelector('[name='+k+']'); if(el)el.value=params.get(k)||'';});
+    }
     function run(params, push){
       if(ctrl)ctrl.abort();
       ctrl=(window.AbortController?new AbortController():null);
       var q=params.get('q')||'';
+      syncForm(params);
       wrap.innerHTML='<div class=searching><span class=spin></span> %%SEARCHING%%'+(q?(' <b>'+esc(q)+'</b>'):'')+'</div>';
       if(push){try{history.pushState({aiss:1},'',clean(params));}catch(_){}}
+      swapped=true;
       fetch('/search?'+params.toString()+'&ajax=1',ctrl?{signal:ctrl.signal}:{})
-        .then(function(r){return r.text();})
-        .then(function(html){wrap.innerHTML=html;window.scrollTo(0,0);})
+        .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.text();})
+        .then(function(html){wrap.innerHTML=html;if(push)window.scrollTo(0,0);})
         .catch(function(e){if(!e||e.name!=='AbortError')wrap.innerHTML='<p class=meta>%%SEARCHERR%%</p>';});
     }
     function paramsFromForm(){
@@ -3607,6 +3616,9 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       p.set('q',(form.querySelector('[name=q]')||{}).value||'');
       ['scope','root','days','from','to'].forEach(function(k){
         var el=form.querySelector('[name='+k+']'); if(el&&el.value)p.set(k,el.value);});
+      // keep an active project filter across a re-query (it's shown as a highlighted chip)
+      var cur=new URLSearchParams(location.search).get('proj');
+      if(cur&&location.pathname==='/search')p.set('proj',cur);
       return p;
     }
     form.addEventListener('submit',function(e){e.preventDefault();run(paramsFromForm(),true);});
@@ -3618,7 +3630,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     });
     window.addEventListener('popstate',function(){
       if(location.pathname==='/search')run(new URLSearchParams(location.search),false);
-      else location.reload();   // back to a non-search page → restore it fully
+      else if(swapped)location.reload();   // only if we replaced THIS page's body; else leave normal history alone
     });
   })();
   var cur=-1;
