@@ -1954,6 +1954,43 @@ def _best_window(term_gis, need):
             left += 1
     return best
 
+def _best_windows(term_gis, need, k=3, cap=120):
+    """Up to `k` non-overlapping term-span windows, so a session with the query terms in
+    two+ FAR-APART regions surfaces each region as its own jump link (not just the single
+    best window). Greedy: enumerate every locally-minimal covering window in one sweep,
+    then take the smallest-span non-overlapping ones. `cap` bypasses the enumeration for a
+    pathologically common term (keeps CPU bounded — agy review)."""
+    events = sorted((gi, ti) for ti in range(len(need)) for gi in term_gis[need[ti]])
+    if not events:
+        return []
+    if len(events) > cap:                       # too many occurrences → one window, cheaply
+        w = _best_window(term_gis, need)
+        return [w] if w else []
+    cands = []                                   # (span, lo_gi, hi_gi) for each minimal window
+    have, left, distinct = {}, 0, 0
+    for right in range(len(events)):
+        gi, ti = events[right]
+        have[ti] = have.get(ti, 0) + 1
+        if have[ti] == 1:
+            distinct += 1
+        while distinct == len(need):
+            cands.append((gi - events[left][0], events[left][0], gi))
+            lti = events[left][1]
+            have[lti] -= 1
+            if have[lti] == 0:
+                distinct -= 1
+            left += 1
+    chosen = []                                  # smallest spans first, skip any that overlap a pick
+    for span, lo, hi in sorted(cands):
+        if all(hi < c[1] or lo > c[2] for c in chosen):
+            chosen.append((span, lo, hi))
+            if len(chosen) >= k:
+                break
+    out = []
+    for span, lo, hi in sorted(chosen, key=lambda c: c[1]):
+        out.append((span, sorted({gi for gi, ti in events if lo <= gi <= hi})))
+    return out
+
 def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     """Return the best hit for one session: row (same-turn) → cluster (nearby turns)
     → session (anywhere). None if not all terms/phrases are present. `blob`/`tokens` (the
@@ -2005,11 +2042,12 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     term_gis = {t: sorted(gi for gi, s in gi_terms.items() if t in s) for t in need}
     if not all(term_gis[t] for t in need):
         return None
-    win = _best_window(term_gis, need)
-    if win is not None:
-        span, gis = win
-        return {"kind": "cluster" if span <= 12 else "session", "gis": gis,
-                "ww": ww, "all_word": False, "span": span}
+    wins = _best_windows(term_gis, need)   # up to 3 non-overlapping regions → distinct jump links
+    if wins:
+        min_span = min(w[0] for w in wins)
+        gis = sorted({g for _, gg in wins for g in gg})
+        return {"kind": "cluster" if min_span <= 12 else "session", "gis": gis,
+                "ww": ww, "all_word": False, "span": min_span}
     return {"kind": "session", "gis": [term_gis[t][0] for t in need], "ww": ww,
             "all_word": False, "span": 99}
 

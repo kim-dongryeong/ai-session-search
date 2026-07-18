@@ -813,6 +813,21 @@ class ImplicitPhraseJump(unittest.TestCase):
         sq = app.parse_search_query(query)
         return app.match_session(rows, sq["terms"], sq["phrases"], blob, tokens)
 
+    def test_far_apart_clusters_each_get_a_jump_link(self):
+        # two query terms co-occur in TWO regions far apart in one session → both surface
+        texts = ["intro"] + ["alphaword here", "and betaword here"] + ["filler"] * 40 + \
+                ["alphaword again", "betaword again"] + ["outro"]
+        hit = self._match(texts, "alphaword betaword")
+        gis = hit["gis"]
+        # a turn from the FIRST region (1-2) and a turn from the SECOND region (43-44)
+        self.assertTrue(any(g <= 2 for g in gis), gis)
+        self.assertTrue(any(g >= 43 for g in gis), gis)
+
+    def test_single_cluster_unchanged(self):
+        texts = ["x", "alphaword and betaword together", "y"]
+        hit = self._match(texts, "alphaword betaword")
+        self.assertEqual(hit["gis"], [1])            # one region → one link, as before
+
     def test_prefers_contiguous_phrase_over_scattered_cluster(self):
         texts = [
             "by and on the of building ideas link drive google",   # all words, scrambled — the trap
