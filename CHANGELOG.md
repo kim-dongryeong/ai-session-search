@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.0.20 — 2026-07-18
+
+Search is faster to *first result*, tells you it's working, and surfaces every spot in a
+session — designed and adversarially reviewed with Codex/agy via the AI build-loop protocol.
+
+- **The first search after opening no longer takes ~8 seconds.** It used to bulk-load the
+  entire ~450 MB row cache into memory before doing anything. Now each session's parsed
+  rows are stored (zlib) right in the FTS DB, so a search deserializes only its handful of
+  candidate sessions — measured **~8 s → 10 ms** for a specific query (a broad one loads only
+  its candidates, not the whole corpus). Falls back to the classic bulk load only when a
+  root has no usable index yet. The background indexer also stopped holding its lock across
+  the whole build, so a search during the first index no longer blocks on it.
+- **Pressing Enter shows feedback instantly.** The search box was a full-page reload with no
+  spinner, so a slow search looked frozen. It now shows a "Searching…" spinner immediately
+  and swaps results in without a reload (server returns a bare fragment; the URL, back/
+  forward, and reload all still work; the box stays in sync with what's shown).
+- **Far-apart matches in one session each get their own link.** When your terms appear in two
+  or more places far apart in a session, the result card now shows a jump link for each
+  region (up to 3), instead of only the single best spot — so you don't have to open the
+  session and hunt for the others.
+
 ## 4.0.19 — 2026-07-18
 
 - **Specific searches are dramatically faster via a SQLite trigram candidate index.**
