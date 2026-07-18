@@ -1887,6 +1887,11 @@ FIELD_ALIASES = {"file": "file", "path": "file", "cmd": "cmd", "command": "cmd",
                  "role": "role", "id": "id", "session": "id", "sid": "id"}
 FIELD_KIND = {"file": K_FILE, "cmd": K_CMD, "code": K_CODE, "error": K_ERROR | K_RESULT}
 _SQ_TOK = re.compile(r'(-?)(?:(\w+):)?("[^"]*"|“[^”]*”|\S+)')
+# Punctuation that clings to a pasted word but isn't part of it: quotes, brackets,
+# and sentence marks. Stripped from BOTH ENDS of an unquoted term only — internal
+# punctuation is kept (app.py, self_update, src/app, well-known all survive), so a
+# stray "]Inspired" or "Marconi." matches the text instead of returning nothing.
+_TERM_TRIM = "\"'`“”‘’«»()[]{}<>.,;:!?…"
 
 def parse_search_query(q):
     """'file:app.py -flaky "exact" foo' → {terms, phrases, fields, neg}.
@@ -1900,6 +1905,10 @@ def parse_search_query(q):
         f = FIELD_ALIASES.get((field or "").lower()) if field else None
         if field and not f:                       # unrecognized field → keep token whole
             val = f"{field}:{val}".lower()
+        if not is_phrase:                          # a quoted phrase stays literal; a bare word sheds edge punctuation
+            val = val.strip(_TERM_TRIM)
+            if not val:
+                continue
         if f:
             fields.setdefault(f, []).append(val)
         elif neg_s:
@@ -2570,7 +2579,10 @@ def parse_query(q):
     All terms must match (AND); quoted phrases match as a unit."""
     terms = []
     for m in re.finditer(r'"([^"]+)"|“([^”]+)”|(\S+)', q or ""):
-        t = (m.group(1) or m.group(2) or m.group(3) or "").strip().lower()
+        quoted = m.group(1) or m.group(2)
+        t = (quoted or m.group(3) or "").strip().lower()
+        if not quoted:                              # bare word → shed edge punctuation (see _TERM_TRIM)
+            t = t.strip(_TERM_TRIM)
         if t:
             terms.append(t)
     return terms

@@ -20,6 +20,12 @@ session — designed and adversarially reviewed with Codex/agy via the AI build-
   or more places far apart in a session, the result card now shows a jump link for each
   region (up to 3), instead of only the single best spot — so you don't have to open the
   session and hunt for the others.
+- **A stray pasted bracket/period no longer zeroes out a search.** Pasting `]Inspired by …
+  Marconi.` used to return *nothing*, because the leading `]` glued onto `Inspired` (a token
+  that appears nowhere in your history) and every word had to match. Unquoted words now shed
+  edge punctuation (`] ( ) " . , ; : ! ?` …) while keeping punctuation *inside* a token
+  (`app.py`, `self_update`, `src/app`, `well-known`), so a near-perfect paste still finds the
+  passage. Quoted `"phrases"` stay literal.
 
 ## 4.0.19 — 2026-07-18
 

@@ -813,6 +813,28 @@ class ImplicitPhraseJump(unittest.TestCase):
         sq = app.parse_search_query(query)
         return app.match_session(rows, sq["terms"], sq["phrases"], blob, tokens)
 
+    def test_edge_punctuation_stripped_but_internal_kept(self):
+        # a stray pasted "]" or trailing "." must not make a word un-findable,
+        # while code/path/identifier punctuation inside a token is preserved.
+        p = app.parse_search_query
+        self.assertEqual(p("]Inspired Marconi.")["terms"], ["inspired", "marconi"])
+        self.assertEqual(p("(hello) world,")["terms"], ["hello", "world"])
+        self.assertEqual(p("app.py self_update src/app well-known v4.0.1")["terms"],
+                         ["app.py", "self_update", "src/app", "well-known", "v4.0.1"])
+        self.assertEqual(p('"exact phrase."')["phrases"], ["exact phrase."])   # quoted stays literal
+        self.assertEqual(p("-flaky")["neg"], ["flaky"])
+        self.assertEqual(p("file:app.py)")["fields"], {"file": ["app.py"]})
+
+    def test_stray_bracket_still_matches_the_phrase(self):
+        # the exact reported bug: "]Inspired …" returned zero results
+        texts = ["unrelated", "Credits\nInspired by and building on the ideas of "
+                 "Google Drive Folder Link by Andrew Marconi.\n==> keep this?"]
+        hit = self._match(texts, "]Inspired by and building on the ideas of "
+                                 "Google Drive Folder Link by Andrew Marconi.")
+        self.assertIsNotNone(hit)
+        self.assertTrue(hit.get("phrase"))
+        self.assertEqual(hit["gis"][0], 1)
+
     def test_far_apart_clusters_each_get_a_jump_link(self):
         # two query terms co-occur in TWO regions far apart in one session → both surface
         texts = ["intro"] + ["alphaword here", "and betaword here"] + ["filler"] * 40 + \
