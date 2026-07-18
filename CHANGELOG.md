@@ -1,5 +1,40 @@
 # Changelog
 
+## 4.0.19 — 2026-07-18
+
+- **Specific searches are dramatically faster via a SQLite trigram candidate index.**
+  Warm search ran the exact matcher over *every* session in the corpus, so a needle-in-a-
+  haystack query paid the same cost as a broad one (and `limit` didn't help — it trims
+  *after* the scan). A new `search-v1.sqlite3` in the cache dir holds a session-level
+  trigram FTS over the (already-lowercased) session text plus a tiny `session_docs`
+  metadata table. Each search shortlists a small **superset** of possible hits and runs the
+  exact matcher only on those; the result meta line shows the narrowing (`⚡ 12/67`).
+  Measured on real history (67 large Claude sessions): a rare/specific query drops
+  **~300 ms → 4–6 ms (30–80×)**, a moderately common one ~2×. A *broad* query that already
+  matches most of the corpus sees no narrowing and is marginally slower (the trigram MATCH
+  itself has a cost on a big index) — those were never the slow ones you notice. Results are
+  **identical** either way (see below); the one-time background build is ~7 min and the
+  index is ~2× the row cache on disk.
+  - **It's a pure speed layer — identical results, guaranteed.** The trigram index only
+    *selects candidates*; the existing matcher (`match_session` / scope / field / snippet)
+    still makes every final call. The candidate set is a proven superset: the AND of every
+    ≥3-character term/phrase/field-value (a real hit contains all of them) unioned with a
+    cheap metadata `LIKE`. A regression test asserts FTS-on and FTS-off return the exact
+    same paths and scores across Korean/English/URL/path/phrase/field/negation queries.
+  - **Recall-safe by construction.** `case_sensitive 1` on the trigram tokenizer over the
+    Python-lowercased blob means normalization is single-sourced (no case-folding
+    divergence). Korean substrings work (`검색` inside `검색해줘`) down to 3 chars; queries
+    whose only terms are 1–2 chars, or a SQLite without FTS5/trigram/`contentless_delete`,
+    transparently **fall back to the classic full scan**.
+  - **No stale results even mid-index.** The index is built and refreshed on a background
+    thread (keyed on `(mtime_ns, size)`); the request path never writes. Any file whose
+    on-disk key differs from the index — brand-new, just-appended, or not-yet-built — is
+    force-included in the candidate set and exact-matched from the live transcript, and
+    deleted files are dropped by intersecting with the current filesystem. So background
+    indexing is a latency optimization, never a correctness precondition. The old gzip row
+    cache stays as the fallback; corruption self-heals (drop + rebuild); set the internal
+    `_FTS_ENABLED = False` to force the old path.
+
 ## 4.0.18 — 2026-07-17
 
 - **One-click "Update & restart" for the macOS app.** The update banner used to only link

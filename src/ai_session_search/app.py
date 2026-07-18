@@ -33,6 +33,7 @@ import json
 import os
 import pickle
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -44,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.18"
+__version__ = "4.0.19"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1737,6 +1738,7 @@ def _refresh_slow_roots():
                     get_index(r, force=True)
                 except Exception:
                     pass
+            fts_warm(r)          # keep the FTS index caught up so the dirty set stays small
 
 def dedupe_sids(items):
     """(kept, copies) — collapse sessions that exist in several roots (e.g. a backup
@@ -2024,6 +2026,188 @@ def _snippet(text, terms):
         pos = 0
     return text[max(0, pos - 55):pos + 95].replace("\n", " ")
 
+# ---- FTS candidate index (SQLite trigram) -----------------------------------
+# A candidate SELECTOR, not the final judge: it narrows the per-search work from
+# "every session in the corpus" down to a small superset of true hits, then the
+# existing exact matcher (match_session / _scope_ok / _fields_ok / _snippet) makes
+# the final call on that superset. Design (agreed in the review note): session-level
+# trigram FTS over the already-lowercased blob (case_sensitive 1 → normalization is
+# single-sourced with Python str.lower(), no false negatives), contentless +
+# contentless_delete=1 (plain DELETE by rowid, no old-text reconstruction). The
+# candidate query = AND of every ≥3-char positive term/phrase/field-value (recall-safe:
+# a true hit contains all of them) ∪ a cheap metadata LIKE over the tiny session_docs
+# table (id / path / title / cwd). Anything that can't be safely narrowed (all terms
+# 1–2 chars) returns None → the caller falls back to the full scan. Never a false
+# negative; false positives are fine (the matcher drops them).
+_FTS_SCHEMA = 1
+_FTS_ENABLED = True          # feature flag: set False to force the classic full scan
+_FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock()}
+
+def _fts_db_path():
+    return os.path.join(CONFIG_DIR, "cache", f"search-v{_FTS_SCHEMA}.sqlite3")
+
+def fts_capable():
+    """FTS5 + trigram tokenizer + contentless_delete all available? (probed once)."""
+    if _FTS["capable"] is None:
+        try:
+            c = sqlite3.connect(":memory:")
+            c.execute("CREATE VIRTUAL TABLE p USING fts5(text, content='', "
+                      "contentless_delete=1, tokenize='trigram case_sensitive 1')")
+            c.close()
+            _FTS["capable"] = True
+        except Exception:
+            _FTS["capable"] = False
+    return _FTS["capable"]
+
+def _fts_off():
+    return _EXCLUSIVE or not _FTS_ENABLED or _FTS["disabled"] or not fts_capable()
+
+def _fts_conn():
+    """The one writer/reader connection (all access is serialized under _FTS['lock'])."""
+    if _FTS["con"] is not None:
+        return _FTS["con"]
+    os.makedirs(os.path.join(CONFIG_DIR, "cache"), exist_ok=True)
+    con = sqlite3.connect(_fts_db_path(), check_same_thread=False)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA temp_store=MEMORY")
+    con.execute("""CREATE TABLE IF NOT EXISTS session_docs(
+        id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
+        provider TEXT, sid TEXT, mtime_ns INTEGER, size INTEGER, title TEXT,
+        cwd TEXT, start_cwd TEXT, forked TEXT, indexed_at INTEGER)""")
+    con.execute("CREATE INDEX IF NOT EXISTS session_docs_root ON session_docs(root)")
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5("
+                "text, content='', contentless_delete=1, tokenize='trigram case_sensitive 1')")
+    con.commit()
+    _FTS["con"] = con
+    return con
+
+def _fts_reset():
+    """Drop the DB file and rebuild empty — used on corruption or schema mismatch."""
+    try:
+        if _FTS["con"] is not None:
+            _FTS["con"].close()
+    except Exception:
+        pass
+    _FTS["con"] = None
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(_fts_db_path() + suffix)
+        except OSError:
+            pass
+
+def _fts_index_root(root):
+    """Bring `root`'s FTS rows in sync with the filesystem (keyed on (mtime_ns,size)).
+    Only the background thread calls this (via fts_warm) — trigram indexing a whole
+    corpus is slow, so the request path never writes; it force-includes dirty/new files
+    as candidates instead (see fts_candidates). Commits in batches so progress persists
+    and a partial index is already usable (unindexed files are covered by the dirty set)."""
+    if _fts_off():
+        return
+    con = _fts_conn()
+    cur = {}
+    for p in session_files(root):
+        try:
+            st = os.stat(p)
+            cur[p] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+    have = {p: (m, s, i) for p, m, s, i in con.execute(
+        "SELECT path, mtime_ns, size, id FROM session_docs WHERE root=?", (root,))}
+    changed = [p for p, k in cur.items() if p not in have or (have[p][0], have[p][1]) != k]
+    gone = [p for p in have if p not in cur]
+    metas = {it["path"]: it for it in get_index(root)} if changed else {}
+    now = int(time.time())
+    for p in gone:
+        con.execute("DELETE FROM search_fts WHERE rowid=?", (have[p][2],))
+        con.execute("DELETE FROM session_docs WHERE id=?", (have[p][2],))
+    for n, p in enumerate(changed):
+        _, blob, _ = _rows_blob(p)         # blob is already per-row lowercased
+        it = metas.get(p, {})
+        m, s = cur[p]
+        con.execute("""INSERT INTO session_docs(path,root,provider,sid,mtime_ns,size,title,
+            cwd,start_cwd,forked,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns,size=excluded.size,
+            title=excluded.title,cwd=excluded.cwd,start_cwd=excluded.start_cwd,
+            forked=excluded.forked,provider=excluded.provider,sid=excluded.sid,indexed_at=excluded.indexed_at""",
+            (p, root, it.get("provider", "") or provider_of(p), it.get("sid") or os.path.basename(p)[:-6],
+             m, s, it.get("title", ""), it.get("cwd", ""), it.get("start_cwd", ""),
+             it.get("forked", ""), now))
+        i = con.execute("SELECT id FROM session_docs WHERE path=?", (p,)).fetchone()[0]
+        con.execute("DELETE FROM search_fts WHERE rowid=?", (i,))
+        con.execute("INSERT INTO search_fts(rowid, text) VALUES(?,?)", (i, blob))
+        if n % 25 == 24:                   # persist progress; a partial index is already usable
+            con.commit()
+    con.commit()
+
+def _fts_quote(s):
+    return '"' + s.replace('"', '""') + '"'
+
+def fts_candidates(root, terms, phrases, field_terms, id_vals):
+    """Superset of `root` paths that could match, or None to fall back to a full scan.
+    Recall-safe by construction: a true hit is either unchanged-and-in-the-index (found by
+    the FTS / metadata query) or dirty/new (force-included below), and deleted files are
+    dropped by intersecting with the current filesystem. The index only ever loses recall
+    for files the writer hasn't caught up on — those are exactly the dirty set."""
+    if _fts_off():
+        return None
+    field_vals = [v for vals in field_terms.values() for v in vals]
+    anchors = [t for t in (terms + phrases + field_vals) if len(t) >= 3]
+    meta_terms = terms + id_vals
+    has_content = bool(terms or phrases or field_terms)
+    if has_content and not anchors:
+        return None                        # only 1–2 char content terms → can't narrow safely
+    if not (anchors or meta_terms):
+        return None                        # nothing positive to select on → let the scan handle it
+    cur = {}
+    for p in session_files(root):
+        try:
+            st = os.stat(p)
+            cur[p] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+    with _FTS["lock"]:
+        try:
+            con = _fts_conn()
+            have = {p: (m, s) for p, m, s in con.execute(
+                "SELECT path, mtime_ns, size FROM session_docs WHERE root=?", (root,))}
+            if len(have) < len(cur) * 0.5:  # index absent or too incomplete to be worth it
+                return None
+            cand = {p for p, k in cur.items() if have.get(p) != k}   # dirty/new → always checked
+            if anchors:
+                match = " AND ".join(_fts_quote(a) for a in anchors)
+                for (p,) in con.execute("SELECT sd.path FROM search_fts f "
+                        "JOIN session_docs sd ON sd.id=f.rowid WHERE sd.root=? AND f.text MATCH ?",
+                        (root, match)):
+                    if p in cur:            # ignore index rows for since-deleted files
+                        cand.add(p)
+            if meta_terms:                  # cheap literal substring over the tiny metadata table
+                for p, sid, forked, cwd, scwd, title in con.execute(
+                        "SELECT path, sid, forked, cwd, start_cwd, title FROM session_docs WHERE root=?", (root,)):
+                    if p not in cur:
+                        continue
+                    mb = " ".join(filter(None, [sid, forked, cwd, scwd, p, title])).lower()
+                    if all(t in mb for t in meta_terms):
+                        cand.add(p)
+            return cand
+        except (sqlite3.DatabaseError, sqlite3.OperationalError):
+            _fts_reset()                    # corruption / schema drift → drop and fall back this time
+            return None
+        except Exception:
+            return None
+
+def fts_warm(root):
+    """Background-thread entry: build/refresh the whole index (allowed to be slow)."""
+    if _fts_off():
+        return
+    with _FTS["lock"]:
+        try:
+            _fts_index_root(root)
+        except (sqlite3.DatabaseError, sqlite3.OperationalError):
+            _fts_reset()
+        except Exception:
+            pass
+
 # ---- data API (pure data; powers both the JSON HTTP endpoints and the MCP server) ----
 def search_api(root, q, scope="all", proj="", limit=30):
     """Search one root → list of result dicts (no HTML). Mirrors the web search."""
@@ -2045,7 +2229,8 @@ def search_api(root, q, scope="all", proj="", limit=30):
     snip_terms = (terms + phrases) or fvals
     need = terms + phrases
     out = []
-    for path in session_files(root):
+    cands = fts_candidates(root, terms, phrases, field_terms, id_vals)   # None → full scan
+    for path in (session_files(root) if cands is None else cands):
         it = metas.get(path, {})
         if proj and it.get("proj") != proj:
             continue
@@ -4411,7 +4596,13 @@ class H(BaseHTTPRequestHandler):
         implicit_phrase = len(terms) >= 3 and not phrases and not field_terms
         any_phrase = False
         results = []
-        for path in (p_ for r_ in roots for p_ in session_files(r_)):
+        # FTS candidate pre-filter per root (None → that root falls back to a full scan)
+        cand_by_root = {r_: fts_candidates(r_, terms, phrases, field_terms, id_vals) for r_ in roots}
+        def _scan_paths():
+            for r_ in roots:
+                c = cand_by_root[r_]
+                yield from (session_files(r_) if c is None else c)
+        for path in _scan_paths():
             mt = mtimes.get(path, 0)
             if (lo is not None and mt < lo) or (hi is not None and mt >= hi):
                 continue
@@ -4553,11 +4744,16 @@ class H(BaseHTTPRequestHandler):
         when = (f' · {esc(from_ or "…")}~{esc(to or "…")}' if (from_ or to) else
                 (" · " + tr(DAY_CHOICES[days]) if days else ""))
         more = f' · <span class=hint>(+{truncated} {tr("more, refine to narrow")})</span>' if truncated > 0 else ""
+        # observability: how hard the FTS candidate index narrowed the scan (only when it was used)
+        _scanned = sum(len(session_files(r_)) for r_ in roots)
+        _cands = sum(len(c) for c in cand_by_root.values() if c is not None)
+        fts_note = (f' · <span class=hint title="{esc(tr("sessions the trigram index shortlisted vs. the whole corpus"))}">⚡ {_cands}/{_scanned}</span>'
+                    if any(c is not None for c in cand_by_root.values()) else "")
         # when a pasted sentence wasn't found verbatim anywhere, say so — the jumps below
         # fall back to wherever the separate words co-occur, which is easy to misread as a bug.
         phrase_note = (f'<p class=meta>💡 {tr("No session contains that as an exact phrase — showing where the words appear separately. Wrap it in &quot;quotes&quot; to require the exact phrase.")}</p>'
                        if (implicit_phrase and results and not any_phrase) else "")
-        head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{more} · '
+        head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{fts_note}{more} · '
                 f'📁 {esc(_roots_label(roots))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>{phrase_note}')
         return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
                      q, scope, rootp, days, from_, to, proj=proj)
@@ -4924,6 +5120,7 @@ def _warm_cache(root):
             dirty = root in _DISK["dirty"]
         if dirty:
             _save_disk_cache(root)
+        fts_warm(root)          # build/refresh the FTS candidate index (may be slow first time)
     except Exception:
         pass
 

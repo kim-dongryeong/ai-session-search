@@ -1,0 +1,160 @@
+"""FTS candidate-index correctness: the SQLite trigram pre-filter must be a pure
+performance layer — for every query, searching WITH the candidate index must return
+exactly the same results (paths + scores) as the classic full scan. Recall 100%,
+no false negatives. Also covers the capability probe and the incremental lifecycle."""
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+from ai_session_search import app  # noqa: E402
+
+
+def _session(path, turns, cwd="/Users/x/proj"):
+    """turns: list of (role, text). role 'user' or 'assistant'."""
+    lines = [{"type": "user", "cwd": cwd, "timestamp": "2026-07-01T00:00:00Z",
+              "message": {"role": "user", "content": "session start"}}]
+    for role, text in turns:
+        if role == "user":
+            lines.append({"type": "user", "cwd": cwd,
+                          "message": {"role": "user", "content": text}})
+        else:
+            lines.append({"type": "assistant",
+                          "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+    with open(path, "w", encoding="utf-8") as fh:
+        for o in lines:
+            fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+
+
+def build_corpus():
+    root = tempfile.mkdtemp()
+    proj = os.path.join(root, "-Users-x-proj")
+    os.makedirs(proj)
+    def sid(n): return f"{n:08d}-1111-2222-3333-444444444444"
+    # A: cross-turn AND — 'alphaword' and 'betaword' in different turns
+    _session(os.path.join(proj, sid(1) + ".jsonl"),
+             [("user", "alphaword appears here"), ("assistant", "unrelated middle"),
+              ("user", "and betaword appears later")])
+    # B: Korean agglutinated — contains 검색해줘 (so '검색해' 3-char and '검색' 2-char both should find it)
+    _session(os.path.join(proj, sid(2) + ".jsonl"),
+             [("user", "저는 검색해줘 라고 입력했고 최적화 이야기를 했다")])
+    # C: metadata-only — the term 'zulu' is only in the workspace path, not the body
+    _session(os.path.join(proj, sid(3) + ".jsonl"),
+             [("user", "ordinary body without the special token")], cwd="/Users/x/zulu-workspace")
+    # D: paths and URLs
+    _session(os.path.join(proj, sid(4) + ".jsonl"),
+             [("user", "edited src/app.py and opened https://github.com/foo/bar/pull/42")])
+    # E: contiguous phrase
+    _session(os.path.join(proj, sid(5) + ".jsonl"),
+             [("user", "the quick brown fox jumps"), ("assistant", "hello world contiguous here")])
+    # F: distractor with none of the above
+    _session(os.path.join(proj, sid(6) + ".jsonl"),
+             [("user", "totally different content nothing shared")])
+    return root
+
+
+QUERIES = [
+    "alphaword betaword",          # cross-turn AND (both >=3 → FTS anchored)
+    "검색해",                       # 3-char Korean substring (FTS anchored)
+    "검색",                         # 2-char Korean → must fall back, still find B
+    "검색해줘 최적화",              # two Korean tokens, cross concept
+    "zulu",                        # metadata-only (in cwd path, not body)
+    "app.py",                      # path fragment
+    "hello world",                 # phrase-ish
+    '"hello world"',               # quoted phrase
+    "quick brown fox",             # implicit 3-word phrase
+    "pull",                        # short-ish common word
+    "nonexistent-term-xyz",        # no hits
+    "brown alphaword",             # spans two different sessions → no session has both → empty
+    "file:app.py",                 # field query
+    "betaword -alphaword",         # negation (excludes A → empty)
+]
+
+
+class FtsEquivalence(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpcfg = tempfile.mkdtemp()
+        cls._orig_cfg = app.CONFIG_DIR
+        app.CONFIG_DIR = cls.tmpcfg          # keep the FTS DB out of the real cache
+        cls.root = build_corpus()
+        app.configure(cls.root)              # non-exclusive → FTS active
+        app.ROOTS[:] = [cls.root]; app.ROOT = cls.root
+        app.DEFAULT_ROOTS = [cls.root]; app.SAVED_ROOTS = []
+        cls.assertTrue_ = app.fts_capable()
+        app.fts_warm(cls.root)               # build the index up front
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            if app._FTS["con"]: app._FTS["con"].close()
+        except Exception:
+            pass
+        app._FTS["con"] = None; app._FTS["disabled"] = False
+        app._FTS_ENABLED = True
+        app.CONFIG_DIR = cls._orig_cfg
+        shutil.rmtree(cls.root, ignore_errors=True)
+        shutil.rmtree(cls.tmpcfg, ignore_errors=True)
+
+    def _results(self, q):
+        return {(r["path"], r["score"]) for r in app.search_api(self.root, q, "all", "", 100)}
+
+    def test_capable(self):
+        self.assertTrue(app.fts_capable(), "SQLite build lacks FTS5/trigram/contentless_delete")
+
+    def test_equivalence_fts_on_vs_off(self):
+        for q in QUERIES:
+            app._FTS_ENABLED = True
+            on = self._results(q)
+            app._FTS_ENABLED = False
+            off = self._results(q)
+            app._FTS_ENABLED = True
+            self.assertEqual(on, off, f"FTS changed results for query {q!r}: on={on} off={off}")
+
+    def test_candidate_used_for_anchored_query(self):
+        # a >=3-char query should actually go through the FTS path (return a set, not None)
+        c = app.fts_candidates(self.root, ["alphaword", "betaword"], [], {}, [])
+        self.assertIsNotNone(c)
+        self.assertTrue(all(isinstance(p, str) for p in c))
+
+    def test_two_char_query_falls_back(self):
+        # all positive terms 1-2 chars → cannot narrow safely → None (full scan)
+        self.assertIsNone(app.fts_candidates(self.root, ["검", "색"], [], {}, []))
+
+    def test_incremental_pickup_of_new_session(self):
+        # a brand-new session must be found immediately (dirty/new → force-included candidate)
+        proj = os.path.join(self.root, "-Users-x-proj")
+        newp = os.path.join(proj, "99999999-9999-9999-9999-999999999999.jsonl")
+        _session(newp, [("user", "freshly added uniquetoken content")])
+        app._INDEX["by_root"].pop(self.root, None)   # force index refresh to see the file
+        res = {r["path"] for r in app.search_api(self.root, "uniquetoken", "all", "", 100)}
+        self.assertIn(newp, res)
+
+    def test_appended_session_found_before_reindex(self):
+        # Codex 3차 correctness blocker: a session appended-to AFTER indexing, but NOT yet
+        # reindexed, must still be found — the stale DB key marks it dirty → exact-matched.
+        proj = os.path.join(self.root, "-Users-x-proj")
+        target = os.path.join(proj, "00000002-1111-2222-3333-444444444444.jsonl")  # session B
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user",
+                     "message": {"role": "user", "content": "laggedterm appended after indexing"}}) + "\n")
+        # deliberately do NOT call fts_warm — the index still holds the old (shorter) version
+        app._INDEX["by_root"].pop(self.root, None)
+        res = {r["path"] for r in app.search_api(self.root, "laggedterm", "all", "", 100)}
+        self.assertIn(target, res, "appended term lost while the background index lagged")
+
+    def test_deleted_session_excluded_despite_stale_fts_row(self):
+        proj = os.path.join(self.root, "-Users-x-proj")
+        victim = os.path.join(proj, "00000004-1111-2222-3333-444444444444.jsonl")  # session D (app.py)
+        self.assertTrue(os.path.exists(victim))
+        os.remove(victim)                             # FTS row for it still exists in the DB
+        app._INDEX["by_root"].pop(self.root, None)
+        res = {r["path"] for r in app.search_api(self.root, "app.py", "all", "", 100)}
+        self.assertNotIn(victim, res)
+
+
+if __name__ == "__main__":
+    unittest.main()
