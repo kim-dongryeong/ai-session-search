@@ -322,6 +322,18 @@ class HttpSmoke(unittest.TestCase):
         status, _ = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&off=abc")
         self.assertEqual(status, 200)
 
+    def test_search_ajax_returns_bare_fragment(self):
+        # &ajax=1 returns just the results fragment (for the client-side swap), not the full shell
+        status, frag = self.get("/search?q=" + urllib.parse.quote("계획") + "&ajax=1")
+        self.assertEqual(status, 200)
+        self.assertNotIn("<head>", frag)
+        self.assertNotIn("<form", frag)                    # no header/shell chrome
+        self.assertIn("sessions matched", frag)            # the real results content
+        # same query without ajax is the full page (has the shell + search form)
+        _, full = self.get("/search?q=" + urllib.parse.quote("계획"))
+        self.assertIn("<form", full)
+        self.assertIn("sessions matched", full)
+
 
 def build_phrase_root():
     """A root whose one session contains a distinctive sentence verbatim in a late turn,

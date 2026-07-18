@@ -303,5 +303,7 @@
   "Verifying the signature…": "서명 검증 중…",
   "Refusing to install: ": "설치 거부: ",
   "Installing and restarting…": "설치하고 재시작 중…",
-  "sessions the trigram index shortlisted vs. the whole corpus": "트라이그램 인덱스가 추린 세션 수 vs 전체 corpus"
+  "sessions the trigram index shortlisted vs. the whole corpus": "트라이그램 인덱스가 추린 세션 수 vs 전체 corpus",
+  "Searching…": "검색 중…",
+  "Search failed — try again.": "검색 실패 — 다시 시도하세요."
 }

@@ -3445,6 +3445,10 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .loadmore button{padding:6px 16px;border-radius:9px;border:1px solid #1f6feb;background:transparent;color:#1f6feb;cursor:pointer;font-size:12.5px}
 .loadmore button:hover{background:#1f6feb;color:#fff}
 .loadspin{color:#8a93a3;letter-spacing:3px;font-size:16px;padding:8px}
+.searching{display:flex;align-items:center;gap:10px;padding:26px 6px;color:#5a6472;font-size:14px}
+.searching .spin{width:16px;height:16px;border:2px solid #c7ced8;border-top-color:#1f6feb;border-radius:50%;animation:aisspin .7s linear infinite;flex:none}
+@keyframes aisspin{to{transform:rotate(360deg)}}
+@media(prefers-color-scheme:dark){.searching{color:#aab2bd}.searching .spin{border-color:#3a3f47;border-top-color:#5a9cff}}
 .snip{color:#666;font-size:12.5px;margin:4px 0 0;padding-left:10px;border-left:2px solid #d9dde2}
 .snip a.snipjump{text-decoration:none}
 .snip a.snipjump:hover .chip{background:#1f6feb;color:#fff}
@@ -3532,13 +3536,53 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   </div>
 </header>
 %%ROOTBAR%%
-<div class=wrap>%%BODY%%</div>
+<div class=wrap id=wrap>%%BODY%%</div>
 %%INSTALLMODAL%%
 %%KBHELP%%
 <div id=convflag style="display:none">🧹 %%CONVONLY%%</div>
 <div id=minimap></div>
 <script>
 (function(){
+  // ---- instant AJAX search: on submit show "Searching…" at once, swap in results without a
+  // full-page reload (fixes "Enter does nothing / feels frozen"). Server returns a bare fragment
+  // for &ajax=1; we swap it into #wrap and pushState the clean URL so back/forward/reload work. ----
+  (function(){
+    var form=document.querySelector('header form[role=search]');
+    var wrap=document.getElementById('wrap');
+    if(!form||!wrap||!window.fetch||!window.history.pushState)return;
+    var ctrl=null;
+    function esc(s){return (s||'').replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+    function clean(p){var q=new URLSearchParams(p);q.delete('ajax');var s=q.toString();return s?('/search?'+s):'/search';}
+    function run(params, push){
+      if(ctrl)ctrl.abort();
+      ctrl=(window.AbortController?new AbortController():null);
+      var q=params.get('q')||'';
+      wrap.innerHTML='<div class=searching><span class=spin></span> %%SEARCHING%%'+(q?(' <b>'+esc(q)+'</b>'):'')+'</div>';
+      if(push){try{history.pushState({aiss:1},'',clean(params));}catch(_){}}
+      fetch('/search?'+params.toString()+'&ajax=1',ctrl?{signal:ctrl.signal}:{})
+        .then(function(r){return r.text();})
+        .then(function(html){wrap.innerHTML=html;window.scrollTo(0,0);})
+        .catch(function(e){if(!e||e.name!=='AbortError')wrap.innerHTML='<p class=meta>%%SEARCHERR%%</p>';});
+    }
+    function paramsFromForm(){
+      var p=new URLSearchParams();
+      p.set('q',(form.querySelector('[name=q]')||{}).value||'');
+      ['scope','root','days','from','to'].forEach(function(k){
+        var el=form.querySelector('[name='+k+']'); if(el&&el.value)p.set(k,el.value);});
+      return p;
+    }
+    form.addEventListener('submit',function(e){e.preventDefault();run(paramsFromForm(),true);});
+    // keep in-results /search links (project chips, Prev/Next) on the AJAX path too
+    wrap.addEventListener('click',function(e){
+      var a=e.target.closest?e.target.closest('a[href^="/search?"]'):null;
+      if(!a||e.metaKey||e.ctrlKey||e.shiftKey)return;
+      e.preventDefault(); run(new URLSearchParams((a.getAttribute('href').split('?')[1])||''),true);
+    });
+    window.addEventListener('popstate',function(){
+      if(location.pathname==='/search')run(new URLSearchParams(location.search),false);
+      else location.reload();   // back to a non-search page → restore it fully
+    });
+  })();
   var cur=-1;
   function ys(){return Array.prototype.slice.call(document.querySelectorAll('.msg.you'));}
   function focusYou(i){var a=ys();if(!a.length)return;cur=((i%a.length)+a.length)%a.length;
@@ -4127,6 +4171,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         "%%UPD_DL%%": esc(tr("Download")), "%%UPD_WHATS%%": esc(tr("What's new")),
         "%%UPD_DISMISS%%": esc(tr("dismiss")), "%%UPD_COPY%%": esc(tr("click to copy")),
         "%%UPD_COPIED%%": esc(tr("copied ✓")),
+        "%%SEARCHING%%": esc(tr("Searching…")), "%%SEARCHERR%%": esc(tr("Search failed — try again.")),
         # token lets the same-origin page trigger the loopback-only self-updater (macOS app only)
         "%%UPD_TOKEN%%": (_SHUTDOWN_TOKEN or "") if self_update_supported() else "",
         "%%UPD_NOW%%": esc(tr("Update & restart")),
@@ -4352,7 +4397,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(self.index(g("proj"), g("sort", "date"), g("dir", ""), root, gint("off")))
         if u.path == "/search":
             return self._send(self.search(g("q"), g("scope", "all"), root,
-                                          g("days", ""), g("proj", ""), g("from", ""), g("to", "")))
+                                          g("days", ""), g("proj", ""), g("from", ""), g("to", ""),
+                                          ajax=g("ajax") == "1"))
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
@@ -4588,7 +4634,7 @@ class H(BaseHTTPRequestHandler):
         return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=rootp, proj=proj_filter)
 
     # ---- search ----
-    def search(self, q, scope, root=None, days="", proj="", from_="", to=""):
+    def search(self, q, scope, root=None, days="", proj="", from_="", to="", ajax=False):
         roots = active_roots(root)
         rootp = root_param(roots)
         if scope not in SCOPES:
@@ -4606,10 +4652,10 @@ class H(BaseHTTPRequestHandler):
         hl_terms = terms + phrases + [v for k, vals in field_terms.items() for v in vals]
         hlq = " ".join([f'"{t}"' for t in hl_terms])
         if not (terms or phrases or fields or neg):
-            return shell(tr("Search"), f'<p class=meta>{tr("Enter a query. Multiple words = all must match (AND), ")}'
-                                 f'{tr("&quot;quotes&quot; = exact phrase. Each word gets its own color. ")}'
-                                 f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>',
-                         q, scope, rootp, days, from_, to)
+            empty = (f'<p class=meta>{tr("Enter a query. Multiple words = all must match (AND), ")}'
+                     f'{tr("&quot;quotes&quot; = exact phrase. Each word gets its own color. ")}'
+                     f'{tr("(press <kbd>/</kbd> to focus the search box)")}</p>')
+            return empty if ajax else shell(tr("Search"), empty, q, scope, rootp, days, from_, to)
         t0 = time.perf_counter()
         for r_ in roots:
             _load_disk_cache(r_, rows=False)   # index only; rows come per-candidate from the FTS payload
@@ -4798,8 +4844,10 @@ class H(BaseHTTPRequestHandler):
                        if (implicit_phrase and results and not any_phrase) else "")
         head = (f'<p class=meta>{keys} — {len(results)} {tr("sessions matched")} ({tr("by relevance")}) · {tr(SCOPES[scope])}{when} · {ms}ms{fts_note}{more} · '
                 f'📁 {esc(_roots_label(roots))} · <span class=hint>{tr("click a snippet to jump there")}</span></p>{phrase_note}')
-        return shell(f"{tr('Search')}: {q}", head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>"),
-                     q, scope, rootp, days, from_, to, proj=proj)
+        body = head + projbar + ("".join(rows) or f"<p class=meta>{tr('No results.')}</p>")
+        if ajax:
+            return body                    # bare results fragment — the client swaps it into .wrap
+        return shell(f"{tr('Search')}: {q}", body, q, scope, rootp, days, from_, to, proj=proj)
 
     # ---- session ----
     def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq="", sqtools=""):
