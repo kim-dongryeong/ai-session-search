@@ -36,6 +36,7 @@ import re
 import sqlite3
 import sys
 import threading
+import zlib
 import time
 import urllib.parse
 from array import array
@@ -1847,15 +1848,20 @@ def _rows_blob(path):
         hit = _SEARCH["by_path"].get(path)
         if hit is not None and hit[0] == key:
             return hit[1], hit[2], hit[3]
-    rows = _rows_from_turns(classify_turns(path))
-    blob = _join_blob(rows)
-    tokens = _tok_pack(blob)
+    payload = _fts_load_payload(path, key)   # cold path: deserialize just this session from the DB
+    if payload is not None:
+        rows, blob, tokens = payload
+    else:
+        rows = _rows_from_turns(classify_turns(path))
+        blob = _join_blob(rows)
+        tokens = _tok_pack(blob)
     with _SEARCH["lock"]:
         _SEARCH["by_path"][path] = (key, rows, blob, tokens)
-    r = root_for_path(path)
-    if r:
-        with _DISK["lock"]:
-            _DISK["dirty"].add(r)
+    if payload is None:
+        r = root_for_path(path)
+        if r:
+            with _DISK["lock"]:
+                _DISK["dirty"].add(r)
     return rows, blob, tokens
 
 def search_rows(path):
@@ -2039,7 +2045,7 @@ def _snippet(text, terms):
 # table (id / path / title / cwd). Anything that can't be safely narrowed (all terms
 # 1–2 chars) returns None → the caller falls back to the full scan. Never a false
 # negative; false positives are fine (the matcher drops them).
-_FTS_SCHEMA = 1
+_FTS_SCHEMA = 2              # bump → new DB filename → auto-rebuild (handles payload/format drift)
 _FTS_ENABLED = True          # feature flag: set False to force the classic full scan
 _FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock()}
 
@@ -2074,7 +2080,7 @@ def _fts_conn():
     con.execute("""CREATE TABLE IF NOT EXISTS session_docs(
         id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
         provider TEXT, sid TEXT, mtime_ns INTEGER, size INTEGER, title TEXT,
-        cwd TEXT, start_cwd TEXT, forked TEXT, indexed_at INTEGER)""")
+        cwd TEXT, start_cwd TEXT, forked TEXT, payload BLOB, indexed_at INTEGER)""")
     con.execute("CREATE INDEX IF NOT EXISTS session_docs_root ON session_docs(root)")
     con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5("
                 "text, content='', contentless_delete=1, tokenize='trigram case_sensitive 1')")
@@ -2096,15 +2102,19 @@ def _fts_reset():
         except OSError:
             pass
 
+def _fts_pack(rows, blob, tokens):
+    return zlib.compress(pickle.dumps((rows, blob, tokens), pickle.HIGHEST_PROTOCOL), 6)
+
 def _fts_index_root(root):
     """Bring `root`'s FTS rows in sync with the filesystem (keyed on (mtime_ns,size)).
     Only the background thread calls this (via fts_warm) — trigram indexing a whole
     corpus is slow, so the request path never writes; it force-includes dirty/new files
-    as candidates instead (see fts_candidates). Commits in batches so progress persists
-    and a partial index is already usable (unindexed files are covered by the dirty set)."""
+    as candidates instead (see fts_candidates). Parses OUTSIDE the FTS lock and writes in
+    small locked+committed batches, RELEASING the lock between batches — so a concurrent
+    search is never blocked for more than one batch (agy review). A partial index is
+    already usable (unindexed files are covered by the dirty set)."""
     if _fts_off():
         return
-    con = _fts_conn()
     cur = {}
     for p in session_files(root):
         try:
@@ -2112,33 +2122,59 @@ def _fts_index_root(root):
             cur[p] = (st.st_mtime_ns, st.st_size)
         except OSError:
             pass
-    have = {p: (m, s, i) for p, m, s, i in con.execute(
-        "SELECT path, mtime_ns, size, id FROM session_docs WHERE root=?", (root,))}
+    with _FTS["lock"]:
+        con = _fts_conn()
+        have = {p: (m, s, i) for p, m, s, i in con.execute(
+            "SELECT path, mtime_ns, size, id FROM session_docs WHERE root=?", (root,))}
+        gone = [p for p in have if p not in cur]
+        for p in gone:
+            con.execute("DELETE FROM search_fts WHERE rowid=?", (have[p][2],))
+            con.execute("DELETE FROM session_docs WHERE id=?", (have[p][2],))
+        con.commit()
     changed = [p for p, k in cur.items() if p not in have or (have[p][0], have[p][1]) != k]
-    gone = [p for p in have if p not in cur]
     metas = {it["path"]: it for it in get_index(root)} if changed else {}
     now = int(time.time())
-    for p in gone:
-        con.execute("DELETE FROM search_fts WHERE rowid=?", (have[p][2],))
-        con.execute("DELETE FROM session_docs WHERE id=?", (have[p][2],))
-    for n, p in enumerate(changed):
-        _, blob, _ = _rows_blob(p)         # blob is already per-row lowercased
-        it = metas.get(p, {})
-        m, s = cur[p]
-        con.execute("""INSERT INTO session_docs(path,root,provider,sid,mtime_ns,size,title,
-            cwd,start_cwd,forked,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns,size=excluded.size,
-            title=excluded.title,cwd=excluded.cwd,start_cwd=excluded.start_cwd,
-            forked=excluded.forked,provider=excluded.provider,sid=excluded.sid,indexed_at=excluded.indexed_at""",
-            (p, root, it.get("provider", "") or provider_of(p), it.get("sid") or os.path.basename(p)[:-6],
-             m, s, it.get("title", ""), it.get("cwd", ""), it.get("start_cwd", ""),
-             it.get("forked", ""), now))
-        i = con.execute("SELECT id FROM session_docs WHERE path=?", (p,)).fetchone()[0]
-        con.execute("DELETE FROM search_fts WHERE rowid=?", (i,))
-        con.execute("INSERT INTO search_fts(rowid, text) VALUES(?,?)", (i, blob))
-        if n % 25 == 24:                   # persist progress; a partial index is already usable
+    for batch in (changed[i:i + 10] for i in range(0, len(changed), 10)):
+        parsed = []                        # parse (slow, CPU) with the FTS lock RELEASED
+        for p in batch:
+            rows, blob, tokens = _rows_blob(p)
+            parsed.append((p, rows, blob, tokens))
+        with _FTS["lock"]:                 # take the lock only for the fast DB writes
+            con = _fts_conn()
+            for p, rows, blob, tokens in parsed:
+                it = metas.get(p, {})
+                m, s = cur[p]
+                con.execute("""INSERT INTO session_docs(path,root,provider,sid,mtime_ns,size,title,
+                    cwd,start_cwd,forked,payload,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns,size=excluded.size,
+                    title=excluded.title,cwd=excluded.cwd,start_cwd=excluded.start_cwd,forked=excluded.forked,
+                    provider=excluded.provider,sid=excluded.sid,payload=excluded.payload,indexed_at=excluded.indexed_at""",
+                    (p, root, it.get("provider", "") or provider_of(p), it.get("sid") or os.path.basename(p)[:-6],
+                     m, s, it.get("title", ""), it.get("cwd", ""), it.get("start_cwd", ""),
+                     it.get("forked", ""), _fts_pack(rows, blob, tokens), now))
+                i = con.execute("SELECT id FROM session_docs WHERE path=?", (p,)).fetchone()[0]
+                con.execute("DELETE FROM search_fts WHERE rowid=?", (i,))
+                con.execute("INSERT INTO search_fts(rowid, text) VALUES(?,?)", (i, blob))
             con.commit()
-    con.commit()
+
+def _fts_load_payload(path, key):
+    """(rows, blob, tokens) for `path` from the FTS DB payload if it matches the current
+    (mtime_ns,size) `key`, else None. Lets a cold search deserialize only its few candidate
+    sessions instead of bulk-loading the whole ~450MB gzip row cache."""
+    if _fts_off():
+        return None
+    with _FTS["lock"]:
+        try:
+            con = _fts_conn()
+            row = con.execute("SELECT mtime_ns, size, payload FROM session_docs WHERE path=?", (path,)).fetchone()
+        except (sqlite3.DatabaseError, sqlite3.OperationalError):
+            return None
+    if not row or (row[0], row[1]) != key or row[2] is None:
+        return None
+    try:
+        return pickle.loads(zlib.decompress(row[2]))
+    except Exception:
+        return None
 
 def _fts_quote(s):
     return '"' + s.replace('"', '""') + '"'
@@ -2197,22 +2233,24 @@ def fts_candidates(root, terms, phrases, field_terms, id_vals):
             return None
 
 def fts_warm(root):
-    """Background-thread entry: build/refresh the whole index (allowed to be slow)."""
+    """Background-thread entry: build/refresh the whole index (allowed to be slow).
+    _fts_index_root manages the lock per batch, so this must NOT hold it (that would
+    re-block searches for the whole build — the very thing the batching fixes)."""
     if _fts_off():
         return
-    with _FTS["lock"]:
-        try:
-            _fts_index_root(root)
-        except (sqlite3.DatabaseError, sqlite3.OperationalError):
+    try:
+        _fts_index_root(root)
+    except (sqlite3.DatabaseError, sqlite3.OperationalError):
+        with _FTS["lock"]:
             _fts_reset()
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 # ---- data API (pure data; powers both the JSON HTTP endpoints and the MCP server) ----
 def search_api(root, q, scope="all", proj="", limit=30):
     """Search one root → list of result dicts (no HTML). Mirrors the web search."""
     root = root if root in ROOTS else ROOT
-    _load_disk_cache(root, rows=True)
+    _load_disk_cache(root, rows=False)   # index only; rows come per-candidate from the FTS payload
     if scope not in SCOPES:
         scope = "all"
     sq = parse_search_query((q or "")[:200])
@@ -2230,6 +2268,8 @@ def search_api(root, q, scope="all", proj="", limit=30):
     need = terms + phrases
     out = []
     cands = fts_candidates(root, terms, phrases, field_terms, id_vals)   # None → full scan
+    if cands is None:
+        _load_disk_cache(root, rows=True)   # a full scan needs every session's rows → bulk load
     for path in (session_files(root) if cands is None else cands):
         it = metas.get(path, {})
         if proj and it.get("proj") != proj:
@@ -4572,7 +4612,7 @@ class H(BaseHTTPRequestHandler):
                          q, scope, rootp, days, from_, to)
         t0 = time.perf_counter()
         for r_ in roots:
-            _load_disk_cache(r_, rows=True)
+            _load_disk_cache(r_, rows=False)   # index only; rows come per-candidate from the FTS payload
         index = [it for r in roots for it in get_index(r)]
         canon = proj_canon(index)
         ckey = lambda p: canon.get(p, p)
@@ -4598,6 +4638,9 @@ class H(BaseHTTPRequestHandler):
         results = []
         # FTS candidate pre-filter per root (None → that root falls back to a full scan)
         cand_by_root = {r_: fts_candidates(r_, terms, phrases, field_terms, id_vals) for r_ in roots}
+        for r_ in roots:
+            if cand_by_root[r_] is None:
+                _load_disk_cache(r_, rows=True)   # this root full-scans → needs all its rows
         def _scan_paths():
             for r_ in roots:
                 c = cand_by_root[r_]

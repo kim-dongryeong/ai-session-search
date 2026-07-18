@@ -146,6 +146,36 @@ class FtsEquivalence(unittest.TestCase):
         res = {r["path"] for r in app.search_api(self.root, "laggedterm", "all", "", 100)}
         self.assertIn(target, res, "appended term lost while the background index lagged")
 
+    def test_cold_search_uses_db_payload_not_bulk_load(self):
+        # after the index is built, wiping the in-RAM row cache must NOT force a full reparse:
+        # a selective search loads only its candidates' payloads from the DB, and results match.
+        app.fts_warm(self.root)
+        with app._SEARCH["lock"]:
+            app._SEARCH["by_path"].clear()          # simulate a cold restart
+        with app._DISK["lock"]:
+            app._DISK["rows_loaded"].discard(self.root)
+        res = {r["path"] for r in app.search_api(self.root, "uniquetoken freshly", "all", "", 100)}
+        loaded = len(app._SEARCH["by_path"])
+        # only a tiny subset of the corpus should have been deserialized (candidate-only)
+        self.assertLess(loaded, len(app.session_files(self.root)))
+        # and the payload round-trip is byte-identical → same results as a fresh parse
+        app._FTS_ENABLED = False
+        with app._SEARCH["lock"]:
+            app._SEARCH["by_path"].clear()
+        parsed = {r["path"] for r in app.search_api(self.root, "uniquetoken freshly", "all", "", 100)}
+        app._FTS_ENABLED = True
+        self.assertEqual(res, parsed)
+
+    def test_payload_round_trips(self):
+        app.fts_warm(self.root)
+        p = app.session_files(self.root)[0]
+        st = os.stat(p); key = (st.st_mtime_ns, st.st_size)
+        rows, blob, tokens = app._rows_blob(p)
+        got = app._fts_load_payload(p, key)
+        self.assertIsNotNone(got)
+        self.assertEqual((got[0], got[1]), (rows, blob))     # rows + blob identical
+        self.assertEqual(list(got[2]), list(tokens))         # packed token array identical
+
     def test_deleted_session_excluded_despite_stale_fts_row(self):
         proj = os.path.join(self.root, "-Users-x-proj")
         victim = os.path.join(proj, "00000004-1111-2222-3333-444444444444.jsonl")  # session D (app.py)
