@@ -835,6 +835,27 @@ class ImplicitPhraseJump(unittest.TestCase):
         self.assertTrue(hit.get("phrase"))
         self.assertEqual(hit["gis"][0], 1)
 
+    def test_near_phrase_with_one_stray_word_lands_on_the_passage(self):
+        # "random on the ideas of … Marconi" — the noise word "random" appears elsewhere in
+        # the session, but the 11-word contiguous run should still win and jump to the passage.
+        texts = ["a random note about something else",
+                 "Inspired by and building on the ideas of Google Drive Folder Link by Andrew Marconi."]
+        hit = self._match(texts, "random on the ideas of Google Drive Folder Link by Andrew Marconi.")
+        self.assertTrue(hit.get("phrase"))
+        self.assertTrue(hit.get("partial"))
+        self.assertEqual(hit["gis"], [1])            # jumps to the passage, not the "random" turn
+
+    def test_near_phrase_needs_the_stray_word_present_somewhere(self):
+        # recall-safety: if the stray word is absent from the whole session, do NOT match on
+        # the run alone (that would be a fast-path-only hit the FTS candidate set can't see).
+        texts = ["unrelated", "on the ideas of Google Drive Folder Link by Andrew Marconi here"]
+        hit = self._match(texts, "zzzabsent on the ideas of Google Drive Folder Link by Andrew Marconi")
+        self.assertIsNone(hit)
+
+    def test_short_query_unaffected_by_subrun(self):
+        hit = self._match(["x", "alpha and beta together", "y"], "alpha beta")
+        self.assertNotIn("partial", hit)            # 2-word query: no sub-run logic
+
     def test_far_apart_clusters_each_get_a_jump_link(self):
         # two query terms co-occur in TWO regions far apart in one session → both surface
         texts = ["intro"] + ["alphaword here", "and betaword here"] + ["filler"] * 40 + \

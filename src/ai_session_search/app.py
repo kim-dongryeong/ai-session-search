@@ -1963,6 +1963,20 @@ def _best_window(term_gis, need):
             left += 1
     return best
 
+def _longest_run(terms, text, thresh):
+    """Length of the LONGEST contiguous run of query words that appears verbatim in `text`
+    (whitespace-normalized), or 0 if the longest is below `thresh`. Lets a pasted sentence
+    with one stray/extra word still land on the passage: "random on the ideas of … Marconi"
+    → the 11-word run "on the ideas of … Marconi" is recognized even though "random" isn't
+    part of it. Early-exits at the longest length, and the caller only runs it on rows that
+    already hold ≥thresh of the words, so it stays cheap."""
+    n = len(terms)
+    for L in range(n, thresh - 1, -1):
+        for i in range(0, n - L + 1):
+            if " ".join(terms[i:i + L]) in text:
+                return L
+    return 0
+
 def _best_windows(term_gis, need, k=3, cap=120):
     """Up to `k` non-overlapping term-span windows, so a session with the query terms in
     two+ FAR-APART regions surfaces each region as its own jump link (not just the single
@@ -2015,6 +2029,9 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     # certainly the intended target, and we prefer it over any scattered word-cluster.
     cand = " ".join(terms) if (len(terms) >= 3 and not phrases) else ""
     ntot = len(need)
+    # A near-perfect paste (one stray/extra/wrong word) shouldn't collapse to a scattered
+    # match on the wrong turn: also accept the LONGEST contiguous run of the query words.
+    run_thresh = max(4, (len(terms) * 3 + 4) // 5) if (len(terms) >= 5 and not phrases) else 0
     # which terms appear in each turn — one pass over rows' precomputed lowercase text,
     # no big per-turn string joins (that was the hot spot on large sessions). Term
     # counts for scoring are folded into the same pass (a full blob.count() per term
@@ -2022,6 +2039,7 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     gi_terms = {}
     cnt = dict.fromkeys(need, 0)
     phrase_gis = []
+    subrun = []                      # (gi, run_length) for near-phrase paste matches
     for r in active:
         a, b = r["s"], r["e"]
         row_has = 0
@@ -2040,6 +2058,10 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
                 blob.find(cand, a, b) != -1
                 or cand in _WS_RE.sub(" ", r["text"].lower())):
             phrase_gis.append(r["gi"])
+        elif run_thresh and row_has >= run_thresh:      # not a full phrase → longest contiguous run
+            L = _longest_run(terms, _WS_RE.sub(" ", r["text"].lower()), run_thresh)
+            if L:
+                subrun.append((r["gi"], L))
     ww = [cnt[t] for t in terms]
     all_word = bool(terms) and all(_tok_has(tokens, t) for t in terms)   # whole-word test (bisect)
     if phrase_gis:
@@ -2049,7 +2071,16 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     if row_gis:
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
     term_gis = {t: sorted(gi for gi, s in gi_terms.items() if t in s) for t in need}
-    if not all(term_gis[t] for t in need):
+    all_present = all(term_gis[t] for t in need)
+    # near-phrase paste: only re-rank a session that ALREADY contains every query word
+    # (so the FTS candidate set — AND of all anchors — includes it; no fast-path miss).
+    # A truly-absent word is left to the scattered path / returns None as before.
+    if subrun and all_present:
+        best = max(L for _, L in subrun)
+        gis = sorted({gi for gi, L in subrun if L == best})
+        return {"kind": "row", "gis": gis, "ww": ww, "all_word": all_word,
+                "span": 0, "phrase": True, "partial": best}
+    if not all_present:
         return None
     wins = _best_windows(term_gis, need)   # up to 3 non-overlapping regions → distinct jump links
     if wins:
@@ -2060,8 +2091,9 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     return {"kind": "session", "gis": [term_gis[t][0] for t in need], "ww": ww,
             "all_word": False, "span": 99}
 
-def _snippet(text, terms):
-    """A ~150-char window centered on the first (whole-word, else substring) match."""
+def _snippet(text, terms, before=90, after=210):
+    """A context window around the first (whole-word, else substring) match, with ellipses
+    when it's clipped — wide enough to read what surrounds the keywords, not just them."""
     pos = None
     for t in terms:
         m = word_re(t).search(text)
@@ -2077,7 +2109,9 @@ def _snippet(text, terms):
                 break
     if pos is None:
         pos = 0
-    return text[max(0, pos - 55):pos + 95].replace("\n", " ")
+    lo, hi = max(0, pos - before), pos + after
+    out = text[lo:hi].replace("\n", " ").strip()
+    return ("… " if lo > 0 else "") + out + (" …" if hi < len(text) else "")
 
 # ---- FTS candidate index (SQLite trigram) -----------------------------------
 # A candidate SELECTOR, not the final judge: it narrows the per-search work from
@@ -2358,6 +2392,8 @@ def search_api(root, q, scope="all", proj="", limit=30):
         score = 450 * sum(1 for t in need if t in title_low) + (3000 if is_ref else 0)
         if hit:
             score += {"row": 1000, "cluster": 350, "session": 100}.get(hit["kind"], 0)
+            if hit.get("partial"):     # a near-phrase (one stray word) ranks just below a full phrase
+                score -= 120
         elif field_only:
             score += 500
         out.append({"sid": sid, "provider": it.get("provider", "claude"), "title": it.get("title", ""),
@@ -4823,6 +4859,8 @@ class H(BaseHTTPRequestHandler):
                     score += 100
                 if phrases or hit.get("phrase"):   # exact-phrase (quoted or implicit) is a strong intent signal
                     score += 300
+                if hit.get("partial"):             # near-phrase (a stray word) ranks just below a full phrase
+                    score -= 320
             elif field_only:
                 score += 500
             score += 300 * bool(fields.get("file")) + 200 * bool(fields.get("code")) + 200 * bool(fields.get("cmd"))
