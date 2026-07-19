@@ -26,12 +26,14 @@ session — designed and adversarially reviewed with Codex/agy via the AI build-
   edge punctuation (`] ( ) " . , ; : ! ?` …) while keeping punctuation *inside* a token
   (`app.py`, `self_update`, `src/app`, `well-known`), so a near-perfect paste still finds the
   passage. Quoted `"phrases"` stay literal.
-- **A near-perfect paste lands on the passage even with one stray word.** Pasting a sentence
-  with an extra/wrong word (`random on the ideas of … Marconi.`) used to collapse from a
-  phrase hit into a scattered match that jumped to the wrong turn. Now the *longest contiguous
-  run* of the query words is recognized (for 5+ word queries), so it jumps to the pasted
-  passage and ranks just below an exact-phrase match. (Recall-safe: only re-ranks sessions
-  that already contain every word.)
+- **A pasted sentence still finds its passage even with a stray/wrong/junk word.** Pasting a
+  sentence with an extra or wrong word — one (`random on the ideas of … Marconi.`) or even
+  words that appear *nowhere* (`ran1 ran2 on the ideas of … Marconi.`) — used to jump to the
+  wrong turn or return **nothing** (every word had to match). Now the *longest contiguous run*
+  of the query words is recognized (for 5+ word queries): it jumps to the pasted passage and
+  ranks by how few words are missing, just below an exact-phrase match. Stays fast (the
+  trigram index shortlists candidates for these too) and returns identical results with or
+  without the fast path.
 - **Result snippets show more context.** Widened from ~150 to ~300 characters, with `…` when
   clipped, so you can read what surrounds the matched keywords instead of just the keywords.
 
