@@ -166,6 +166,24 @@ class FtsEquivalence(unittest.TestCase):
         app._FTS_ENABLED = True
         self.assertEqual(res, parsed)
 
+    def test_forgiving_paste_with_absent_words_is_found_via_fts(self):
+        # a pasted sentence with junk words that appear NOWHERE must still find the passage,
+        # and the FTS fast path must agree with the full scan (OR-of-subphrases candidate).
+        proj = os.path.join(self.root, "-Users-x-proj")
+        newp = os.path.join(proj, "cccc2222-2222-2222-2222-222222222222.jsonl")
+        _session(newp, [("user", "Credits\nInspired by and building on the ideas of the "
+                                 "original folder plugin by someone.\n==> keep this?")])
+        app._INDEX["by_root"].pop(self.root, None)
+        app.fts_warm(self.root)
+        q = "junkone junktwo building on the ideas of the original folder plugin by someone"
+        app._FTS_ENABLED = True
+        on = {r["path"] for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = False
+        off = {r["path"] for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = True
+        self.assertIn(newp, on, "forgiving paste didn't find the passage via FTS")
+        self.assertEqual(on, off, "FTS fast path diverged from the full scan on a fuzzy paste")
+
     def test_payload_round_trips(self):
         app.fts_warm(self.root)
         p = app.session_files(self.root)[0]

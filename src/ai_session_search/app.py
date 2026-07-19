@@ -2014,6 +2014,12 @@ def _best_windows(term_gis, need, k=3, cap=120):
         out.append((span, sorted({gi for gi, ti in events if lo <= gi <= hi})))
     return out
 
+def _run_thresh(nterms):
+    """Min contiguous-run length to treat a 5+ word unquoted paste as a (partial) phrase —
+    ~60% of the words, floor 4. 0 disables sub-run matching. Shared by match_session (which
+    detects the run) and fts_candidates (which builds a recall-safe superset from it)."""
+    return max(4, (nterms * 3 + 4) // 5) if nterms >= 5 else 0
+
 def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     """Return the best hit for one session: row (same-turn) → cluster (nearby turns)
     → session (anywhere). None if not all terms/phrases are present. `blob`/`tokens` (the
@@ -2029,9 +2035,10 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     # certainly the intended target, and we prefer it over any scattered word-cluster.
     cand = " ".join(terms) if (len(terms) >= 3 and not phrases) else ""
     ntot = len(need)
-    # A near-perfect paste (one stray/extra/wrong word) shouldn't collapse to a scattered
-    # match on the wrong turn: also accept the LONGEST contiguous run of the query words.
-    run_thresh = max(4, (len(terms) * 3 + 4) // 5) if (len(terms) >= 5 and not phrases) else 0
+    # A near-perfect paste (a stray/extra/wrong word or two) shouldn't fail or land on the
+    # wrong turn: also accept the LONGEST contiguous run of the query words — even when a few
+    # words are entirely absent (fts_candidates builds a matching recall-safe candidate set).
+    run_thresh = _run_thresh(len(terms)) if not phrases else 0
     # which terms appear in each turn — one pass over rows' precomputed lowercase text,
     # no big per-turn string joins (that was the hot spot on large sessions). Term
     # counts for scoring are folded into the same pass (a full blob.count() per term
@@ -2072,14 +2079,15 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
     term_gis = {t: sorted(gi for gi, s in gi_terms.items() if t in s) for t in need}
     all_present = all(term_gis[t] for t in need)
-    # near-phrase paste: only re-rank a session that ALREADY contains every query word
-    # (so the FTS candidate set — AND of all anchors — includes it; no fast-path miss).
-    # A truly-absent word is left to the scattered path / returns None as before.
-    if subrun and all_present:
+    # near-phrase paste: a long contiguous run wins even if a few query words are missing
+    # entirely (forgiving of a typo / junk word). Ranked below full matches by how many words
+    # are absent. fts_candidates OR-s the run's sub-phrases, so the candidate set still covers
+    # these sessions — verified FTS-on == FTS-off.
+    if subrun:
         best = max(L for _, L in subrun)
         gis = sorted({gi for gi, L in subrun if L == best})
-        return {"kind": "row", "gis": gis, "ww": ww, "all_word": all_word,
-                "span": 0, "phrase": True, "partial": best}
+        return {"kind": "row", "gis": gis, "ww": ww, "all_word": all_word, "span": 0,
+                "phrase": True, "partial": best, "missing": sum(1 for t in need if not cnt[t])}
     if not all_present:
         return None
     wins = _best_windows(term_gis, need)   # up to 3 non-overlapping regions → distinct jump links
@@ -2126,7 +2134,7 @@ def _snippet(text, terms, before=90, after=210):
 # table (id / path / title / cwd). Anything that can't be safely narrowed (all terms
 # 1–2 chars) returns None → the caller falls back to the full scan. Never a false
 # negative; false positives are fine (the matcher drops them).
-_FTS_SCHEMA = 2              # bump → new DB filename → auto-rebuild (handles payload/format drift)
+_FTS_SCHEMA = 3              # bump → new DB filename → auto-rebuild (handles payload/format drift)
 _FTS_ENABLED = True          # feature flag: set False to force the classic full scan
 _FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock()}
 
@@ -2237,7 +2245,10 @@ def _fts_index_root(root):
                      it.get("forked", ""), _fts_pack(rows, blob, tokens), now))
                 i = con.execute("SELECT id FROM session_docs WHERE path=?", (p,)).fetchone()[0]
                 con.execute("DELETE FROM search_fts WHERE rowid=?", (i,))
-                con.execute("INSERT INTO search_fts(rowid, text) VALUES(?,?)", (i, blob))
+                # index the whitespace-collapsed blob so a trigram PHRASE match (used for
+                # forgiving-paste candidates) tolerates wrapped/double-spaced runs, matching
+                # match_session's own whitespace-normalized comparison.
+                con.execute("INSERT INTO search_fts(rowid, text) VALUES(?,?)", (i, _WS_RE.sub(" ", blob)))
             con.commit()
 
 def _fts_load_payload(path, key):
@@ -2293,13 +2304,23 @@ def fts_candidates(root, terms, phrases, field_terms, id_vals):
             if len(have) < len(cur) * 0.5:  # index absent or too incomplete to be worth it
                 return None
             cand = {p for p, k in cur.items() if have.get(p) != k}   # dirty/new → always checked
-            if anchors:
-                match = " AND ".join(_fts_quote(a) for a in anchors)
+            def _fts_paths(match_expr):
                 for (p,) in con.execute("SELECT sd.path FROM search_fts f "
                         "JOIN session_docs sd ON sd.id=f.rowid WHERE sd.root=? AND f.text MATCH ?",
-                        (root, match)):
+                        (root, match_expr)):
                     if p in cur:            # ignore index rows for since-deleted files
                         cand.add(p)
+            if anchors:
+                _fts_paths(" AND ".join(_fts_quote(a) for a in anchors))
+            # forgiving paste: match_session accepts the longest contiguous run even when a few
+            # query words are absent, so ANDing every anchor would wrongly drop those sessions.
+            # A run of length ≥thresh contains one of the query's thresh-word windows, so OR-ing
+            # those windows (trigram phrase match over the whitespace-normalized FTS text) is a
+            # recall-safe superset. Same _run_thresh as match_session keeps the two in lockstep.
+            run_thresh = _run_thresh(len(terms)) if not (phrases or field_terms) else 0
+            if run_thresh and len(terms) >= run_thresh:
+                subs = [" ".join(terms[i:i + run_thresh]) for i in range(0, len(terms) - run_thresh + 1)]
+                _fts_paths(" OR ".join(_fts_quote(s) for s in subs))
             if meta_terms:                  # cheap literal substring over the tiny metadata table
                 for p, sid, forked, cwd, scwd, title in con.execute(
                         "SELECT path, sid, forked, cwd, start_cwd, title FROM session_docs WHERE root=?", (root,)):
@@ -2350,6 +2371,9 @@ def search_api(root, q, scope="all", proj="", limit=30):
     snip_terms = (terms + phrases) or fvals
     need = terms + phrases
     out = []
+    # forgiving paste: match_session accepts a long run even with a few words absent, so the
+    # cheap "every term present" pre-filter must not drop those sessions here.
+    run_thresh = _run_thresh(len(terms)) if not (phrases or field_terms) else 0
     cands = fts_candidates(root, terms, phrases, field_terms, id_vals)   # None → full scan
     if cands is None:
         _load_disk_cache(root, rows=True)   # a full scan needs every session's rows → bulk load
@@ -2365,7 +2389,7 @@ def search_api(root, q, scope="all", proj="", limit=30):
         meta_hit = bool(meta_terms) and all(t in meta_blob for t in meta_terms)
         is_ref = meta_hit and any(_looks_ref(t) and (t in sid or (forked and t in forked)) for t in meta_terms)
         rows, blob, tokens = _rows_blob(path)
-        if need and not is_ref and not field_terms and not meta_hit and any(
+        if need and not is_ref and not field_terms and not meta_hit and not run_thresh and any(
                 (t not in blob) and (t not in meta_blob) for t in need):
             continue
         active = [r for r in rows if _scope_ok(r, scope)]
@@ -2392,8 +2416,8 @@ def search_api(root, q, scope="all", proj="", limit=30):
         score = 450 * sum(1 for t in need if t in title_low) + (3000 if is_ref else 0)
         if hit:
             score += {"row": 1000, "cluster": 350, "session": 100}.get(hit["kind"], 0)
-            if hit.get("partial"):     # a near-phrase (one stray word) ranks just below a full phrase
-                score -= 120
+            if hit.get("partial"):     # a near-phrase ranks below a full phrase; more so per absent word
+                score -= 120 + 220 * min(hit.get("missing", 0), 3)
         elif field_only:
             score += 500
         out.append({"sid": sid, "provider": it.get("provider", "claude"), "title": it.get("title", ""),
@@ -4778,6 +4802,7 @@ class H(BaseHTTPRequestHandler):
         # a 3+ word unquoted query is read as an implicit contiguous phrase (see match_session);
         # track whether any session actually contained it, to hint the fallback otherwise.
         implicit_phrase = len(terms) >= 3 and not phrases and not field_terms
+        run_thresh = _run_thresh(len(terms)) if not (phrases or field_terms) else 0
         any_phrase = False
         results = []
         # FTS candidate pre-filter per root (None → that root falls back to a full scan)
@@ -4809,7 +4834,8 @@ class H(BaseHTTPRequestHandler):
             need = terms + phrases
             # cheap pre-filter (substring over the cached blob, ~C-speed): a match needs
             # every term somewhere in the body or metadata — skip the expensive work otherwise.
-            if need and not is_ref and not field_terms and not meta_hit:
+            # (Skipped for a forgiving paste, where a long run can match with words absent.)
+            if need and not is_ref and not field_terms and not meta_hit and not run_thresh:
                 if any((t not in blob) and (t not in meta_blob) for t in need):
                     continue
 
@@ -4859,8 +4885,8 @@ class H(BaseHTTPRequestHandler):
                     score += 100
                 if phrases or hit.get("phrase"):   # exact-phrase (quoted or implicit) is a strong intent signal
                     score += 300
-                if hit.get("partial"):             # near-phrase (a stray word) ranks just below a full phrase
-                    score -= 320
+                if hit.get("partial"):             # near-phrase ranks below a full phrase; more so per absent word
+                    score -= 320 + 220 * min(hit.get("missing", 0), 3)
             elif field_only:
                 score += 500
             score += 300 * bool(fields.get("file")) + 200 * bool(fields.get("code")) + 200 * bool(fields.get("cmd"))
