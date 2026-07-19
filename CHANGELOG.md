@@ -34,6 +34,15 @@ session — designed and adversarially reviewed with Codex/agy via the AI build-
   ranks by how few words are missing, just below an exact-phrase match. Stays fast (the
   trigram index shortlists candidates for these too) and returns identical results with or
   without the fast path.
+- **Ranking now scores how tightly your words cluster, not just which tier they fall in.**
+  What matters is where the matched words sit **close together** — a block/paragraph — not how
+  often they appear scattered across a huge session. Cross-turn matches are now scored by a
+  proximity sweep: `(distinct-words-covered)² × 1/(1+distance)`, order-free, with an in-order
+  bonus; the jump goes to the densest cluster and up to 3 far-apart clusters each keep their
+  own link. One general coverage rule (≥60% of the words, minimum 2) replaces the old magic
+  "5-word" gate, so a 2-word and a 13-word query obey the same principle. The candidate index
+  stays recall-safe via a pigeonhole OR of the rarest query words (doc-frequency comes from
+  the index itself, cached), so results remain identical with the fast path on or off.
 - **Result snippets show more context.** Widened from ~150 to ~300 characters, with `…` when
   clipped, so you can read what surrounds the matched keywords instead of just the keywords.
 

@@ -897,13 +897,101 @@ class ImplicitPhraseJump(unittest.TestCase):
         self.assertEqual(hit["gis"][0], 1)
 
     def test_non_contiguous_words_do_not_become_a_phrase(self):
+        # N=3 → M=_cover_gate(3)=2: alpha+gamma co-occurring forms a low-ranked missing-word
+        # proximity cluster, but it is still NOT treated as a phrase (the core guarantee here).
         texts = ["alpha beta gamma scattered here", "and gamma alpha beta elsewhere"]
         hit = self._match(texts, "alpha gamma zebra_missing")   # zebra_missing absent
-        self.assertIsNone(hit)
+        self.assertIsNotNone(hit)
+        self.assertFalse(hit.get("phrase"))
+        self.assertEqual(hit.get("missing"), 1)
+        self.assertIn(hit["kind"], ("cluster", "session"))
 
     def test_short_query_unaffected(self):
         hit = self._match(["drive folder here", "folder then drive"], "drive folder")
         self.assertIsNone(hit.get("phrase"))     # < 3 words → normal AND behavior
+
+    # ---- Tier-2 proximity sweep (_proximity) ----
+
+    def test_dense_window_beats_tight_fragment(self):
+        # Session A: all 5 query words fall in one dense, cross-turn paragraph (cover==N).
+        # Session B: only 3 of the 5 are in a tight fragment, the other 2 are elsewhere.
+        # The full-coverage window must win even though its span is wider than B's — the
+        # sweep scores the true maximum (cover/N)² window, not a shrunk-to-M sub-window.
+        query = "alpha beta gamma delta epsilon"
+        texts_a = ["filler filler filler unrelated turn",
+                   "alpha beta gamma here",
+                   "delta epsilon words",
+                   "another filler turn nothing to see"]
+        hit_a = self._match(texts_a, query)
+        filler = ("filler word padding text here to increase the distance between "
+                  "clusters ok now go far away")
+        texts_b = (["alpha beta gamma bunched tight here now"] + [filler] * 25 +
+                   ["delta over here"] + [filler] * 25 + ["epsilon far away"])
+        hit_b = self._match(texts_b, query)
+        self.assertEqual(hit_a["cover"], 5)
+        self.assertEqual(hit_b["cover"], 3)
+        self.assertGreater(hit_a["prox"], hit_b["prox"])
+        self.assertTrue(all(g in (1, 2) for g in hit_a["gis"]), hit_a["gis"])  # inside the dense paragraph
+
+    def test_shuffled_near_outranks_scattered(self):
+        # A: the words are tight but out of query order, split across turns.
+        # B: the same words, in order, but scattered far apart. Tight-but-shuffled beats
+        # in-order-but-scattered — proximity (not order) is the dominant signal.
+        query = "alpha beta gamma"
+        texts_a = ["intro turn here", "gamma alpha", "beta appears here", "outro turn"]
+        hit_a = self._match(texts_a, query)
+        filler = ("filler text padding words here to grow the gap between clusters "
+                  "yes indeed ok")
+        texts_b = ["alpha"] + [filler] * 20 + ["beta"] + [filler] * 20 + ["gamma"]
+        hit_b = self._match(texts_b, query)
+        self.assertIsNotNone(hit_a)
+        self.assertIsNotNone(hit_b)
+        self.assertGreater(hit_a["prox"], hit_b["prox"])
+        self.assertEqual(hit_a["kind"], "cluster")
+        self.assertEqual(hit_b["kind"], "session")
+
+    def test_missing_word_cluster_ranks_but_is_not_phrase(self):
+        # "gamma" is nowhere in the session; alpha/beta are near each other, cross-turn.
+        texts = ["intro", "alpha here", "beta nearby", "outro turn"]
+        hit = self._match(texts, "alpha beta gamma")
+        self.assertIsNotNone(hit)
+        self.assertFalse(hit.get("phrase"))
+        self.assertEqual(hit.get("missing"), 1)
+        self.assertEqual(hit["cover"], 2)
+
+    def test_hot_term_cluster_not_starved(self):
+        # "alpha" appears many times (raw) in each of 80 EARLIER turns — a global prefix of
+        # raw occurrence offsets would have exhausted _POS_CAP long before the later turn's
+        # occurrence. Gathering ONE representative offset per turn means all 80 fit easily
+        # (80 < _POS_CAP), so the dense passage right after them is still found intact.
+        query = "alpha beta gamma delta"
+        hot_turn = "alpha alpha alpha alpha alpha noise words here filler"
+        texts = [hot_turn] * 80 + ["beta gamma delta following now here"]
+        hit = self._match(texts, query)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["cover"], 4)
+
+    def test_cover_gate_and_phrase_run_values(self):
+        self.assertEqual([app._cover_gate(n) for n in (1, 2, 3, 4, 5, 12, 13)],
+                          [1, 2, 2, 3, 3, 8, 8])
+        self.assertEqual([app._phrase_run(n) for n in (2, 4, 5, 12)], [4, 4, 4, 8])
+
+    def test_prox_span_is_char_based(self):
+        tight = self._match(["alpha", "beta"], "alpha beta")            # ~6 chars apart
+        filler = ("padding word here to add distance between the two terms nicely "
+                  "ok now go far")
+        wide = self._match(["alpha"] + [filler] * 6 + ["beta"], "alpha beta")   # ~500 chars apart
+        self.assertLess(tight["span"], wide["span"])
+        self.assertGreater(tight["prox"], wide["prox"])
+
+    def test_far_apart_still_multi_link(self):
+        texts = ["intro"] + ["alphaword here", "and betaword here"] + ["filler"] * 40 + \
+                ["alphaword again", "betaword again"] + ["outro"]
+        hit = self._match(texts, "alphaword betaword")
+        gis = set(hit["gis"])
+        self.assertGreaterEqual(len(gis), 2)
+        self.assertTrue(any(g <= 2 for g in gis), gis)
+        self.assertTrue(any(g >= 43 for g in gis), gis)
 
 
 if __name__ == "__main__":

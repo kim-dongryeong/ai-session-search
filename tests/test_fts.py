@@ -71,6 +71,7 @@ QUERIES = [
     "brown alphaword",             # spans two different sessions → no session has both → empty
     "file:app.py",                 # field query
     "betaword -alphaword",         # negation (excludes A → empty)
+    "junkabsent quick fox hello contiguous world",   # 6-word, one absent → pigeonhole OR branch
 ]
 
 
@@ -202,6 +203,161 @@ class FtsEquivalence(unittest.TestCase):
         app._INDEX["by_root"].pop(self.root, None)
         res = {r["path"] for r in app.search_api(self.root, "app.py", "all", "", 100)}
         self.assertNotIn(victim, res)
+
+
+class FtsPigeonhole(unittest.TestCase):
+    """The generalized FTS candidate selector: pigeonhole OR of the most-selective terms
+    (replacing OR-of-contiguous-windows), its doc-count cache, and the retightened
+    slot-count pre-filter. Each test gets its own isolated root + FTS db."""
+
+    def setUp(self):
+        self.tmpcfg = tempfile.mkdtemp()
+        self._orig_cfg = app.CONFIG_DIR
+        app.CONFIG_DIR = self.tmpcfg
+        self.root = build_corpus()
+        app.configure(self.root)
+        app.ROOTS[:] = [self.root]; app.ROOT = self.root
+        app.DEFAULT_ROOTS = [self.root]; app.SAVED_ROOTS = []
+        app.fts_warm(self.root)
+
+    def tearDown(self):
+        try:
+            if app._FTS["con"]: app._FTS["con"].close()
+        except Exception:
+            pass
+        app._FTS["con"] = None; app._FTS["disabled"] = False
+        app._FTS_ENABLED = True
+        app.CONFIG_DIR = self._orig_cfg
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.tmpcfg, ignore_errors=True)
+
+    def _proj(self):
+        return os.path.join(self.root, "-Users-x-proj")
+
+    def _reindex(self):
+        app._INDEX["by_root"].pop(self.root, None)
+        app.fts_warm(self.root)
+
+    def test_pigeonhole_candidate_is_superset_with_missing_word(self):
+        # a session holding 6 of a 7-word query (one word absent entirely) must still be a
+        # candidate, and FTS-on must equal FTS-off for that query.
+        sid = "eeee1111-1111-1111-1111-111111111111"
+        _session(os.path.join(self._proj(), sid + ".jsonl"),
+                 [("user", "alpha beta gamma delta epsilon zeta present here")])
+        self._reindex()
+        terms = ["missingword", "alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+        cand = app.fts_candidates(self.root, terms, [], {}, [])
+        self.assertIsNotNone(cand)
+        target = os.path.join(self._proj(), sid + ".jsonl")
+        self.assertIn(target, cand)
+        q = " ".join(terms)
+        app._FTS_ENABLED = True
+        on = {(r["path"], r["score"]) for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = False
+        off = {(r["path"], r["score"]) for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = True
+        self.assertEqual(on, off)
+        self.assertIn(target, {p for p, _ in on})
+
+    def test_pigeonhole_picks_rare_terms(self):
+        # 30 sessions share one common word; only ONE session also holds 4 rare words.
+        # The pigeonhole OR must pick the rare terms (fewest candidates), not the common one.
+        proj = self._proj()
+        for i in range(30):
+            _session(os.path.join(proj, f"cccc{i:04d}-0000-0000-0000-000000000000.jsonl"),
+                     [("user", "commonword appears in every extra session here")])
+        rare_sid = "dddd0000-0000-0000-0000-000000000000"
+        _session(os.path.join(proj, rare_sid + ".jsonl"),
+                 [("user", "commonword raretokenone raretokentwo raretokenthree "
+                           "raretokenfour appears here")])
+        self._reindex()
+        con = app._fts_conn()
+        common_count = app._fts_doc_count(con, self.root, "commonword")
+        rare_count = app._fts_doc_count(con, self.root, "raretokenone")
+        self.assertLess(rare_count, common_count)
+        terms = ["commonword", "raretokenone", "raretokentwo", "raretokenthree", "raretokenfour"]
+        cand = app.fts_candidates(self.root, terms, [], {}, [])
+        self.assertIsNotNone(cand)
+        self.assertLessEqual(len(cand), common_count)
+        self.assertIn(os.path.join(proj, rare_sid + ".jsonl"), cand)
+
+    def test_doc_count_cached_bounded_and_invalidated(self):
+        proj = self._proj()
+        for i in range(6):
+            _session(os.path.join(proj, f"bbbb{i:04d}-0000-0000-0000-000000000000.jsonl"),
+                     [("user", "sharedword appears in this extra session too")])
+        self._reindex()
+        con = app._fts_conn()
+        orig_cap = app._DOCCOUNT_CAP
+        app._DOCCOUNT_CAP = 3                     # small cap so a common term visibly saturates
+        try:
+            c1 = app._fts_doc_count(con, self.root, "sharedword")
+            self.assertEqual(c1, 3)                # saturates at the (lowered) cap
+            key = (app._FTS_GEN[0], self.root, "sharedword")
+            self.assertIn(key, app._FTS_DOCCOUNT)
+            app._FTS_DOCCOUNT[key] = -1            # sentinel: proves the 2nd call reads the cache
+            c2 = app._fts_doc_count(con, self.root, "sharedword")
+            self.assertEqual(c2, -1)
+            app._FTS_DOCCOUNT[key] = c1
+        finally:
+            app._DOCCOUNT_CAP = orig_cap
+        # a no-op fts_warm (nothing on disk changed) must NOT invalidate the cache
+        gen_before, size_before = app._FTS_GEN[0], len(app._FTS_DOCCOUNT)
+        app.fts_warm(self.root)
+        self.assertEqual(app._FTS_GEN[0], gen_before)
+        self.assertEqual(len(app._FTS_DOCCOUNT), size_before)
+        # a REAL delta must bump the generation and clear the cache
+        _session(os.path.join(proj, "newdelta0-0000-0000-0000-000000000000.jsonl"),
+                 [("user", "another brand new session")])
+        self._reindex()
+        self.assertGreater(app._FTS_GEN[0], gen_before)
+        self.assertNotIn(key, app._FTS_DOCCOUNT)
+        # _fts_reset also unconditionally bumps + clears
+        gen_before2 = app._FTS_GEN[0]
+        app._fts_doc_count(app._fts_conn(), self.root, "sharedword")
+        app._fts_reset()
+        self.assertGreater(app._FTS_GEN[0], gen_before2)
+        self.assertEqual(len(app._FTS_DOCCOUNT), 0)
+
+    def test_prefilter_slot_gate_skips_cheaply(self):
+        # FTS off (full-scan root): a 4-word query with only 1 term present anywhere in the
+        # session must be dropped by the cheap slot gate before match_session ever runs.
+        app._FTS_ENABLED = False
+        calls = []
+        orig = app.match_session
+        def spy(*a, **k):
+            calls.append(1)
+            return orig(*a, **k)
+        app.match_session = spy
+        try:
+            res = app.search_api(self.root, "alphaword neverpresent1 neverpresent2 neverpresent3",
+                                  "all", "", 100)
+        finally:
+            app.match_session = orig
+            app._FTS_ENABLED = True
+        target = os.path.join(self._proj(), "00000001-1111-2222-3333-444444444444.jsonl")
+        self.assertNotIn(target, {r["path"] for r in res})
+        self.assertEqual(calls, [])
+
+    def test_fts_on_equals_off_missing_words(self):
+        # N>=5-word query with one word absent entirely from the corpus: FTS-on must equal
+        # FTS-off (the pigeonhole branch must not lose the session with the absent word).
+        q = "junkabsent quick fox hello contiguous world"
+        app._FTS_ENABLED = True
+        on = {(r["path"], r["score"]) for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = False
+        off = {(r["path"], r["score"]) for r in app.search_api(self.root, q, "all", "", 100)}
+        app._FTS_ENABLED = True
+        self.assertEqual(on, off)
+        self.assertTrue(on)      # session E (quick brown fox / hello world contiguous) is found
+
+    def test_too_few_long_terms_falls_back(self):
+        # only one >=3-char term for a 3-word query (need_or=2 > 1 available) → full scan.
+        sq = app.parse_search_query("ab cd effective")
+        self.assertIsNone(app.fts_candidates(self.root, sq["terms"], [], {}, []))
+        # all content 1-2 chars → the existing has_content-and-not-anchors guard.
+        sq2 = app.parse_search_query("xy")
+        self.assertIsNone(app.fts_candidates(self.root, sq2["terms"], [], {}, []))
 
 
 if __name__ == "__main__":
