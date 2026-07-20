@@ -90,7 +90,7 @@ jobs:
             --add-data "src/ai_session_search/locales:ai_session_search/locales" \
             --add-data "src/ai_session_search/demo:ai_session_search/demo" \
             --hidden-import ai_session_search.app \
-            --osx-bundle-identifier com.kimdongryeong.ai-session-search \
+            --osx-bundle-identifier kr.kdr.ai-session-search \
             packaging/launch.py
 
       - name: Sign macOS app (Developer ID if configured, else ad-hoc)
