@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>AI Session Search</string>
   <key>CFBundleDisplayName</key><string>AI Session Search</string>
-  <key>CFBundleIdentifier</key><string>com.kimdongryeong.ai-session-search</string>
+  <key>CFBundleIdentifier</key><string>kr.kdr.ai-session-search</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
