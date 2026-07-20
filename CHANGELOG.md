@@ -45,6 +45,13 @@ session — designed and adversarially reviewed with Codex/agy via the AI build-
   the index itself, cached), so results remain identical with the fast path on or off.
 - **Result snippets show more context.** Widened from ~150 to ~300 characters, with `…` when
   clipped, so you can read what surrounds the matched keywords instead of just the keywords.
+- **App bundle id is now `kr.kdr.ai-session-search`** (was `com.kimdongryeong.ai-session-search`).
+  ⚠️ **Existing macOS-app users: this one update can't install itself** — the self-updater only
+  swaps a build with the *same* app identity, and the identity changed. **Download this version
+  once from [Releases](https://github.com/kim-dongryeong/ai-session-search/releases/latest) and
+  reinstall it manually**; automatic updates resume from the next version on. Instead of a raw
+  verification error, the in-app updater now detects this case and shows a "Manual reinstall
+  needed" notice with a direct download link.
 
 ## 4.0.19 — 2026-07-18
 

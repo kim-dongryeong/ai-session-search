@@ -233,28 +233,31 @@ def _our_identity():
     return _codesign_field(app, "TeamIdentifier"), _codesign_field(app, "Identifier")
 
 def _verify_bundle(app_path):
-    """(ok, detail): the downloaded .app must be notarized+Developer-ID accepted by
-    Gatekeeper (spctl) AND signed by the same Team + bundle id as the running app."""
+    """(ok, detail, reason): the downloaded .app must be notarized+Developer-ID accepted by
+    Gatekeeper (spctl) AND signed by the same Team + bundle id as the running app.
+    reason is None on success, else one of: codesign / gatekeeper / error / team / bundle_id.
+    A 'bundle_id' failure on an otherwise-valid notarized build means the app's identity
+    was renamed — the running install can't auto-update to it and must be reinstalled once."""
     import subprocess
     try:
         cs = subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--deep", app_path],
                             capture_output=True, text=True, timeout=60)
         if cs.returncode != 0:
-            return False, "codesign verify failed: " + (cs.stderr or "").strip()[:200]
+            return False, "codesign verify failed: " + (cs.stderr or "").strip()[:200], "codesign"
         sp = subprocess.run(["/usr/sbin/spctl", "-a", "-t", "exec", "-vv", app_path],
                             capture_output=True, text=True, timeout=60)
         if sp.returncode != 0:
-            return False, "notarization/Gatekeeper check failed: " + (sp.stderr or "").strip()[:200]
+            return False, "notarization/Gatekeeper check failed: " + (sp.stderr or "").strip()[:200], "gatekeeper"
     except Exception as e:
-        return False, f"verification error: {e}"
+        return False, f"verification error: {e}", "error"
     want_team, want_bid = _our_identity()
     got_team = _codesign_field(app_path, "TeamIdentifier")
     got_bid = _codesign_field(app_path, "Identifier")
     if want_team and got_team != want_team:
-        return False, f"team mismatch (got {got_team}, expected {want_team})"
+        return False, f"team mismatch (got {got_team}, expected {want_team})", "team"
     if want_bid and got_bid != want_bid:
-        return False, f"bundle-id mismatch (got {got_bid}, expected {want_bid})"
-    return True, f"verified: team {got_team}, {got_bid}"
+        return False, f"bundle-id mismatch (got {got_bid}, expected {want_bid})", "bundle_id"
+    return True, f"verified: team {got_team}, {got_bid}", None
 
 def _latest_release_asset():
     """(tag, download_url) for this arch's .dmg on the latest release, or (None, None)."""
@@ -360,9 +363,18 @@ def run_self_update(dry_run=False):
     if not src_app:
         subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
         return _set_update("error", "no app found inside the update image")
-    ok, detail = _verify_bundle(src_app)
+    ok, detail, reason = _verify_bundle(src_app)
     if not ok:
         subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
+        if reason == "bundle_id":
+            # The new build is validly signed + notarized but carries a different bundle id
+            # (the app was renamed, e.g. com.kimdongryeong.* → kr.kdr.*). The self-updater
+            # can't swap across identities — guide the user to a one-time manual reinstall
+            # instead of showing a raw verification error. Auto-updates resume afterward.
+            return _set_update("manual", tr("This version renamed the app, so your current "
+                                            "install can't update itself to it. Download it once "
+                                            "from the Releases page — automatic updates resume "
+                                            "after that."), 100, target=tag)
         return _set_update("error", tr("Refusing to install: ") + detail)
     if dry_run:
         subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], capture_output=True)
@@ -4192,6 +4204,16 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       fetch('/api/self_update').then(function(r){return r.json();}).then(function(s){
         if(!s){return setTimeout(poll,1000);}
         if(s.pct)setMsg('%%UPD_WORKING%% '+s.pct+'%');
+        if(s.state==='manual'){ // app was renamed \u2014 auto-update can't cross identities; reinstall once
+          setMsg('%%UPD_NEEDINSTALL%%'); go.disabled=true;
+          if(txt&&s.detail)txt.textContent=s.detail;
+          if(!bar.querySelector('#updmanual2')){
+            var a=document.createElement('a');a.id='updmanual2';a.className='updbtn';
+            a.href=d.url;a.target='_blank';a.rel='noopener';a.innerHTML='\u2b07\ufe0f %%UPD_DL%%';
+            go.parentNode.insertBefore(a,go.nextSibling);
+          }
+          return;
+        }
         if(s.state==='error'||s.state==='uptodate'){
           setMsg((s.state==='error'?'%%UPD_FAILED%%':'')+(s.detail?(' \u2014 '+s.detail):''));
           go.disabled=false; return;
@@ -4384,6 +4406,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         "%%UPD_WORKING%%": esc(tr("Updating…")),
         "%%UPD_RESTART%%": esc(tr("Restarting into the new version…")),
         "%%UPD_FAILED%%": esc(tr("Update failed")),
+        "%%UPD_NEEDINSTALL%%": esc(tr("Manual reinstall needed")),
         "%%UPD_MANUAL%%": esc(tr("download manually")),
     }
     out = SHELL

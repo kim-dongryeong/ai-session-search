@@ -305,5 +305,7 @@
   "Installing and restarting…": "설치하고 재시작 중…",
   "sessions the trigram index shortlisted vs. the whole corpus": "트라이그램 인덱스가 추린 세션 수 vs 전체 corpus",
   "Searching…": "검색 중…",
-  "Search failed — try again.": "검색 실패 — 다시 시도하세요."
+  "Search failed — try again.": "검색 실패 — 다시 시도하세요.",
+  "Manual reinstall needed": "수동 재설치 필요",
+  "This version renamed the app, so your current install can't update itself to it. Download it once from the Releases page — automatic updates resume after that.": "이번 버전에서 앱 신원(번들 ID)이 바뀌어, 지금 설치본은 자동으로 업데이트할 수 없어요. Releases 페이지에서 한 번만 직접 내려받아 재설치하면 이후부터는 다시 자동 업데이트됩니다."
 }
