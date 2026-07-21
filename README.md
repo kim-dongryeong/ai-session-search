@@ -21,6 +21,8 @@ CLI, and Antigravity (Google)** — all your AI coding agents, one search box.
 ![Dependencies: none](https://img.shields.io/badge/dependencies-0-2ea44f)
 ![Providers: Claude · Codex · Gemini · Antigravity](https://img.shields.io/badge/providers-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20Antigravity-8a9dff)
 
+![search that forgives typos, landing on the exact passage, per-term highlight colors](docs/screenshots/hero.gif)
+
 ![search results with per-term highlighting, landing on the exact passage](docs/screenshots/hero-search.png)
 
 </div>
@@ -67,6 +69,8 @@ app — nothing to configure. Switched machines, or keeping an old project's ses
 backup folder? Add it: paste any path and it's searched too, including session folders
 copied over from another computer.
 
+![adding a session folder from an old computer, browsing its per-project stats](docs/screenshots/add-folder.gif)
+
 ![folder switcher strip — Claude, Codex, Gemini, Antigravity, and a custom backup folder](docs/screenshots/providers.png)
 
 ![folder switcher across every provider, with per-project stats](docs/screenshots/index.png)
@@ -88,6 +92,8 @@ conversation.
 Gmail-style navigation: `j`/`k` move through results, `n`/`p` jump between *your own* messages,
 `/` searches everything, `?` shows the full map. Built for people who'd rather not reach for
 the mouse.
+
+![pressing 1-8 to filter a session down to just one message type](docs/screenshots/keyboard.gif)
 
 <!-- shot-optional -->
 ![keyboard shortcuts overlay](docs/screenshots/keyboard.png)
