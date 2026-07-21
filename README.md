@@ -1,149 +1,122 @@
 <div align="center">
 
+<img src="assets/icon-256.png" width="96" height="96" alt="AI Session Search app icon">
+
 # AI Session Search
 
-**Search everything you and your AI coding agents have ever done — and let your next agent look it up.**
+### You solved this with Claude three weeks ago. Where did that conversation go?
 
-A local, read-only, **zero-dependency** viewer + full-text search engine for your
-**Claude Code**, **Codex**, and **Gemini CLI** transcripts. It's the only one that knows
-which words were *actually yours*.
+Paste the sentence you half-remember — wrong words, missing words, doesn't matter — and
+land on the exact passage in milliseconds. **Claude Code (Anthropic), Codex (OpenAI), Gemini
+CLI, and Antigravity (Google)** — all your AI coding agents, one search box.
 
-[**⬇ Download**](https://github.com/kim-dongryeong/ai-session-search/releases/latest) ·
+[**⬇ Get it now**](#-get-it-now) ·
 [**🏠 Homepage**](https://kim-dongryeong.github.io) ·
-[Features](#-feature-tour) ·
+[See it](#-see-it) ·
 [For coding agents](#-for-coding-agents-mcp--cli--api--skill) ·
-[How attribution works](#-how-attribution-works)
+[Privacy](#-privacy)
 
 [![Release](https://img.shields.io/github/v/release/kim-dongryeong/ai-session-search?label=release&color=1061b7)](https://github.com/kim-dongryeong/ai-session-search/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776ab)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-0-2ea44f)
-![Providers: Claude · Codex · Gemini](https://img.shields.io/badge/providers-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini-8a9dff)
+![Providers: Claude · Codex · Gemini · Antigravity](https://img.shields.io/badge/providers-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20Antigravity-8a9dff)
 
-![keyboard-driven tour](docs/screenshots/demo.gif)
+![search results with per-term highlighting, landing on the exact passage](docs/screenshots/hero-search.png)
 
 </div>
+
+---
+
+## ⬇ Get it now
+
+No Python, no terminal, no setup required — the downloads below are fully standalone (they
+bundle their own Python, nothing else to install). Download it, double-click it, and it opens
+in your browser. The server runs **only on your machine** — nothing is ever uploaded.
+
+- **macOS** — [Download the app](https://github.com/kim-dongryeong/ai-session-search/releases/latest), open the `.dmg`, drag it to Applications, launch it.
+- **Windows** — [Download the app](https://github.com/kim-dongryeong/ai-session-search/releases/latest) and double-click the `.exe`. That's it.
+- **Linux** — [Download the tarball](https://github.com/kim-dongryeong/ai-session-search/releases/latest), unpack it, and run it.
+
+> **Windows says "Windows protected your PC"?** That's SmartScreen being cautious about a
+> new open-source app, not a real warning — click **More info → Run anyway**. On macOS, the
+> app is signed and notarized by Apple, so it just opens.
+
+**Prefer the terminal?** One line installs it and opens a demo:
+
+```bash
+pipx install git+https://github.com/kim-dongryeong/ai-session-search.git && aiss --demo   # (more below)
+```
+
+---
+
+## 👀 See it
+
+### 🔎 Search that forgives
+Paste the sentence you half-remember, typos and all. A wrong word, a missing word, a whole
+extra clause — it still finds the passage. Proximity-cluster ranking scores how tightly your
+words sit *together*, so you land on the paragraph you're actually thinking of, not just any
+message that happens to contain one of the words. And it's instant, even on thousands of
+sessions — measured on the author's real history: the first search after opening dropped
+from **~8 s to 10 ms**.
+
+![search results with per-term highlighting across turns](docs/screenshots/search.png)
+
+### 🗂️ Every AI tool, one search box
+Claude Code, Codex, Gemini CLI, and Antigravity are auto-discovered the moment you open the
+app — nothing to configure. Switched machines, or keeping an old project's sessions in a
+backup folder? Add it: paste any path and it's searched too, including session folders
+copied over from another computer.
+
+![folder switcher strip — Claude, Codex, Gemini, Antigravity, and a custom backup folder](docs/screenshots/providers.png)
+
+![folder switcher across every provider, with per-project stats](docs/screenshots/index.png)
+
+### 🔗 Jump back in
+Every result deep-links straight to the exact turn, already scrolled into view — no hunting
+through a thousand-line transcript. Found the session you meant? Copy its resume command and
+you're back in that exact conversation, in your terminal, mid-thought — on the machine where
+that session's history lives.
+
+![session view — resume command, workspace, and correct attribution](docs/screenshots/hero-session.png)
+
+### 📖 A transcript you'll actually want to read
+Tool calls render as tool calls. Edits render as red/green diffs. Every generated code block
+can be pulled out and copied with one click — instead of a raw JSON log pretending to be a
+conversation.
+
+### ⌨️ Keyboard-first
+Gmail-style navigation: `j`/`k` move through results, `n`/`p` jump between *your own* messages,
+`/` searches everything, `?` shows the full map. Built for people who'd rather not reach for
+the mouse.
+
+<!-- shot-optional -->
+![keyboard shortcuts overlay](docs/screenshots/keyboard.png)
+
+### 📊 Insights
+Per-project stats — sessions, your share of the conversation, tokens, models used, size on
+disk — sorted with a click. See where your AI time actually goes.
+
+<!-- shot-optional -->
+![per-project usage stats, sortable by column](docs/screenshots/insights.png)
+
+### 🔒 Private by design
+Every search runs on `127.0.0.1` — your machine, and only your machine. Nothing you type,
+paste, or read is ever sent anywhere. Full details in [Privacy](#-privacy).
 
 ---
 
 ## The one thing every other viewer gets wrong
 
-Open any Claude Code / Codex / Gemini transcript and most lines are labelled `role: "user"`.
-**Almost none of them are you.** They're tool results, injected IDE/editor context, system
-reminders, task-notifications, slash-command output, subagent briefs, autonomous-loop
-prompts. In a real session **~95% of `role:user` lines are machine noise** — and every other
-viewer renders them verbatim, as if you'd typed them.
+**You see the messages you actually typed — not machine noise wearing a `role: "user"` label.**
+
+Open any Claude Code / Codex / Gemini / Antigravity transcript and most `role:"user"` lines
+aren't you (tool results, injected editor context, system reminders, and more). In a real
+session **~95% of `role:user` lines are machine noise**, and every other viewer renders them
+verbatim, as if you'd typed them.
 
 AI Session Search uses an **empirically audited + adversarially verified ruleset** (one per
-provider) so only text a human genuinely typed is marked **🧑 You**. Everything else gets its
-own category and is folded away. That one fix is what makes search, reading, and agent recall
-land on *real intent* instead of transcript exhaust.
-
-<div align="center">
-
-![session view — correct attribution, tool blocks, diffs](docs/screenshots/hero-session.png)
-
-</div>
-
----
-
-## ⬇ Download — no Python required
-
-Grab a build from the [**latest release**](https://github.com/kim-dongryeong/ai-session-search/releases/latest),
-double-click, and it opens in your browser. The server runs **on your machine** — nothing is
-uploaded, ever.
-
-| OS | File | How to run |
-|---|---|---|
-| **macOS** (Apple Silicon) | `ai-session-search-macos-arm64.dmg` | Open the dmg → drag to Applications → launch. |
-| **macOS** (Intel) | `ai-session-search-macos-x86_64.dmg` | same |
-| **Windows** | `ai-session-search-windows-x64.exe` | Download → **double-click**. |
-| **Linux** | `ai-session-search-linux-x86_64.tar.gz` | `tar xzf …` → `./ai-session-search` |
-
-> **Windows shows "Windows protected your PC"?** That's SmartScreen being cautious about a
-> brand-new open-source app (it isn't code-signed yet). Click **More info → Run anyway** — it's
-> safe and the source is right here. The warning fades as more people download it.
-> On macOS, the notarized `.dmg` opens cleanly; an un-notarized build just needs a right-click → **Open** the first time.
-
-**Prefer the terminal?** One command, then try it on bundled sample data:
-
-```bash
-pipx install ai-session-search          # once it's on PyPI
-# or install straight from GitHub (works today):
-pipx install git+https://github.com/kim-dongryeong/ai-session-search.git
-
-aiss --demo            # opens a browser on a synthetic Claude+Codex+Gemini dataset
-aiss                   # …then point it at your real ~/.claude, ~/.codex, ~/.gemini history
-```
-
----
-
-## ✨ Feature tour
-
-### 🔎 Full-text search that actually finds things
-
-Relevance-ranked, per-term color highlighting, matches **within a turn**, across **nearby
-turns** (proximity), or **anywhere in a session** — so a clue spread across three messages is
-still found. It searches message text, tool-call arguments (Bash commands, file paths), *and*
-code bodies (a `Write`'s content, an `Edit`'s diff). Field queries: `file:` `cmd:` `code:`
-`error:` `role:me` `id:<uuid>`, plus `-exclude` and `"exact phrase"`.
-
-![search with per-term highlighting across turns](docs/screenshots/search.png)
-
-### 🗂️ One place for Claude Code, Codex, and Gemini
-
-Auto-discovers `~/.claude/projects`, `~/.codex/sessions`, and `~/.gemini/tmp`, each parsed with
-the same attribution rigor and shown with a provider badge, model mix, token totals, and a
-resume command. Grouped by workspace; click a column to sort per-project stats.
-
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshots/provider-codex.png" alt="Codex sessions + project stats"></td>
-<td width="50%"><img src="docs/screenshots/provider-gemini.png" alt="Gemini sessions + tokens"></td>
-</tr>
-</table>
-
-### 🧩 Code & diff extraction
-
-**🧩 Code only** re-gathers every generated code block and file edit in a session — yours *and*
-the agent's, each labelled and shown with a line of context — with one-click copy. Great for
-"what did we actually change?"
-
-![code-only extraction with context and copy buttons](docs/screenshots/code-extraction.png)
-
-### ⌨️ Built for the keyboard
-
-Gmail-style navigation: `j`/`k` move through the session list or between sessions, `n`/`p` jump
-between *your* messages, `Enter` opens the answer thread, digit keys toggle filter chips, `/`
-searches everything, `f` finds within the session, `s` stars, `c` flips to code-only. Press
-`?` for the full map.
-
-<table>
-<tr>
-<td width="55%"><img src="docs/screenshots/keyboard.png" alt="keyboard shortcuts overlay"></td>
-<td width="45%"><img src="docs/screenshots/dark-mode.png" alt="dark mode"></td>
-</tr>
-</table>
-
-### …and the rest
-
-- **Correct attribution everywhere** — 🧑 You / ✦ Claude / 💭 Thinking / 🔧 Tool call /
-  ⚙ Tool result / ⓘ System / 📋 Instruction / 🤖 Subagent, with an in-app legend. Technical
-  blocks fold by default; a `🔧 Bash` shows the command, an `Edit` shows a red/green diff.
-- **Markdown rendering** — GFM tables, fenced/inline code, lists, links; raw HTML always
-  escaped; dependency-free renderer that doesn't choke on 20k-line sessions.
-- **Extracted-fact digest** — files touched, commands, tests, commits, PR links, memory
-  writes. Deterministic, no LLM.
-- **Subagent threads** — sidechain/Task transcripts (including workflow agents) listed per
-  session and openable; orchestrator briefs clearly labelled 📋 (never "you").
-- **Live updates** — new messages append in place, chat-style, without a reload.
-- **⭐ Stars that survive a machine change** — saved to a local file, with export/import.
-- **Per-project stats**, event/error chips (⚠️ ❯ ⎇ 🧪 🔗), a structure minimap, dark mode,
-  and a fixed status-bar breadcrumb.
-- **In-app updates** — a slim bar tells you when a newer release exists (see [Privacy](#-privacy)).
-- **`aiss --demo`** — a bundled synthetic dataset (all three providers, with tool calls,
-  diffs, a subagent, commits, a branched session) so you can explore every feature without
-  touching your real history. It's what these screenshots show.
+provider) so only text a human genuinely typed is marked **🧑 You** — full mechanism in
+[How attribution works](#-how-attribution-works).
 
 ---
 
@@ -151,9 +124,9 @@ searches everything, `f` finds within the session, `s` stars, `c` flips to code-
 
 Your past sessions are a memory your coding agent doesn't have. AI Session Search exposes its
 search engine so an agent can look up *how you actually solved something before* — across all
-three providers, with the same correct attribution (`role:me` is only text you really typed),
-over **faithful transcripts with no embeddings, no database, no indexing step**. All local,
-all read-only.
+four providers, with the same correct attribution (`role:me` is only text you really typed),
+over **faithful transcripts — no embeddings, no cloud, no external services, just a tiny
+local index it builds for itself**. All local, all read-only.
 
 **Query language** (every interface): words are AND-ed and matched nearby; `"quoted phrase"`;
 field filters `file:` `cmd:` `code:` `error:` `role:me` `id:<uuid>`; `-word` excludes; scopes
@@ -208,8 +181,9 @@ skills directory (e.g. `~/.claude/skills/`).
 
 ## 🔒 Privacy
 
-AI Session Search reads your most private developer data — your entire AI coding history — so
-it is built to keep it that way:
+**Everything runs on your machine; nothing is ever uploaded.** AI Session Search reads your
+most private developer data — your entire AI coding history — so here's exactly how that's
+kept private:
 
 - **Local only.** Binds `127.0.0.1`; the server never leaves your machine. Nothing is uploaded.
 - **Read-only.** It parses transcripts; it can't write to, delete, or resume a session.
@@ -218,10 +192,15 @@ it is built to keep it that way:
   once a day it makes a plain, unauthenticated `GET` to the public GitHub *releases* endpoint to
   see if a newer version exists. It sends **no identifiers and no transcript content** — just
   the request. Turn it off with `AISS_NO_UPDATE_CHECK=1`.
+- **Verify it yourself** — the whole app is [one readable file](src/ai_session_search/app.py);
+  don't take our word for it.
 
 ---
 
-## 📦 Install & run (with Python)
+## 📦 Install & run from source (for developers)
+
+Most people just want the [download above](#-get-it-now) — this section is the alternative
+path for contributors and anyone who'd rather run it from a Python checkout.
 
 ```bash
 # From a checkout, no install:
@@ -234,19 +213,19 @@ pipx install git+https://github.com/kim-dongryeong/ai-session-search.git    # fr
 uvx ai-session-search
 pip install ai-session-search
 
-aiss                                    # browse ~/.claude/projects (+ Codex + Gemini)
+aiss                                    # browse ~/.claude/projects (+ Codex + Gemini + Antigravity)
 aiss --demo                             # bundled sample data
 aiss ~/Downloads/.claude/projects --port 8778 --open
 aiss --version
 ```
 
 Defaults: binds `127.0.0.1` only, reads `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`,
-and auto-discovers Codex, Gemini, and copied-from-another-machine data in the in-app **📁 folder
-switcher**. Add any folder at runtime by pasting its path.
+and auto-discovers Codex, Gemini, Antigravity, and copied-from-another-machine data in the
+in-app **📁 folder switcher**. Add any folder at runtime by pasting its path.
 
 **Build a local macOS `.app`:** `./scripts/make-macos-app.sh --dmg` (a thin ~90 KB wrapper over
 the installed `aiss`; needs Python). For a **zero-Python** app, use the notarized bundles from
-[Releases](#-download--no-python-required).
+[Releases](#-get-it-now).
 
 **Requirement:** Python **3.9+**. Note Claude Code is a *Node* app, so a machine with
 transcripts doesn't necessarily have Python (Windows has none by default). The native downloads
@@ -272,8 +251,8 @@ human message is a `type:"user"` line that is **not** a tool result
 **not** a `<task-notification>`/`<command-*>`/`<system-reminder>`/`Caveat:` wrapper, **not** an
 autonomous build-loop persona, and **not** `isSidechain`. Co-located
 `<ide_opened_file>`/`<system-reminder>` blocks are folded away so the human's real text still
-renders. Codex and Gemini get their own precision-first rulesets. **The attribution tests are
-the contract: no machine-authored line may ever be classified as 🧑 You.**
+renders. Codex, Gemini, and Antigravity each get their own precision-first ruleset. **The
+attribution tests are the contract: no machine-authored line may ever be classified as 🧑 You.**
 
 ---
 
@@ -297,10 +276,11 @@ Issues and PRs welcome — especially new UI locales and attribution edge cases 
 ## Non-goals
 
 No embeddings/semantic search, no LLM summarization, no heavy client-side syntax highlighters
-(they freeze on 20k-line sessions), no database, no cloud.
+(they freeze on 20k-line sessions), no external database or server to run, no cloud.
 
 ## License
 
 [GPL-3.0-or-later](LICENSE). A finished end-user tool, distributed free — copyleft keeps every
 fork and derivative open too. You can use, modify, sell, and self-host it; if you distribute a
 modified version you must share its source under the GPL.
+</content>
