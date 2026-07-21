@@ -75,6 +75,9 @@ QUERIES = [
 ]
 
 
+@unittest.skipUnless(app.fts_capable(),
+    "SQLite build lacks FTS5 trigram/contentless_delete — candidate index disabled "
+    "(app falls back to full scan)")
 class FtsEquivalence(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -85,7 +88,6 @@ class FtsEquivalence(unittest.TestCase):
         app.configure(cls.root)              # non-exclusive → FTS active
         app.ROOTS[:] = [cls.root]; app.ROOT = cls.root
         app.DEFAULT_ROOTS = [cls.root]; app.SAVED_ROOTS = []
-        cls.assertTrue_ = app.fts_capable()
         app.fts_warm(cls.root)               # build the index up front
 
     @classmethod
@@ -238,6 +240,9 @@ class FtsPigeonhole(unittest.TestCase):
         app._INDEX["by_root"].pop(self.root, None)
         app.fts_warm(self.root)
 
+    @unittest.skipUnless(app.fts_capable(),
+        "SQLite build lacks FTS5 trigram/contentless_delete — candidate index disabled "
+        "(app falls back to full scan)")
     def test_pigeonhole_candidate_is_superset_with_missing_word(self):
         # a session holding 6 of a 7-word query (one word absent entirely) must still be a
         # candidate, and FTS-on must equal FTS-off for that query.
@@ -259,6 +264,9 @@ class FtsPigeonhole(unittest.TestCase):
         self.assertEqual(on, off)
         self.assertIn(target, {p for p, _ in on})
 
+    @unittest.skipUnless(app.fts_capable(),
+        "SQLite build lacks FTS5 trigram/contentless_delete — candidate index disabled "
+        "(app falls back to full scan)")
     def test_pigeonhole_picks_rare_terms(self):
         # 30 sessions share one common word; only ONE session also holds 4 rare words.
         # The pigeonhole OR must pick the rare terms (fewest candidates), not the common one.
@@ -281,6 +289,9 @@ class FtsPigeonhole(unittest.TestCase):
         self.assertLessEqual(len(cand), common_count)
         self.assertIn(os.path.join(proj, rare_sid + ".jsonl"), cand)
 
+    @unittest.skipUnless(app.fts_capable(),
+        "SQLite build lacks FTS5 trigram/contentless_delete — candidate index disabled "
+        "(app falls back to full scan)")
     def test_doc_count_cached_bounded_and_invalidated(self):
         proj = self._proj()
         for i in range(6):

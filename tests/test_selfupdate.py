@@ -24,6 +24,8 @@ class ArchAndQuoting(unittest.TestCase):
             with mock.patch("platform.machine", return_value=machine):
                 self.assertEqual(app._dmg_asset_name(), want)
 
+    @unittest.skipUnless(os.path.exists("/bin/bash"),
+        "requires POSIX /bin/bash (the macOS self-update helper is bash)")
     def test_shq_survives_bash(self):
         for s in ["/Applications/AI Session Search.app", "a'b c", 'x"y', "$(whoami)", "back`tick`"]:
             out = subprocess.run(["/bin/bash", "-c", f"printf %s {app._shq(s)}"],
@@ -69,6 +71,8 @@ class Worker(unittest.TestCase):
             app.run_self_update()
         self.assertEqual(app._UPDATE["state"], "uptodate")
 
+    @unittest.skipUnless(os.path.exists("/bin/bash"),
+        "requires POSIX /bin/bash (the macOS self-update helper is bash)")
     def test_install_helper_script_is_safe_and_relaunches(self):
         captured = {}
         real_popen = subprocess.Popen
