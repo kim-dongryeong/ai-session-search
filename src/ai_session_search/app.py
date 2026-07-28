@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.20"
+__version__ = "4.0.21"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -91,11 +91,14 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/ai-session-search")
 ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
 STARS_FILE = os.path.join(CONFIG_DIR, "stars.json")   # starred session-ids, persisted per machine
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")  # user prefs (default per-page, lazy-render), persisted per machine
 UPDATE_FILE = os.path.join(CONFIG_DIR, "update.json")  # cached latest-release check (throttled to 1/day)
 REPO_SLUG = "kim-dongryeong/ai-session-search"
 _ROOTLOCK = threading.Lock()
 _STARLOCK = threading.Lock()
 _STARS = set()
+_SETTINGSLOCK = threading.Lock()
+_SETTINGS = {}   # {"default_lim": int|"all", "lazy_render": bool} — missing key = current default behavior
 
 def load_stars():
     try:
@@ -122,6 +125,45 @@ def set_stars(sids, on):
         _STARS = s
         save_stars(s)
         return sorted(s)
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def save_settings(d):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(d, fh, ensure_ascii=False, indent=0)
+    except OSError:
+        pass
+
+def set_settings(**kw):
+    """Update one or more settings keys; persist; return the merged settings dict."""
+    global _SETTINGS
+    with _SETTINGSLOCK:
+        d = dict(_SETTINGS)
+        d.update({k: v for k, v in kw.items() if v is not None})
+        _SETTINGS = d
+        save_settings(d)
+        return dict(d)
+
+def get_default_lim():
+    """Resolved default per-page setting: an int, or None for 'all'. Falls back to DEFAULT_LIM."""
+    v = _SETTINGS.get("default_lim", DEFAULT_LIM)
+    if v == "all" or v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return DEFAULT_LIM
+
+def get_lazy_render():
+    return bool(_SETTINGS.get("lazy_render", True))
 
 # ---- update check -----------------------------------------------------------
 # Privacy: this is the ONLY thing the app ever sends over the network. It is a plain
@@ -502,9 +544,10 @@ def configure(primary_root=None, extra_roots=(), exclusive=False):
     """(Re)initialize app state. Called by main(); tests call it directly.
     exclusive=True uses ONLY primary + extra_roots (no auto-discovery, no saved roots) —
     used by --demo so it never touches your real Claude/Codex/Gemini history."""
-    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS, _EXCLUSIVE
+    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS, _SETTINGS, _EXCLUSIVE
     _EXCLUSIVE = exclusive   # demo/test data must never read or write the disk cache
     _STARS = load_stars()
+    _SETTINGS = load_settings()
     primary = os.path.abspath(os.path.expanduser(primary_root or default_primary_root()))
     if exclusive:
         DEFAULT_ROOTS = [primary] + [os.path.abspath(os.path.expanduser(p))
@@ -3878,7 +3921,9 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='KeyS'){e.preventDefault();starNow();return;}                         // toggle star
     if(C==='KeyU'){e.preventDefault();nav('data-list');return;}                   // back to the session (thread) list
     if(C==='KeyH'&&e.shiftKey){e.preventDefault();location.href='/';return;}      // home (all workspaces)
-    if(C==='KeyG'){e.preventDefault();window.scrollTo(0,e.shiftKey?document.body.scrollHeight:0);return;}
+    if(C==='KeyG'){e.preventDefault();
+      if(e.shiftKey)loadAllThenBottom();else window.scrollTo(0,0);
+      return;}
   });
   // copy buttons (code view)
   document.addEventListener('click',function(e){
@@ -3981,6 +4026,19 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     else{var t=document.createElement('input');t.value=u;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);}
     var o=cpu.textContent;cpu.textContent='✓';cpu.disabled=true;setTimeout(function(){cpu.textContent=o;cpu.disabled=false;},1000);
   });
+  // per-page/lazy-load settings — persisted to CONFIG_DIR/settings.json via /api/settings (same
+  // local-only guard as star/unstar).
+  var sdl=document.getElementById('setdeflim'), lts=document.getElementById('limsel');
+  if(sdl&&lts)sdl.addEventListener('click',function(){
+    fetch('/api/settings?default_lim='+encodeURIComponent(lts.value)).then(function(r){return r.json();}).then(function(){
+      var ok=document.getElementById('setdeflimok');
+      if(ok){ok.hidden=false;setTimeout(function(){ok.hidden=true;},1500);}
+    });
+  });
+  var lzt=document.getElementById('lazytoggle');
+  if(lzt)lzt.addEventListener('change',function(){
+    fetch('/api/settings?lazy_render='+(lzt.checked?'1':'0'));
+  });
   function copyText(s){
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
@@ -4008,6 +4066,21 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     };
     fo=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)floadMore();});},{rootMargin:'800px 0px'});
     fo.observe(fwd);
+  }
+  // Shift+G: load every remaining message (not just what's near the viewport), then land on
+  // the true bottom. Reuses floadMore's fetch/busy-flag — no separate/racing loader.
+  var gLoadingAll=false;
+  function loadAllThenBottom(){
+    if(!fwd){window.scrollTo(0,document.body.scrollHeight);return;}
+    if(gLoadingAll)return;
+    gLoadingAll=true;
+    (function step(){
+      if(!fwd){gLoadingAll=false;window.scrollTo(0,document.body.scrollHeight);return;}
+      if(fbusy){setTimeout(step,30);return;}
+      if(fsince>=fend){gLoadingAll=false;window.scrollTo(0,document.body.scrollHeight);return;}
+      floadMore();
+      setTimeout(step,30);
+    })();
   }
   // backward: prepend [from-take,from) with scroll anchoring so the view doesn't jump
   var prv=document.getElementById('loadprev');
@@ -4548,6 +4621,20 @@ class H(BaseHTTPRequestHandler):
             sids = [s for s in (g("sid") or "").split(",") if s.strip()]
             starred = set_stars(sids, g("on") == "1")
             return self._send_json({"starred": starred, "count": len(starred)})
+        if u.path == "/api/settings":
+            # persist small user prefs (default per-page, lazy-render) to CONFIG_DIR/settings.json.
+            # same guard as /api/star: local-only page, reject cross-site fetches.
+            sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
+            if sfs in ("cross-site", "same-site"):
+                return self._send_json({"error": "cross-site rejected"}, 403)
+            kw = {}
+            if "default_lim" in qs:
+                dl = g("default_lim")
+                kw["default_lim"] = dl if dl == "all" else (parse_lim(dl) if dl != "" else None)
+            if "lazy_render" in qs:
+                kw["lazy_render"] = g("lazy_render") == "1"
+            settings = set_settings(**kw) if kw else dict(_SETTINGS)
+            return self._send_json({"settings": settings})
         if u.path == "/api/stars.json":
             b = json.dumps({"stars": sorted(_STARS)}, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
@@ -5293,7 +5380,7 @@ class H(BaseHTTPRequestHandler):
             return shell(meta["title"][:50], head + bar + "".join(body), q, root=rt)
 
         # ---- normal / human-filtered + pagination ----
-        lim = parse_lim(lim_raw) if lim_raw != "" else DEFAULT_LIM
+        lim = parse_lim(lim_raw) if lim_raw != "" else get_default_lim()
         idxs = you_idx if filt == "human" else range(len(turns))
         view_turns = [(i, turns[i]) for i in idxs]
         total = len(view_turns)
@@ -5324,7 +5411,8 @@ class H(BaseHTTPRequestHandler):
         INIT_CHUNK = 120
         # paint the whole window for a goto (the target must be in the DOM to scroll to it);
         # otherwise paint the first chunk instantly and stream the window's remainder.
-        lazy = continuous and goto_gi is None and len(page) > INIT_CHUNK
+        lazy = (continuous and goto_gi is None and len(page) > INIT_CHUNK
+                and lim_raw == "" and get_lazy_render())
         shown = page[:INIT_CHUNK] if lazy else page
         body = []
         if continuous and page and page[0][0] > 0:
@@ -5383,7 +5471,11 @@ class H(BaseHTTPRequestHandler):
                     f'<input type=hidden name=p value="{esc(path)}">'
                     + (f'<input type=hidden name=q value="{esc(q)}">' if q else "")
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
-                    + f'{tr("per page")} <select name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
+                    + f'{tr("per page")} <select id=limsel name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
+                    + f'<button type=button id=setdeflim class=chip title="{esc(tr("Use the current per-page value as the default for new sessions"))}">📌 {tr("set as default")}</button>'
+                    + f'<span id=setdeflimok class=hint hidden>{tr("saved")} ✓</span>'
+                    + f'<label class=hint title="{esc(tr("Render very long sessions incrementally as you scroll, instead of all at once"))}">'
+                      f'<input type=checkbox id=lazytoggle{" checked" if get_lazy_render() else ""}> {tr("Lazy-load long sessions")}</label>'
                     + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · '
                     + (f'{total} {tr("msgs")} · {tr("scroll to load")}' if continuous else f'{tr("showing")} {len(page)}/{total} {tr("msgs")}') + ' · '
                       f'<kbd>n</kbd>/<kbd>p</kbd> {tr("my messages")} · <kbd>j</kbd>/<kbd>k</kbd> {tr("sessions")} · <kbd>?</kbd> {tr("all shortcuts")}</span>'

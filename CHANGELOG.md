@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.21 — 2026-07-21
+
+Session view: per-page and lazy-loading now do what they say, and both are configurable.
+
+- **Per-page = all now really shows all.** Picking a per-page value (e.g. "all" or 50000)
+  used to still lazily stream the session in behind the scenes, so a big session could feel
+  like it hadn't actually loaded everything. An explicit per-page choice now renders the
+  whole window up front — no partial state to second-guess.
+- **Shift+G reaches the true end.** In a long, lazily-streamed session, Shift+G used to jump
+  only to the bottom of whatever had loaded so far — often nowhere near the real end. It now
+  loads every remaining message first (spinner stays visible while it does), then lands on
+  the true bottom, in one keypress.
+- **Configurable default page size and lazy-loading.** New settings, next to the per-page
+  selector in the session view: 📌 "set as default" saves your current per-page choice as the
+  default for new sessions, and a "Lazy-load long sessions" checkbox lets you turn incremental
+  loading off entirely (or leave it on with "all" as your default for fast opens).
+
 ## 4.0.20 — 2026-07-18
 
 Search is faster to *first result*, tells you it's working, and surfaces every spot in a
