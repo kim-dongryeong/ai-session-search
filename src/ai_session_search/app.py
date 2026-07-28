@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.22"
+__version__ = "4.0.23"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1223,6 +1223,9 @@ def get_agy_title(path):
     return get_agy_meta(path)[0]
 
 
+_AGY_MODEL_CHANGE_RE = re.compile(
+    r"The user changed setting `Model Selection` from (.+?) to (.+?)\.\s*No need to comment")
+
 def classify_agy_line(o):
     t = o.get("type")
     content = o.get("content", "")
@@ -1233,6 +1236,11 @@ def classify_agy_line(o):
             text = re.sub(r"<EPHEMERAL_MESSAGE>.*?</EPHEMERAL_MESSAGE>", "", text, flags=re.DOTALL).strip()
         return text
 
+    def strip_settings(text):
+        text = re.sub(r"<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>", "", text, flags=re.DOTALL)
+        return text.strip()
+
     if t == "USER_INPUT" and source in ("USER_EXPLICIT", "SYSTEM", "USER"):
         text = content
         if "<USER_REQUEST>" in text:
@@ -1240,7 +1248,7 @@ def classify_agy_line(o):
             if m:
                 text = m.group(1).strip()
         else:
-            text = strip_eph(text)
+            text = strip_settings(strip_eph(text))
         return ("you", [("text", text)]) if text.strip() else None
 
     if t == "PLANNER_RESPONSE" and source == "MODEL":
@@ -1266,8 +1274,10 @@ def classify_agy_line(o):
     return None
 
 def _agy_load(path):
-    cwd = model = last_ts = first_human = ""
+    cwd = last_ts = first_human = ""
+    current_model = ""
     n = {"you": 0, "assistant": 0, "tool-result": 0, "system": 0, "subagent": 0}
+    models = {}
     turns = []
     for o in iter_lines(path):
         if o.get("created_at"):
@@ -1278,13 +1288,26 @@ def _agy_load(path):
             # keep the shortest ancestor seen, so a repo root beats its subdirs
             if c.startswith("/") and (not cwd or cwd.startswith(c)):
                 cwd = c
+        raw = o.get("content")
+        switch = None
+        if isinstance(raw, str):
+            m = _AGY_MODEL_CHANGE_RE.search(raw)
+            if m:
+                from_model, to_model = m.group(1).strip(), m.group(2).strip()
+                to_model = to_model.rstrip(".")
+                if to_model and to_model != current_model:
+                    switch = (from_model, to_model)
+                current_model = to_model
         r = classify_agy_line(o)
         if not r:
             continue
         role, segs = r
+        if switch:
+            segs = list(segs) + [("injected", f"{tr('Model switch')} {switch[0]} → {switch[1]}")]
         turn = {"role": role, "segs": segs, "ts": o.get("created_at", ""), "tags": turn_tags(o, role, segs)}
         if role == "assistant":
-            turn["model"] = "Antigravity"
+            turn["model"] = current_model or "Antigravity"
+            models[turn["model"]] = models.get(turn["model"], 0) + 1
         turns.append(turn)
         if role in n:
             n[role] += 1
@@ -1295,7 +1318,7 @@ def _agy_load(path):
     title = (meta_title or first_human or tr("(untitled)")).strip()[:120]
     meta = {"title": title, "preview": first_human.strip()[:140], "n": n, "last_ts": last_ts,
             "cwd": cwd, "start_cwd": cwd, "branch": "", "forked": "", "loop": False,
-            "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": {"Antigravity": 1}}
+            "tok": {"in": 0, "out": 0, "cw": 0, "cr": 0}, "models": models or {"Antigravity": 1}}
     return {"turns": turns, "meta": meta}
 
 # ---- subagents --------------------------------------------------------------

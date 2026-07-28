@@ -568,6 +568,73 @@ class Gemini(unittest.TestCase):
         self.assertEqual(app._gemini_sid(p), "405ac996-4058-4604-9f22-67ab43e46735")
 
 
+class Antigravity(unittest.TestCase):
+    def _write(self, lines):
+        d = tempfile.mkdtemp()
+        sdir = os.path.join(d, "brain", "cce23bad-7a60-4628-a3a4-fc581eb89cef", ".system_generated", "logs")
+        os.makedirs(sdir)
+        p = os.path.join(sdir, "transcript.jsonl")
+        with open(p, "w", encoding="utf-8") as fh:
+            for o in lines:
+                fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+        return p
+
+    def _user(self, step, request, from_model, to_model):
+        content = (f"<USER_REQUEST>\n{request}\n</USER_REQUEST>\n"
+                   f"<ADDITIONAL_METADATA>irrelevant metadata here</ADDITIONAL_METADATA>\n"
+                   f"<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from {from_model} to "
+                   f"{to_model}. No need to comment on this change if the user doesn't ask about it. "
+                   f"If reporting what model you are, please use a human readable name instead of the exact string.\n"
+                   f"</USER_SETTINGS_CHANGE>")
+        return {"step_index": step, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": content}
+
+    def _asst(self, step, text):
+        return {"step_index": step, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": text}
+
+    def test_provider_detection(self):
+        self.assertEqual(app.provider_of(
+            "/Users/x/.gemini/antigravity/brain/aaaa/.system_generated/logs/transcript.jsonl"), "agy")
+
+    def test_model_switch_attribution(self):
+        lines = [
+            self._user(0, "hello", "None", "Gemini 3.1 Pro (High)"),
+            self._asst(1, "hi there"),
+            self._user(2, "switch models please", "Gemini 3.1 Pro (High)", "Claude Sonnet 4.6 (Thinking)"),
+            self._asst(3, "now using claude"),
+        ]
+        p = self._write(lines)
+        d = app._agy_load(p)
+        asst_turns = [t for t in d["turns"] if t["role"] == "assistant"]
+        self.assertEqual(asst_turns[0]["model"], "Gemini 3.1 Pro (High)")
+        self.assertEqual(asst_turns[1]["model"], "Claude Sonnet 4.6 (Thinking)")
+        self.assertEqual(d["meta"]["models"],
+                          {"Gemini 3.1 Pro (High)": 1, "Claude Sonnet 4.6 (Thinking)": 1})
+        # the settings-change / metadata blocks must not leak into the visible user text
+        you_turns = [t for t in d["turns"] if t["role"] == "you"]
+        for t in you_turns:
+            joined = " ".join(x[1] for x in t["segs"] if x[0] == "text")
+            self.assertNotIn("USER_SETTINGS_CHANGE", joined)
+            self.assertNotIn("Model Selection", joined)
+            self.assertNotIn("ADDITIONAL_METADATA", joined)
+        # a "Model switch" marker is attached where the change happens
+        switch_turn = you_turns[1]
+        injected = " ".join(x[1] for x in switch_turn["segs"] if x[0] == "injected")
+        self.assertIn("Gemini 3.1 Pro (High)", injected)
+        self.assertIn("Claude Sonnet 4.6 (Thinking)", injected)
+
+    def test_no_model_event_regresses_to_antigravity(self):
+        lines = [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+             "content": "<USER_REQUEST>\nplain question\n</USER_REQUEST>"},
+            self._asst(1, "plain answer"),
+        ]
+        p = self._write(lines)
+        d = app._agy_load(p)
+        asst_turns = [t for t in d["turns"] if t["role"] == "assistant"]
+        self.assertEqual(asst_turns[0]["model"], "Antigravity")
+        self.assertEqual(d["meta"]["models"], {"Antigravity": 1})
+
+
 class Markdown(unittest.TestCase):
     def test_table_renders_with_alignment(self):
         md = "| A | B |\n|:--|--:|\n| 1 | 2 |"

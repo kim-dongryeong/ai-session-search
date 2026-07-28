@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.0.23 — 2026-07-28
+
+Antigravity sessions now show which model (and its effort level — e.g. "Gemini 3.1 Pro
+(High)", "Claude Sonnet 4.6 (Thinking)") produced each part of the conversation, with a
+visible "Model switch" marker where it changed, parsed from the transcript's
+settings-change events.
+
 ## 4.0.22 — 2026-07-28
 
 The downloadable app could never actually reach GitHub — fixed, but everyone on 4.0.21 or
