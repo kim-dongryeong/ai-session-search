@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.21"
+__version__ = "4.0.22"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -179,6 +179,45 @@ def _ver_tuple(v):
 def update_disabled():
     return bool(os.environ.get("AISS_NO_UPDATE_CHECK") or os.environ.get("CCH_NO_UPDATE_CHECK"))
 
+# The PyInstaller-frozen build carries no CA certificates (they're an OS/venv thing, not
+# stdlib), so plain urllib HTTPS calls fail SSL verification in the shipped .app even
+# though the same code works fine from a system-python checkout. Every HTTPS call in this
+# file goes through _urlopen(), which tries the platform's default trust store first and,
+# only on a verification failure, falls back to a CA bundle we bundle into the app at build
+# time (see release.yml). Never falls back to an unverified context.
+_SSL_CTX_CACHE = {}
+
+def _bundled_cacert_path():
+    """Path to the CA bundle shipped alongside the app, or None if not present."""
+    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(__file__)
+    p = os.path.join(base, "cacert.pem")
+    return p if os.path.isfile(p) else None
+
+def _ssl_ctx(fallback=False):
+    """The SSL context to use for our HTTPS calls. fallback=True forces the bundled-CA
+    context (used after the default trust store fails verification)."""
+    import ssl
+    key = "fallback" if fallback else "default"
+    if key not in _SSL_CTX_CACHE:
+        if fallback:
+            cafile = _bundled_cacert_path()
+            if not cafile:
+                raise RuntimeError("no bundled CA certificate available for SSL fallback")
+            _SSL_CTX_CACHE[key] = ssl.create_default_context(cafile=cafile)
+        else:
+            _SSL_CTX_CACHE[key] = ssl.create_default_context()
+    return _SSL_CTX_CACHE[key]
+
+def _urlopen(req_or_url, timeout=None):
+    """urllib.request.urlopen with an explicit, always-verifying SSL context: the OS/venv
+    trust store first, falling back to our bundled CA bundle only if that fails
+    verification (the frozen-app case). Re-raises the original error if both fail."""
+    import ssl
+    try:
+        return urllib.request.urlopen(req_or_url, timeout=timeout, context=_ssl_ctx())
+    except ssl.SSLCertVerificationError:
+        return urllib.request.urlopen(req_or_url, timeout=timeout, context=_ssl_ctx(fallback=True))
+
 def check_update(force=False):
     """Return {current, latest, newer, url, frozen, checked, disabled}. Never raises."""
     frozen = bool(getattr(sys, "frozen", False))
@@ -201,7 +240,7 @@ def check_update(force=False):
                     f"https://api.github.com/repos/{REPO_SLUG}/releases/latest",
                     headers={"Accept": "application/vnd.github+json",
                              "User-Agent": f"ai-session-search/{__version__}"})
-                with urllib.request.urlopen(req, timeout=3) as r:
+                with _urlopen(req, timeout=3) as r:
                     data = json.load(r)
                 latest = (data.get("tag_name") or "").lstrip("vV").strip() or None
                 cache = {"checked": time.time(), "latest": latest,
@@ -212,8 +251,11 @@ def check_update(force=False):
                         json.dump(cache, fh)
                 except OSError:
                     pass
-            except Exception:
-                pass  # offline / rate-limited / DNS — stay silent, reuse any cached value
+            except Exception as e:
+                # offline / rate-limited / DNS / SSL — stay silent to the cache, but
+                # surface a short reason to the caller (not written to disk) so a
+                # persistently-broken check (e.g. missing CA certs) is visible in /api/update.
+                info["check_error"] = f"{type(e).__name__}: {str(e)[:120]}"
     info["latest"] = cache.get("latest")
     info["checked"] = float(cache.get("checked", 0) or 0)
     if cache.get("url"):
@@ -311,7 +353,7 @@ def _latest_release_asset():
             f"https://api.github.com/repos/{REPO_SLUG}/releases/latest",
             headers={"Accept": "application/vnd.github+json",
                      "User-Agent": f"ai-session-search/{__version__}"})
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with _urlopen(req, timeout=10) as r:
             data = json.load(r)
     except Exception as e:
         return None, None
@@ -379,7 +421,7 @@ def run_self_update(dry_run=False):
     dmg = os.path.join(tmpdir, "update.dmg")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": f"ai-session-search/{__version__}"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(dmg, "wb") as out:
+        with _urlopen(req, timeout=60) as r, open(dmg, "wb") as out:
             total = int(r.headers.get("Content-Length") or 0)
             got = 0
             while True:

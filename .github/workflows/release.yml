@@ -77,7 +77,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install build deps
-        run: python -m pip install --upgrade pip pyinstaller
+        run: python -m pip install --upgrade pip pyinstaller certifi
+
+      # The frozen build carries no OS/venv CA trust store, so urllib HTTPS calls (update
+      # check, self-update download) would always fail SSL verification. Bundle certifi's
+      # CA file as data so the app can fall back to it at runtime (see app.py _ssl_ctx).
+      - name: Export CA bundle for the frozen app
+        run: python -c "import certifi,shutil;shutil.copy(certifi.where(),'cacert.pem')"
 
       # ---- macOS: .app → sign → notarize+staple app → .dmg → notarize+staple dmg ----
       - name: Build macOS .app
@@ -89,6 +95,7 @@ jobs:
             --paths src \
             --add-data "src/ai_session_search/locales:ai_session_search/locales" \
             --add-data "src/ai_session_search/demo:ai_session_search/demo" \
+            --add-data "cacert.pem:." \
             --hidden-import ai_session_search.app \
             --osx-bundle-identifier kr.kdr.ai-session-search \
             packaging/launch.py
@@ -184,6 +191,7 @@ jobs:
             --icon assets/icon.ico --paths src `
             --add-data "src/ai_session_search/locales;ai_session_search/locales" `
             --add-data "src/ai_session_search/demo;ai_session_search/demo" `
+            --add-data "cacert.pem;." `
             --hidden-import ai_session_search.app packaging/launch.py
           Copy-Item dist/ai-session-search.exe "${{ matrix.asset }}"
 
@@ -194,6 +202,7 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --name ai-session-search \
             --paths src --add-data "src/ai_session_search/locales:ai_session_search/locales" \
             --add-data "src/ai_session_search/demo:ai_session_search/demo" \
+            --add-data "cacert.pem:." \
             --hidden-import ai_session_search.app packaging/launch.py
           tar czf "${{ matrix.asset }}" -C dist ai-session-search
 

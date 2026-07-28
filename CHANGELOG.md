@@ -1,5 +1,25 @@
 # Changelog
 
+## 4.0.22 — 2026-07-28
+
+The downloadable app could never actually reach GitHub — fixed, but everyone on 4.0.21 or
+older needs one manual download to get there.
+
+- **Update checks and one-click self-update were silently broken in every downloadable
+  build.** The PyInstaller-frozen app doesn't carry an OS/venv certificate trust store, so
+  every HTTPS call it made (the daily "is there a newer release?" check, and the self-update
+  download) failed SSL verification and was quietly swallowed — the app never told you it
+  couldn't check, it just never found an update. Only a system-python dev run (which borrows
+  the OS's certs) ever actually worked.
+- **Fixed by bundling a CA certificate file into the app at build time**, used as a fallback
+  when the platform's own trust store comes up empty — the normal path is unchanged, this
+  only kicks in when default verification fails.
+- **Update-check failures are no longer silent.** `/api/update` now reports a short
+  `check_error` when a check fails, instead of just going quiet and reusing stale cache.
+- **Heads up:** if you're on 4.0.21 or older, your copy's updater can't download this fix
+  itself (that's the bug) — you'll need to grab 4.0.22 manually once from the Releases page.
+  Automatic update checks and one-click updates work normally from 4.0.22 on.
+
 ## 4.0.21 — 2026-07-21
 
 Session view: per-page and lazy-loading now do what they say, and both are configurable.
