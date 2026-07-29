@@ -405,5 +405,59 @@ class ImplicitPhraseHttp(unittest.TestCase):
         self.assertIn("exact phrase", body)
 
 
+def build_long_root():
+    """A session long enough (well past DEFAULT_LIM=1000 turns) that a goto deep inside it
+    lands on an OFF-CENTER window — i.e. the rendered page does not start at turn 0 — so the
+    server paints a #loadprev top sentinel (see 'the top of a lazily-windowed session' bug)."""
+    root = tempfile.mkdtemp()
+    proj = os.path.join(root, "-Users-x-long")
+    os.makedirs(proj)
+    sid = "cccccccc-dddd-eeee-ffff-000011112222"
+    lines = []
+    for i in range(1300):
+        lines.append({"type": "user", "message": {"role": "user", "content": f"turn {i}"}})
+    with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as fh:
+        for o in lines:
+            fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+    return root, os.path.join(proj, sid + ".jsonl")
+
+
+class LazyWindowGotoHttp(unittest.TestCase):
+    """Server-side half of the g/Home/Cmd+Up 'load to true top' fix: unit tests can only
+    reach the rendered HTML, not the browser-side scroll behavior, so this is a cheap smoke
+    test that the wiring shipped — the #loadprev sentinel is present for an off-center goto
+    window, and the loadAllThenTop JS function name is present to drive it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.path = build_long_root()
+        app.configure(cls.root)
+        app.DEFAULT_ROOTS = [cls.root]; app.SAVED_ROOTS = []
+        app.ROOTS[:] = [cls.root]; app.ROOT = cls.root
+        cls.srv = app.make_server(port=0)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def get(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
+            return r.status, r.read().decode("utf-8")
+
+    def test_offcenter_goto_window_has_loadprev_and_load_all_then_top(self):
+        # goto=1000 in a 1300-turn session with an explicit lim=200 (independent of whatever
+        # default_lim this machine's persisted settings.json happens to hold): the centered
+        # window is turns [900,1100), starting well past 0, so the top sentinel must be
+        # painted...
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.path) + "&goto=1000&lim=200")
+        self.assertEqual(status, 200)
+        self.assertIn('id=loadprev', body)
+        # ...and the client-side loader that walks it all the way to the true top must be
+        # wired into the page (g / Home / Cmd+Up all call this).
+        self.assertIn('loadAllThenTop', body)
+
+
 if __name__ == "__main__":
     unittest.main()

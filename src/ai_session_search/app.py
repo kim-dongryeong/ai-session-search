@@ -40,13 +40,14 @@ import zlib
 import time
 import urllib.parse
 from array import array
+import urllib.error
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.23"
+__version__ = "4.0.24"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -211,12 +212,24 @@ def _ssl_ctx(fallback=False):
 def _urlopen(req_or_url, timeout=None):
     """urllib.request.urlopen with an explicit, always-verifying SSL context: the OS/venv
     trust store first, falling back to our bundled CA bundle only if that fails
-    verification (the frozen-app case). Re-raises the original error if both fail."""
+    verification (the frozen-app case). Re-raises the original error if both fail.
+
+    urllib.request.urlopen does not always raise ssl.SSLCertVerificationError bare — for
+    plain (non-HTTPSHandler-customized) opens it wraps the SSL error inside
+    urllib.error.URLError, with the original exception as `e.reason`. Both shapes must be
+    caught or the bundled-CA retry silently never runs (the shipped-4.0.22 bug)."""
     import ssl
     try:
         return urllib.request.urlopen(req_or_url, timeout=timeout, context=_ssl_ctx())
     except ssl.SSLCertVerificationError:
         return urllib.request.urlopen(req_or_url, timeout=timeout, context=_ssl_ctx(fallback=True))
+    except urllib.error.URLError as e:
+        reason = e.reason
+        if isinstance(reason, ssl.SSLCertVerificationError) or (
+            isinstance(reason, ssl.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(reason)
+        ):
+            return urllib.request.urlopen(req_or_url, timeout=timeout, context=_ssl_ctx(fallback=True))
+        raise
 
 def check_update(force=False):
     """Return {current, latest, newer, url, frozen, checked, disabled}. Never raises."""
@@ -3961,6 +3974,13 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var af=document.querySelector('.chip-f.active');                      // a filter chip is active → back to All
       if(af){var all=document.querySelector('.chip-f[data-cat="*"]');if(all)all.click();return;}
       return;}
+    // Home / Cmd+Up: mirror of g — jump to the true top of a lazily-windowed session. Handled
+    // here (ahead of the metaKey/ctrlKey/altKey bailout below) so Cmd+Up isn't swallowed by it.
+    // Only hijacked when a #loadprev top sentinel is actually present; otherwise fall through
+    // to the browser's native Home/Cmd+Up scrolling untouched (no preventDefault).
+    if(!typing&&(e.key==='Home'||(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.code==='ArrowUp'))){
+      if(prv){e.preventDefault();loadAllThenTop();}
+      return;}
     if(typing||e.metaKey||e.ctrlKey||e.altKey)return;
     if(C==='Slash'&&e.shiftKey){e.preventDefault();toggleHelp();return;}          // ? = help
     if(C==='Slash'){e.preventDefault();var s=document.getElementById('qbox');if(s){s.focus();s.select();}return;}
@@ -3987,7 +4007,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='KeyU'){e.preventDefault();nav('data-list');return;}                   // back to the session (thread) list
     if(C==='KeyH'&&e.shiftKey){e.preventDefault();location.href='/';return;}      // home (all workspaces)
     if(C==='KeyG'){e.preventDefault();
-      if(e.shiftKey)loadAllThenBottom();else window.scrollTo(0,0);
+      if(e.shiftKey)loadAllThenBottom();else if(prv)loadAllThenTop();else window.scrollTo(0,0);
       return;}
   });
   // copy buttons (code view)
@@ -4134,6 +4154,8 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   }
   // Shift+G: load every remaining message (not just what's near the viewport), then land on
   // the true bottom. Reuses floadMore's fetch/busy-flag — no separate/racing loader.
+  // gLoadingAll is shared with loadAllThenTop below (g / Home / Cmd+Up) so the two "load
+  // everything" loops — one walking forward, one backward — can never run concurrently.
   var gLoadingAll=false;
   function loadAllThenBottom(){
     if(!fwd){window.scrollTo(0,document.body.scrollHeight);return;}
@@ -4172,6 +4194,23 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       po=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)ploadMore();});},{rootMargin:'300px 0px'});
       po.observe(prv);
     },600);
+  }
+  // g / Home / Cmd+Up: mirror of Shift+G/loadAllThenBottom — when a goto landed us mid-session
+  // (a #loadprev top sentinel is present), repeatedly drive ploadMore's fetch/busy-flag until
+  // every earlier message is loaded (sentinel removed / pfrom reaches 0), then land on the true
+  // top. The IntersectionObserver above (po) keeps working as normal during this — each prepend
+  // it may also trigger just re-checks the same pbusy flag, so there's no double-fetch race.
+  function loadAllThenTop(){
+    if(!prv){window.scrollTo(0,0);return;}
+    if(gLoadingAll)return;
+    gLoadingAll=true;
+    (function step(){
+      if(!prv){gLoadingAll=false;window.scrollTo(0,0);return;}
+      if(pbusy){setTimeout(step,30);return;}
+      if(pfrom<=0){gLoadingAll=false;window.scrollTo(0,0);return;}
+      ploadMore();
+      setTimeout(step,30);
+    })();
   }
   // live-update: poll the session file and APPEND new messages in place, like a chat — no reload.
   try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}

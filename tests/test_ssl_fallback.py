@@ -79,6 +79,87 @@ def _write_fake_pem(path):
             f.write("")
 
 
+class UrlopenSslFallback(unittest.TestCase):
+    """_urlopen itself: the real-world failure shape is urllib.request.urlopen wrapping the
+    SSL error inside urllib.error.URLError (as e.reason), NOT raising the bare
+    ssl.SSLCertVerificationError. A monkeypatch that raises the bare exception (the previous
+    test's mistake) passes even when the production `except ssl.SSLCertVerificationError:`
+    clause can never fire against a real urlopen call — so these simulate both shapes."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_meipass = getattr(sys, "_MEIPASS", None)
+        sys._MEIPASS = self.tmpdir
+        _write_fake_pem(os.path.join(self.tmpdir, "cacert.pem"))
+        app._SSL_CTX_CACHE.clear()
+
+    def tearDown(self):
+        if self._orig_meipass is None:
+            if hasattr(sys, "_MEIPASS"):
+                del sys._MEIPASS
+        else:
+            sys._MEIPASS = self._orig_meipass
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        app._SSL_CTX_CACHE.clear()
+
+    def test_wrapped_url_error_triggers_bundled_ca_fallback(self):
+        # First call (default context): urlopen wraps the verification failure in a
+        # URLError, with the original SSLCertVerificationError as .reason — this is what
+        # urllib.request.urlopen actually raises, not the bare exception.
+        wrapped = urllib.error.URLError(
+            ssl.SSLCertVerificationError("certificate verify failed: unable to get local issuer certificate"))
+        fake_resp = mock.sentinel.response
+        calls = []
+
+        def fake_urlopen(req_or_url, timeout=None, context=None):
+            calls.append(context)
+            if len(calls) == 1:
+                raise wrapped
+            return fake_resp
+
+        with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = app._urlopen("https://example.invalid/x", timeout=5)
+
+        self.assertIs(result, fake_resp)
+        self.assertEqual(len(calls), 2)
+        # call #1 used the default (OS/venv trust-store) context; call #2 used a DIFFERENT
+        # context — the bundled-CA fallback — proving the retry actually swapped contexts
+        # rather than e.g. retrying with the same (still-failing) default context.
+        self.assertIsNot(calls[0], calls[1])
+        self.assertIs(calls[0], app._ssl_ctx())
+        self.assertIs(calls[1], app._ssl_ctx(fallback=True))
+
+    def test_bare_ssl_cert_verification_error_also_triggers_fallback(self):
+        # Keep the bare-exception shape covered too — some code paths (or future urllib
+        # versions) might raise it unwrapped, and both shapes must trigger the same fallback.
+        fake_resp = mock.sentinel.response
+        calls = []
+
+        def fake_urlopen(req_or_url, timeout=None, context=None):
+            calls.append(context)
+            if len(calls) == 1:
+                raise ssl.SSLCertVerificationError("certificate verify failed")
+            return fake_resp
+
+        with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = app._urlopen("https://example.invalid/x", timeout=5)
+
+        self.assertIs(result, fake_resp)
+        self.assertEqual(len(calls), 2)
+        self.assertIsNot(calls[0], calls[1])
+
+    def test_unrelated_url_error_is_not_swallowed(self):
+        # A URLError whose .reason is NOT an SSL cert-verification failure (e.g. plain
+        # network-unreachable) must propagate untouched — no bundled-CA retry, no masking.
+        plain = urllib.error.URLError("no route to host")
+
+        with mock.patch.object(urllib.request, "urlopen", side_effect=plain) as m:
+            with self.assertRaises(urllib.error.URLError) as ctx:
+                app._urlopen("https://example.invalid/x", timeout=5)
+        self.assertIs(ctx.exception, plain)
+        self.assertEqual(m.call_count, 1)  # no retry attempted
+
+
 class UpdateCheckErrorSurfacing(unittest.TestCase):
     def setUp(self):
         self._orig_cfg = app.CONFIG_DIR

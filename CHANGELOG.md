@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.0.24 — 2026-07-29
+
+The 4.0.22 update-check fix didn't actually work in the field — fixed for real this time,
+plus you can now always reach the very top of a long session.
+
+- **Update checks and one-click self-update now really work in the downloadable builds.**
+  4.0.22 added a bundled-CA fallback for exactly this, but the fallback never actually ran:
+  Python's `urlopen` wraps the certificate error inside a different exception type than the
+  one the fallback was watching for, so the check kept failing the same way it always had.
+  The new `check_error` reporting from 4.0.22 is what surfaced this — thank you for the
+  reports. **Heads up:** if you're on 4.0.22 or 4.0.23, your copy's updater still can't
+  download this fix itself — you'll need to grab 4.0.24 manually once from the Releases
+  page. Automatic update checks and one-click updates work normally from 4.0.24 on.
+- **`g`, `Home`, and Cmd+Up now reach the true first message of a long session.** Opening a
+  session deep in (e.g. a search result far from the start) loads a window centered on that
+  point rather than the whole file, with a "Load earlier messages" sentinel above it. Pressing
+  `g` (or Home, or Cmd+Up) used to just scroll to the top of whatever had loaded so far, and
+  then loading more above would push you back down — you could never actually reach the
+  start. These now load everything above first (mirroring the Shift+G fix for the bottom),
+  then land you on the real first message.
+
 ## 4.0.23 — 2026-07-28
 
 Antigravity sessions now show which model (and its effort level — e.g. "Gemini 3.1 Pro
