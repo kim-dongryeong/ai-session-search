@@ -23,6 +23,18 @@ Pasting a sentence now lands on the session that actually contains it.
   zero-span "cluster" out of nothing; and a query with a duplicated word (pasting text that
   repeats a word) can once again land the fast, single-turn exact-coverage match instead of
   being forced into a weaker fallback.
+- **Infinite scroll in the session view is gone — replaced with explicit "load more" buttons
+  and real Prev/Next paging.** Scrolling to the bottom (or top) of a long session used to
+  silently pull in more messages on its own, which felt more surprising than convenient.
+  Now nothing loads until you click: "Load 100 more messages" at the bottom, "Load earlier
+  messages" at the top, or the classic Prev/Next page links (now also available on the
+  default conversation view, not just the filtered one). `g` / `Shift+G` / `Home` / Cmd+Up
+  still jump straight to the true top or bottom of a session in one shortcut.
+- **In-session search results can now be expanded with 100 messages of context before/after,
+  without leaving the search view.** Searching inside a session used to show only the matching
+  messages in isolation; each result now has a "▲ Load 100 before" / "▼ Load 100 after" button
+  that pulls in the surrounding conversation inline (visually dimmed to distinguish it from the
+  actual match), so you can read what led up to or followed a hit without losing your search.
 
 ## 4.0.24 — 2026-07-29
 

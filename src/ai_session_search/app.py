@@ -3456,7 +3456,7 @@ def _result_kind(txt):
                 return "edit"
     return "other"
 
-def render_turn(gi, t, q="", thread_link=None):
+def render_turn(gi, t, q="", thread_link=None, ctx=False):
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
     role_label, role_desc = tr(ROLE_LABEL.get(role, role)), tr(ROLE_DESC.get(role, ""))
     parts = []
@@ -3527,7 +3527,8 @@ def render_turn(gi, t, q="", thread_link=None):
     plink = f'<a class=permalink href="#t{gi}" title="{esc(tr("copy link to this message"))}">🔗</a>'
     who = (f'<div class=who><span title="{esc(role_desc)}">{role_label} {badges}</span>'
            f'<span class=whoR>{extra}{tstr}{plink}{link}</span></div>')
-    return f'<div class="msg {role}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
+    ctxcls = " ctxmsg" if ctx else ""
+    return f'<div class="msg {role}{ctxcls}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
@@ -3854,11 +3855,15 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 .msg.kfocus{outline:3px solid #1f6feb;outline-offset:2px}
 .card.rowfocus{outline:3px solid #1f6feb;outline-offset:1px}
 .msg:target{outline:3px solid #f59e0b;outline-offset:2px}
+.msg.ctxmsg{opacity:.68}                          /* surrounding context around a search hit — visually de-emphasized */
 .pg{display:flex;gap:10px;justify-content:center;margin:18px 0}
 .pg a{padding:7px 16px;border-radius:9px;background:#1f6feb;color:#fff;text-decoration:none;font-size:13px}
 .loadmore{display:flex;justify-content:center;margin:10px 0}
 .loadmore button{padding:6px 16px;border-radius:9px;border:1px solid #1f6feb;background:transparent;color:#1f6feb;cursor:pointer;font-size:12.5px}
 .loadmore button:hover{background:#1f6feb;color:#fff}
+.loadmore.ctxctl{margin:4px 0}
+.loadmore.ctxctl button{font-size:11.5px;padding:4px 12px}
+.loadmore.ctxctl button:disabled{opacity:.5;cursor:default}
 .loadspin{color:#8a93a3;letter-spacing:3px;font-size:16px;padding:8px}
 .searching{display:flex;align-items:center;gap:10px;padding:26px 6px;color:#5a6472;font-size:14px}
 .searching .spin{width:16px;height:16px;border:2px solid #c7ced8;border-top-color:#1f6feb;border-radius:50%;animation:aisspin .7s linear infinite;flex:none}
@@ -4215,29 +4220,27 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
   }
-  // continuous conversation view: the server paints a window; the rest of the session
-  // streams in as you scroll — forward automatically to the end, earlier on demand — so
-  // there are no 1000-message pages to click through to reach or read around a match.
-  var inView=function(el){var r=el.getBoundingClientRect();return r.top<innerHeight+800&&r.bottom>-800;};
+  // session view: the server paints a window; earlier/later messages are loaded only on
+  // explicit request — clicking "Load more"/"Load earlier" buttons, or the g/Shift+G/Home/
+  // Cmd+Up shortcuts below (which drive these same loaders programmatically, in a loop) —
+  // never merely by scrolling into view. No IntersectionObserver here on purpose.
   var markTools=function(){if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});};
-  // forward: append [since,end) in chunks, auto-triggered while the sentinel is near the viewport
+  // forward: append [since,end) in 100-message chunks, only on button click (or the loop below)
   var fwd=document.getElementById('loadfwd');
   if(fwd){
-    var fp=fwd.getAttribute('data-p'),fsince=+fwd.getAttribute('data-since'),fend=+fwd.getAttribute('data-end'),fq=fwd.getAttribute('data-q')||'',fbusy=false,fo=null;
+    var fp=fwd.getAttribute('data-p'),fsince=+fwd.getAttribute('data-since'),fend=+fwd.getAttribute('data-end'),fq=fwd.getAttribute('data-q')||'',fbusy=false;
     var floadMore=function(){
       if(!fwd||fbusy||fsince>=fend)return; fbusy=true;
-      var take=Math.min(200,fend-fsince);
+      var take=Math.min(100,fend-fsince);
       fetch('/api/session_tail?p='+encodeURIComponent(fp)+'&since='+fsince+'&limit='+take+(fq?'&q='+encodeURIComponent(fq):''))
         .then(function(r){return r.json();}).then(function(d){
           if(d&&d.html&&fwd)fwd.insertAdjacentHTML('beforebegin',d.html);
           fsince=(d&&d.end)?d.end:(fsince+take); markTools(); fbusy=false;
           if(!fwd)return;
-          if(fsince>=fend){if(fo)fo.disconnect();fwd.remove();fwd=null;return;}
-          if(inView(fwd))floadMore();            // keep pulling on fast scroll / short chunks
+          if(fsince>=fend){fwd.remove();fwd=null;}
         }).catch(function(){fbusy=false;});
     };
-    fo=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)floadMore();});},{rootMargin:'800px 0px'});
-    fo.observe(fwd);
+    var fbtn=fwd.querySelector('button'); if(fbtn)fbtn.addEventListener('click',floadMore);
   }
   // Shift+G: load every remaining message (not just what's near the viewport), then land on
   // the true bottom. Reuses floadMore's fetch/busy-flag — no separate/racing loader.
@@ -4256,13 +4259,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       setTimeout(step,30);
     })();
   }
-  // backward: prepend [from-take,from) with scroll anchoring so the view doesn't jump
+  // backward: prepend [from-take,from) with scroll anchoring so the view doesn't jump.
+  // Button-triggered only (or the g/Home/Cmd+Up loop below) — no auto-load on scroll.
   var prv=document.getElementById('loadprev');
   if(prv){
-    var pp=prv.getAttribute('data-p'),pfrom=+prv.getAttribute('data-from'),pq=prv.getAttribute('data-q')||'',pbusy=false,po=null;
+    var pp=prv.getAttribute('data-p'),pfrom=+prv.getAttribute('data-from'),pq=prv.getAttribute('data-q')||'',pbusy=false;
     var ploadMore=function(){
       if(!prv||pbusy||pfrom<=0)return; pbusy=true;
-      var take=Math.min(200,pfrom),since=pfrom-take;
+      var take=Math.min(100,pfrom),since=pfrom-take;
       fetch('/api/session_tail?p='+encodeURIComponent(pp)+'&since='+since+'&limit='+take+(pq?'&q='+encodeURIComponent(pq):''))
         .then(function(r){return r.json();}).then(function(d){
           if(d&&d.html&&prv){
@@ -4271,22 +4275,15 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
             window.scrollTo(0,window.scrollY+(document.documentElement.scrollHeight-h0));
           }
           pfrom=since; pbusy=false;
-          if(prv&&pfrom<=0){if(po)po.disconnect();prv.remove();prv=null;}
+          if(prv&&pfrom<=0){prv.remove();prv=null;}
         }).catch(function(){pbusy=false;});
     };
     var pbtn=prv.querySelector('button'); if(pbtn)pbtn.addEventListener('click',ploadMore);
-    // auto-load on scroll-to-top too, but not until the initial (goto) scroll has settled
-    setTimeout(function(){
-      if(!prv)return;
-      po=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)ploadMore();});},{rootMargin:'300px 0px'});
-      po.observe(prv);
-    },600);
   }
   // g / Home / Cmd+Up: mirror of Shift+G/loadAllThenBottom — when a goto landed us mid-session
   // (a #loadprev top sentinel is present), repeatedly drive ploadMore's fetch/busy-flag until
   // every earlier message is loaded (sentinel removed / pfrom reaches 0), then land on the true
-  // top. The IntersectionObserver above (po) keeps working as normal during this — each prepend
-  // it may also trigger just re-checks the same pbusy flag, so there's no double-fetch race.
+  // top. Each step re-checks the same pbusy flag, so there's no double-fetch race.
   function loadAllThenTop(){
     if(!prv){window.scrollTo(0,0);return;}
     if(gLoadingAll)return;
@@ -4373,6 +4370,43 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       if(navigator.clipboard){navigator.clipboard.writeText(url);}
       history.replaceState(null,'',pl.getAttribute('href'));
       var o=pl.textContent;pl.textContent='\u2713';setTimeout(function(){pl.textContent=o;},1000);return;}
+    // in-session-search context expanders: "Load 100 before/after" around one matched message.
+    // Repeated clicks keep extending in that direction; the boundary is tracked on the control's
+    // own data-before/data-after attribute so each click continues from where the last left off.
+    var xb=e.target.closest&&e.target.closest('.ctxbtn');
+    if(xb){e.preventDefault();if(xb.disabled)return;
+      var ctl=xb.closest('.ctxctl'); if(!ctl)return;
+      var cp=ctl.getAttribute('data-p'),cq=ctl.getAttribute('data-q')||'',dir=xb.getAttribute('data-dir');
+      var since,take,total;
+      if(dir==='before'){
+        var b=+ctl.getAttribute('data-before');
+        take=Math.min(100,b); since=b-take;
+        if(take<=0){ctl.remove();return;}
+      }else{
+        var a=+ctl.getAttribute('data-after'); total=+ctl.getAttribute('data-total');
+        since=a+1;
+        if(since>=total){ctl.remove();return;}
+        take=Math.min(100,total-since);
+      }
+      xb.disabled=true;
+      fetch('/api/session_tail?p='+encodeURIComponent(cp)+'&since='+since+'&limit='+take+'&ctx=1'+(cq?'&q='+encodeURIComponent(cq):''))
+        .then(function(r){return r.json();}).then(function(d){
+          if(d&&d.html){
+            if(dir==='before')ctl.insertAdjacentHTML('afterend',d.html);
+            else ctl.insertAdjacentHTML('beforebegin',d.html);
+            markTools();
+          }
+          if(dir==='before'){
+            ctl.setAttribute('data-before',since);
+            if(since<=0){ctl.remove();return;}
+          }else{
+            var end=(d&&d.end)?d.end:(since+take);
+            ctl.setAttribute('data-after',end-1);
+            if(end>=total){ctl.remove();return;}
+          }
+          xb.disabled=false;
+        }).catch(function(){xb.disabled=false;});
+      return;}
   });
   // event/error filter chips
   var active={};
@@ -4835,7 +4869,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(b)
         if u.path == "/api/session_tail":
-            # render turns [since, since+limit) so the client can append them (progressive / live, no reload)
+            # render turns [since, since+limit) so the client can append them (progressive / live, no
+            # reload). The caller picks the direction by choosing `since` — a "before" chunk is just
+            # [gi-limit, gi) requested the same way a "forward" chunk is — so no separate direction
+            # param is needed; this endpoint's contract (since/limit -> [since,end) forward slice) is
+            # unchanged for existing callers. ctx=1 is additive: it only flags the rendered turns as
+            # de-emphasized "context" (used by the in-session-search before/after expanders).
             p = g("p")
             if not (p and os.path.exists(p) and root_for_path(p) is not None):
                 return self._send_json({"error": "not found"}, 404)
@@ -4846,6 +4885,7 @@ class H(BaseHTTPRequestHandler):
                 since, lim = 0, 0
             turns = load_session(p)["turns"]
             qq = g("q", "")
+            ctx = g("ctx") == "1"
             end = len(turns) if lim <= 0 else min(len(turns), since + lim)
 
             def _tl(gi, t):     # keep the answer-thread link on lazily-loaded human turns
@@ -4855,7 +4895,7 @@ class H(BaseHTTPRequestHandler):
                 if qq:
                     params["q"] = qq
                 return "/session?" + urllib.parse.urlencode(params)
-            html = "".join(render_turn(gi, turns[gi], qq, _tl(gi, turns[gi])) for gi in range(since, end))
+            html = "".join(render_turn(gi, turns[gi], qq, _tl(gi, turns[gi]), ctx=ctx) for gi in range(since, end))
             return self._send_json({"n": len(turns), "end": end, "html": html})
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
@@ -5513,8 +5553,24 @@ class H(BaseHTTPRequestHandler):
             noise = {"tool-result", "system"}      # tool output / injected — usually search noise
             n_noise = sum(1 for _, role in hits if role in noise)
             show = [gi for gi, role in hits if sqtools or role not in noise]
-            body = [render_turn(gi, turns[gi], sq, url(thread=gi) if turns[gi]["role"] == "you" else None)
-                    for gi in show]
+            # per-result context controls: fetch the surrounding [-100, +100) messages via
+            # /api/session_tail (ctx=1 so they render visually de-emphasized) without leaving
+            # the search view. Omitted at the very edges of the session (nothing to load there).
+            def _ctxctl(dirn, gi):
+                arrow = "▲" if dirn == "before" else "▼"
+                lbl = tr("Load 100 before") if dirn == "before" else tr("Load 100 after")
+                attr = "data-before" if dirn == "before" else "data-after"
+                return (f'<div class="loadmore ctxctl" data-p="{esc(path)}" {attr}="{gi}" '
+                        f'data-q="{esc(sq)}" data-total="{len(turns)}">'
+                        f'<button type=button class=ctxbtn data-dir="{dirn}">{arrow} {lbl}</button></div>')
+            body = []
+            for gi in show:
+                tl = url(thread=gi) if turns[gi]["role"] == "you" else None
+                if gi > 0:
+                    body.append(_ctxctl("before", gi))
+                body.append(render_turn(gi, turns[gi], sq, tl))
+                if gi < len(turns) - 1:
+                    body.append(_ctxctl("after", gi))
             ms = int((time.perf_counter() - t0) * 1000)
             if n_noise and not sqtools:
                 extra = f' · <a href="{url(sq=sq, sqtools=1)}">+{n_noise} {tr("in tool results / system")}</a>'
@@ -5607,18 +5663,18 @@ class H(BaseHTTPRequestHandler):
         shown = page[:INIT_CHUNK] if lazy else page
         body = []
         if continuous and page and page[0][0] > 0:
-            # top sentinel — scrolling up (or clicking) prepends the earlier messages inline
+            # top control — clicking prepends 100 earlier messages inline (no auto-load on scroll)
             body.append(f'<div id=loadprev class=loadmore data-p="{esc(path)}" data-from="{page[0][0]}" '
                         f'data-q="{esc(q)}"><button type=button>↑ {tr("Load earlier messages")}</button></div>')
         for gi, t in shown:
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
             body.append(render_turn(gi, t, q, tl))
         if continuous and shown and shown[-1][0] + 1 < len(turns):
-            # forward sentinel — auto-loads to the end of the session as you scroll down.
-            # Must NOT be display:none (an IntersectionObserver never fires on a hidden node),
-            # so it's a visible, self-removing "loading" row.
+            # bottom control — clicking appends 100 more messages toward the end of the session
+            # (no auto-load on scroll; g/Shift+G/Home/Cmd+Up drive this + loadprev programmatically)
             body.append(f'<div id=loadfwd class=loadmore data-p="{esc(path)}" data-since="{shown[-1][0] + 1}" '
-                        f'data-end="{len(turns)}" data-q="{esc(q)}"><span class=loadspin>· · ·</span></div>')
+                        f'data-end="{len(turns)}" data-q="{esc(q)}">'
+                        f'<button type=button>↓ {tr("Load 100 more messages")}</button></div>')
         if goto_gi is not None:
             body.append(
                 '<script>window.addEventListener("load",function(){'
@@ -5668,11 +5724,11 @@ class H(BaseHTTPRequestHandler):
                     + f'<label class=hint title="{esc(tr("Render very long sessions incrementally as you scroll, instead of all at once"))}">'
                       f'<input type=checkbox id=lazytoggle{" checked" if get_lazy_render() else ""}> {tr("Lazy-load long sessions")}</label>'
                     + f'<span class=hint>· {tr("server")} {ms}ms<span id=perf></span> · '
-                    + (f'{total} {tr("msgs")} · {tr("scroll to load")}' if continuous else f'{tr("showing")} {len(page)}/{total} {tr("msgs")}') + ' · '
+                    + (f'{total} {tr("msgs")}' if (continuous and lim is None) else f'{tr("showing")} {len(page)}/{total} {tr("msgs")}') + ' · '
                       f'<kbd>n</kbd>/<kbd>p</kbd> {tr("my messages")} · <kbd>j</kbd>/<kbd>k</kbd> {tr("sessions")} · <kbd>?</kbd> {tr("all shortcuts")}</span>'
                     + '</form>')
         pg = []
-        if lim is not None and not continuous:      # continuous view scrolls instead of paging
+        if lim is not None:      # "all" per-page has nothing to page through
             if off > 0:
                 pg.append(f'<a href="{url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim))}">← {tr("Prev")}</a>')
             if off + lim < total:
@@ -5682,8 +5738,8 @@ class H(BaseHTTPRequestHandler):
         def _sh(s): return f'/session?p={urllib.parse.quote(s["path"])}' if s else ""
         navkeys = ('<span id=navkeys hidden'
                    f' data-prevsess="{esc(_sh(prev))}" data-nextsess="{esc(_sh(nxt))}"'
-                   f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0 and not continuous) else "")}"'
-                   f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total and not continuous) else "")}"'
+                   f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
+                   f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
                    f' data-list="{esc((("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/") + "#" + sid)}"'
                    f' data-code="{esc(url(view="code", q=q))}" data-filt="{esc(filt)}"></span>')
