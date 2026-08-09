@@ -1,5 +1,29 @@
 # Changelog
 
+## 4.0.25 — 2026-08-09
+
+Pasting a sentence now lands on the session that actually contains it.
+
+- **Session titles no longer bury the exact match under junk from unrelated sessions.**
+  The title-match bonus used to hand out a large, uncapped score for every query word found
+  anywhere in a title — including a single Korean particle matched inside an unrelated word
+  (e.g. "가" inside "추가"), or a bare digit matched inside a year (e.g. "2" inside "2026") —
+  and it counted a repeated query word multiple times. On a real paste with duplicated or
+  short words, that could push dozens of irrelevant sessions above the one that genuinely
+  contains the pasted text. The title bonus is now distinct-counted (a repeated query word
+  counts once), length-floored (single-character terms don't count at all), boundary-aware for
+  ASCII/Latin terms (so "app" can't match inside "happy"), and capped in total.
+- **A full-coverage, tightly-clustered content match now ranks at phrase level.** When every
+  query word lands together in one tight window — the only reason it isn't already an exact
+  phrase is usually stray punctuation or markdown emphasis inside the pasted text — it's now
+  scored like a near-exact paste instead of the plain, distance-driven cluster band.
+- Two supporting content-matching fixes that this uncovered: a bag-of-words match spanning a
+  turn split across several physical rows (a message mixing text with tool calls or code
+  blocks) no longer looks up a term's position in the wrong sub-row and fabricates a bogus
+  zero-span "cluster" out of nothing; and a query with a duplicated word (pasting text that
+  repeats a word) can once again land the fast, single-turn exact-coverage match instead of
+  being forced into a weaker fallback.
+
 ## 4.0.24 — 2026-07-29
 
 The 4.0.22 update-check fix didn't actually work in the field — fixed for real this time,

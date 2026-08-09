@@ -47,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.24"
+__version__ = "4.0.25"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -2250,7 +2250,11 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     if phrase_gis:                               # Tier 1: implicit exact phrase
         return {"kind": "row", "gis": sorted(set(phrase_gis)), "ww": ww,
                 "all_word": all_word, "span": 0, "phrase": True}
-    row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == ntot)
+    # gi_terms[gi] is a SET of distinct terms seen in that turn, so it can hold at most
+    # len(set(need)) entries — comparing it against the duplicate-inflated `ntot` (a query
+    # repeating a word, e.g. two "2"s) would make this coverage check permanently unsatisfiable
+    # and silently skip Tier 1's own row-tier fallback for any query with a repeated word.
+    row_gis = sorted(gi for gi, s in gi_terms.items() if len(s) == len(set(need)))
     if row_gis:                                  # every query word in one turn (cover==N, span≈0)
         return {"kind": "row", "gis": row_gis, "ww": ww, "all_word": all_word, "span": 0}
     if subrun:                                   # adjacency bonus: contiguous run → (partial) phrase
@@ -2262,6 +2266,13 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
     # sweep. Because Tier 1 / row / near-phrase already returned, the exact-paste path never runs
     # this — no double scan. One representative per turn means a term repeated many times inside a
     # single turn cannot exhaust the cap and hide a later turn's occurrence from the sweep.
+    # `present` is gathered per TURN (gi), the union of every physical sub-row sharing that turn
+    # index (a turn with a code block + prose, say, is several `r` entries with the same gi) — so
+    # `t in present` only proves the term is SOMEWHERE in the turn, not in this particular sub-row.
+    # Skip a sub-row that doesn't actually contain it: the sub-row that does is also in `active` and
+    # yields its own offset on its own iteration, so this drops no genuine occurrence — it only
+    # stops a phantom (-1, gi) offset from masquerading as a real position and letting unrelated
+    # terms "cluster" at that shared bogus position (span looks 0 when nothing is actually adjacent).
     occ = [[] for _ in need]
     for r in active:
         present = gi_terms.get(r["gi"])
@@ -2270,7 +2281,9 @@ def match_session(active, terms, phrases, blob="", tokens=array("Q")):
         a, b, gi = r["s"], r["e"], r["gi"]
         for ti, t in enumerate(need):
             if t in present and len(occ[ti]) < _POS_CAP:
-                occ[ti].append((blob.find(t, a, b), gi))
+                p = blob.find(t, a, b)
+                if p != -1:
+                    occ[ti].append((p, gi))
     M = ntot if phrases else _cover_gate(ntot)   # phrase present ⇒ hard AND (every unit required)
     return _proximity(occ, need, ww, cnt, M)
 
@@ -2565,6 +2578,49 @@ def fts_warm(root):
     except Exception:
         pass
 
+# ---- title match bonus (ranking, not recall) --------------------------------
+# The title bonus used to be `450 * sum(1 for t in need if t in title_low)`: a flat per-OCCURRENCE
+# award with no minimum term length and no cap, over a plain substring test. That let a single
+# repeated 1-char query term (a Korean particle like "가", or a bare digit that also matches inside
+# a year) rack up hundreds of points from titles that never actually matched the query's meaning —
+# e.g. "가" matching inside "추가" (add) or "리스트가" (…list-SUBJ), or "2" matching inside "2026".
+# A real content-cluster match tops out around 750 (see the `hit["kind"]` scoring below), so an
+# uncapped, substring, duplicate-counting title bonus could bury a genuinely strong content match
+# dozens of results down. Fixed here: DISTINCT terms only (a repeated query word counts once),
+# a minimum length so single characters can't drive the score alone, boundary-aware matching for
+# ASCII/Latin terms (Python's \w already treats CJK as a word character, so a boundary check on a
+# CJK term would also block legitimate space-less compounds like "학교급식" containing "학교" —
+# Korean/Japanese/Chinese have no reliable word-boundary convention, so those terms rely on the
+# length floor + distinct-count + cap instead of a boundary regex), and a total cap so the title
+# signal can push a session up but never single-handedly dominate every other signal.
+_TITLE_TERM_BONUS = 250   # per distinct qualifying term found in the title
+_TITLE_BONUS_CAP  = 750   # total title bonus ceiling — matches a perfect content cluster's max (~750)
+_TITLE_MIN_LEN    = 2     # ignore 1-char terms: bare Korean particles / digits are too noisy alone
+_CJK_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힣豈-﫿]")
+
+def _title_bonus(need, title_low):
+    """Distinct-counted, length-floored, capped title match bonus (see module note above)."""
+    hits = 0
+    for t in set(need):
+        if len(t) < _TITLE_MIN_LEN:
+            continue
+        if _CJK_RE.search(t):               # CJK: no word-boundary convention → plain substring,
+            if t in title_low:              # protected by the length floor + distinct-count + cap
+                hits += 1
+        elif word_re(t).search(title_low):  # ASCII/Latin: require a real word boundary so "app"
+            hits += 1                       # doesn't match inside "happy"
+    return min(_TITLE_TERM_BONUS * hits, _TITLE_BONUS_CAP)
+
+_FULL_COVER_SPAN  = _PROX_S   # a full-coverage window this tight (≤ one paragraph of chars) reads
+                               # as a paste, not just a topical cluster — see the score bonus below
+_FULL_COVER_BONUS = 300       # lifts a full-coverage tight cluster to ~row/phrase tier
+
+_ROW_TIGHT_GIS   = 3      # a row-tier hit concentrated in this many turns (or fewer) gets full credit
+_ROW_DILUTE_STEP = 20     # …each turn beyond that shaves this much off the row-tier score…
+_ROW_DILUTE_FLOOR = 700   # …down to this floor (still comfortably above a plain content cluster)
+_PHRASE_BONUS    = 300    # a true Tier-1 exact phrase outranks the plain bag-of-words row fallback
+                          # and the title bonus alone (max _TITLE_BONUS_CAP=750) can't overturn it
+
 # ---- data API (pure data; powers both the JSON HTTP endpoints and the MCP server) ----
 def search_api(root, q, scope="all", proj="", limit=30):
     """Search one root → list of result dicts (no HTML). Mirrors the web search."""
@@ -2626,12 +2682,43 @@ def search_api(root, q, scope="all", proj="", limit=30):
             if row:
                 snips.append({"turn": gi, "role": row["role"], "text": _snippet(row["text"], snip_terms).strip()})
         title_low = (it.get("title", "") or "").lower()
-        score = 450 * sum(1 for t in need if t in title_low) + (3000 if is_ref else 0)
+        score = _title_bonus(need, title_low) + (3000 if is_ref else 0)
         if hit:
             if hit["kind"] == "row":
-                score += 1000
+                # A row-tier hit is a bag-of-words match: every distinct query word landed
+                # SOMEWHERE in one turn, order-free, no adjacency required. When only a
+                # handful of turns in the whole session satisfy that, it's a strong "found the
+                # passage" signal (this repro's target session matches in exactly one turn: the
+                # heading that literally contains the pasted sentence). When DOZENS of turns
+                # independently satisfy it, the query is probably mostly common/generic words
+                # (particles, single digits) that surface throughout an unrelated conversation —
+                # e.g. a later session that discusses/quotes this very sentence while debugging
+                # this very search bug matches nearly every turn of that discussion. That's the
+                # same generic-word dilution the title bonus above was fixed for, just showing up
+                # in the content signal instead of the title, so it gets the same treatment:
+                # full credit for a tight, concentrated match; tapering (with a floor) as more and
+                # more turns pad the hit toward "this word is just common in this session."
+                ngis = len(hit["gis"])
+                score += 1000 if ngis <= _ROW_TIGHT_GIS else max(
+                    _ROW_DILUTE_FLOOR, 1000 - _ROW_DILUTE_STEP * (ngis - _ROW_TIGHT_GIS))
+                if hit.get("phrase") and not hit.get("partial"):
+                    # A genuine Tier-1 exact phrase (every word verbatim, in order, in one turn)
+                    # is a much stronger claim than the plain bag-of-words row-tier fallback above
+                    # (order-free, "every word landed somewhere in this turn"). Without this, a
+                    # session whose title happens to contain one query word (e.g. boilerplate
+                    # README text that shares "google" with an "…Google Drive Folder Link…"
+                    # paste) could out-title-bonus the session that actually contains the literal
+                    # sentence — the title bonus is a real signal, but it must not outrank the
+                    # strongest content signal there is.
+                    score += _PHRASE_BONUS
             else:                       # proximity cluster/session: continuous, distance-driven
                 score += 100 + round(_PROX_SCALE * hit.get("prox", 0.0))
+                if hit.get("cover") == len(need) and hit.get("span", 10**9) <= _FULL_COVER_SPAN:
+                    # every query slot landed in one tight window (≤ one paragraph of chars) —
+                    # the only reason this isn't a Tier-1 exact phrase is usually stray punctuation
+                    # or markdown inside the pasted text, so treat it like a near-exact paste and
+                    # lift it to (roughly) the same-turn "row" tier instead of the plain cluster band.
+                    score += _FULL_COVER_BONUS
             if hit.get("partial"):      # near-phrase ranks below a full phrase; more per absent word
                 score -= 120 + 220 * min(hit.get("missing", 0), 3)
         elif field_only:

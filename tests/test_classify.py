@@ -2,6 +2,7 @@
 nothing machine-authored may ever be classified as the human ("you")."""
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -1059,6 +1060,108 @@ class ImplicitPhraseJump(unittest.TestCase):
         self.assertGreaterEqual(len(gis), 2)
         self.assertTrue(any(g <= 2 for g in gis), gis)
         self.assertTrue(any(g >= 43 for g in gis), gis)
+
+
+class TitleBonus(unittest.TestCase):
+    """`_title_bonus` (search_api's ranking-only title-match signal): distinct-counted,
+    length-floored, capped, boundary-aware for ASCII/Latin — see the module note above it
+    in app.py for the substring/duplicate/uncapped bug this replaced."""
+
+    def test_distinct_terms_not_double_counted(self):
+        # "app" repeated three times in the query must still count once toward the bonus,
+        # not 3 * 250 — the exact "2" appearing twice in a query bug this was fixed for.
+        once = app._title_bonus(["app"], "the app is ready")
+        thrice = app._title_bonus(["app", "app", "app"], "the app is ready")
+        self.assertEqual(once, thrice)
+        self.assertEqual(once, app._TITLE_TERM_BONUS)
+
+    def test_one_char_term_floored_out(self):
+        # a bare single-character term (a Korean particle, a lone digit) contributes nothing,
+        # even when it "matches" via substring inside an unrelated word.
+        self.assertEqual(app._title_bonus(["2"], "roadmap 2026"), 0)
+        self.assertEqual(app._title_bonus(["가"], "리스트가 표시되지 않는 문제"), 0)
+
+    def test_total_bonus_is_capped(self):
+        many_terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+        title = " ".join(many_terms)     # every term genuinely present, whole-word
+        uncapped_would_be = app._TITLE_TERM_BONUS * len(many_terms)
+        self.assertGreater(uncapped_would_be, app._TITLE_BONUS_CAP)
+        self.assertEqual(app._title_bonus(many_terms, title), app._TITLE_BONUS_CAP)
+
+    def test_ascii_term_requires_word_boundary(self):
+        # "app" must not match inside "happy" — only a real word-boundary hit counts.
+        self.assertEqual(app._title_bonus(["app"], "a happy day"), 0)
+        self.assertEqual(app._title_bonus(["app"], "the app works"), app._TITLE_TERM_BONUS)
+
+    def test_cjk_term_matches_by_substring_no_boundary(self):
+        # Korean/Japanese/Chinese have no space-delimited word-boundary convention, so a
+        # qualifying (>=2 char) CJK term matches as a plain substring — e.g. it must still
+        # find a compound like "학교급식" containing "학교" even with nothing separating them.
+        self.assertEqual(app._title_bonus(["학교"], "학교급식 예산안"), app._TITLE_TERM_BONUS)
+
+
+class FullCoverageTightSpanBonus(unittest.TestCase):
+    """search_api's near-exact-paste bonus: a proximity cluster that covers every query slot
+    within a tight span reads as a paste that Tier 1 missed (usually due to punctuation/
+    markdown breaking the literal phrase), so it's scored near the row/phrase tier instead of
+    the plain distance-driven cluster band."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpcfg = tempfile.mkdtemp()
+        cls._orig_cfg = app.CONFIG_DIR
+        app.CONFIG_DIR = cls.tmpcfg
+        cls.root = tempfile.mkdtemp()
+        proj = os.path.join(cls.root, "-Users-x-proj")
+        os.makedirs(proj)
+
+        def write(sid, turns):
+            lines = []
+            for role, text in turns:
+                if role == "user":
+                    lines.append({"type": "user", "cwd": "/Users/x/proj",
+                                  "message": {"role": "user", "content": text}})
+                else:
+                    lines.append({"type": "assistant", "message": {"role": "assistant",
+                                  "content": [{"type": "text", "text": text}]}})
+            with open(os.path.join(proj, f"{sid}.jsonl"), "w", encoding="utf-8") as fh:
+                for o in lines:
+                    fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+
+        # TIGHT: all 4 terms across two adjacent, short turns — small char span, full coverage.
+        write("11111111-1111-1111-1111-111111111111",
+              [("user", "intro line"),
+               ("assistant", "alphaword betaword"),
+               ("assistant", "gammaword deltaword")])
+        # WIDE: same 4 terms, same session, but gamma/delta sit far past a long filler turn —
+        # full coverage too, just not a TIGHT window.
+        filler = " ".join(["padding filler text to add distance between the two halves"] * 6)
+        write("22222222-2222-2222-2222-222222222222",
+              [("user", "intro line"),
+               ("assistant", "alphaword betaword"),
+               ("assistant", filler),
+               ("assistant", "gammaword deltaword")])
+
+        app.configure(cls.root, exclusive=True)
+        app.ROOTS[:] = [cls.root]
+        app.ROOT = cls.root
+
+    @classmethod
+    def tearDownClass(cls):
+        app.CONFIG_DIR = cls._orig_cfg
+        shutil.rmtree(cls.root, ignore_errors=True)
+        shutil.rmtree(cls.tmpcfg, ignore_errors=True)
+
+    def test_tight_full_coverage_cluster_outscores_wide_one(self):
+        res = {r["sid"][:8]: r for r in app.search_api(self.root, "alphaword betaword gammaword deltaword",
+                                                         "all", "", 100)}
+        self.assertIn("11111111", res)
+        self.assertIn("22222222", res)
+        self.assertEqual(res["11111111"]["match"], "cluster")
+        self.assertGreater(res["11111111"]["score"], res["22222222"]["score"])
+        # the gap should be at least the bonus itself, not just noise
+        self.assertGreaterEqual(res["11111111"]["score"] - res["22222222"]["score"],
+                                 app._FULL_COVER_BONUS - 50)
 
 
 if __name__ == "__main__":
