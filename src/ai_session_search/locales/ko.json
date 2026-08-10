@@ -323,5 +323,8 @@
   "Searching…": "검색 중…",
   "Search failed — try again.": "검색 실패 — 다시 시도하세요.",
   "Manual reinstall needed": "수동 재설치 필요",
-  "This version renamed the app, so your current install can't update itself to it. Download it once from the Releases page — automatic updates resume after that.": "이번 버전에서 앱 신원(번들 ID)이 바뀌어, 지금 설치본은 자동으로 업데이트할 수 없어요. Releases 페이지에서 한 번만 직접 내려받아 재설치하면 이후부터는 다시 자동 업데이트됩니다."
+  "This version renamed the app, so your current install can't update itself to it. Download it once from the Releases page — automatic updates resume after that.": "이번 버전에서 앱 신원(번들 ID)이 바뀌어, 지금 설치본은 자동으로 업데이트할 수 없어요. Releases 페이지에서 한 번만 직접 내려받아 재설치하면 이후부터는 다시 자동 업데이트됩니다.",
+  "Building this project's timeline — the first open of a large project takes a few seconds…": "이 프로젝트의 타임라인을 만드는 중이에요 — 규모가 큰 프로젝트를 처음 열 때는 몇 초 정도 걸려요…",
+  "Couldn't load the timeline.": "타임라인을 불러오지 못했어요.",
+  "Retry": "다시 시도"
 }

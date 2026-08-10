@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.27 — 2026-08-10
+
+The project timeline now opens instantly, with an honest "building…" indicator instead of a
+blank tab.
+
+- **Fix: opening the timeline on a large project no longer looks frozen.** Merging every session
+  in a busy project (hundreds of sessions, tens of thousands of messages) can take several
+  seconds the first time — the page used to sit blank while that happened, with no sign anything
+  was working. The page now paints immediately (header, project name, sort toggle) with a
+  spinner and a plain explanation ("Building this project's timeline — the first open of a large
+  project takes a few seconds…"), then fetches the actual message stream in the background and
+  fills it in the moment it's ready — the same fetch-and-swap approach the search box already
+  uses for its own "Searching…" spinner. If the fetch fails, the placeholder turns into an error
+  with a Retry link. Everything on the page — the category filter chips and their digit-key
+  shortcuts, the source-session badges, Prev/Next paging and the `[` / `]` shortcuts — keeps
+  working once the content lands. Sessions that are already cached (the common case after the
+  first open) still fill in almost instantly; the spinner is just honest about the cases where
+  it can't be.
+
 ## 4.0.26 — 2026-08-10
 
 Read a whole project's conversation history as one story, and narrow a folder search to just

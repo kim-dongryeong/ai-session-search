@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.26"
+__version__ = "4.0.27"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -4135,6 +4135,39 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       else if(swapped)location.reload();   // only if we replaced THIS page's body; else leave normal history alone
     });
   })();
+  // ---- timeline: the shell (above) arrives instantly with a spinner placeholder (#tlbuild),
+  // never having run the expensive per-project merge. This immediately re-fetches the same URL
+  // with &ajax=1, which does that merge server-side and returns a bare fragment (messages +
+  // chips + paging), swapped straight into the placeholder — same shape as the search fragment
+  // above. bindChipFilters/buildMinimap/markTools are declared further down in this same script
+  // but are all in scope here (referenced only inside the async .then/.catch below, which run
+  // after the whole script has finished its first synchronous pass). ----
+  (function(){
+    if(location.pathname!=='/timeline')return;
+    var ph=document.getElementById('tlbuild');
+    if(!ph||!window.fetch)return;
+    function load(){
+      ph.className='searching';
+      ph.innerHTML='<span class=spin></span> %%TLBUILDING%%';
+      var url=location.pathname+location.search+(location.search?'&':'?')+'ajax=1';
+      fetch(url)
+        .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.text();})
+        .then(function(html){
+          ph.outerHTML=html;               // #tlbuild is gone now — re-query anything that pointed at page content
+          nk=document.getElementById('navkeys');   // [ / ] page-nav shortcuts read this
+          if(typeof bindChipFilters==='function')bindChipFilters();   // category chip filter + 0-9 shortcuts
+          if(typeof buildMinimap==='function')buildMinimap();
+          if(typeof markTools==='function')markTools();
+        })
+        .catch(function(){
+          ph.className='meta';
+          ph.innerHTML='%%TLERR%% <a href="#" id=tlretry>%%TLRETRY%%</a>';
+          var rt=document.getElementById('tlretry');
+          if(rt)rt.addEventListener('click',function(e){e.preventDefault();load();});
+        });
+    }
+    load();
+  })();
   var cur=-1;
   function ys(){return Array.prototype.slice.call(document.querySelectorAll('.msg.you'));}
   function focusYou(i){var a=ys();if(!a.length)return;cur=((i%a.length)+a.length)%a.length;
@@ -4542,13 +4575,20 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     });
     buildMinimap();
   }
-  document.querySelectorAll('.chip-f').forEach(function(b){
-    b.addEventListener('click',function(){
-      var c=b.getAttribute('data-cat');
-      if(c==='*'){active={};document.querySelectorAll('.chip-f').forEach(function(x){x.classList.remove('active');});applyFilter();return;}
-      active[c]=!active[c];b.classList.toggle('active',active[c]);applyFilter();
+  // named so the timeline ajax-fill block (above) can re-run it for chips that arrive later
+  // via &ajax=1 — a guard flag keeps re-invocation from double-binding chips bound earlier.
+  function bindChipFilters(){
+    document.querySelectorAll('.chip-f').forEach(function(b){
+      if(b._chipBound)return;
+      b._chipBound=true;
+      b.addEventListener('click',function(){
+        var c=b.getAttribute('data-cat');
+        if(c==='*'){active={};document.querySelectorAll('.chip-f').forEach(function(x){x.classList.remove('active');});applyFilter();return;}
+        active[c]=!active[c];b.classList.toggle('active',active[c]);applyFilter();
+      });
     });
-  });
+  }
+  bindChipFilters();
   // structure minimap (built from visible .msg)
   function catOf(m){
     var cats=(m.getAttribute('data-cats')||'').split(' ');
@@ -4819,6 +4859,8 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         "%%UPD_DISMISS%%": esc(tr("dismiss")), "%%UPD_COPY%%": esc(tr("click to copy")),
         "%%UPD_COPIED%%": esc(tr("copied ✓")),
         "%%SEARCHING%%": esc(tr("Searching…")), "%%SEARCHERR%%": esc(tr("Search failed — try again.")),
+        "%%TLBUILDING%%": esc(tr("Building this project's timeline — the first open of a large project takes a few seconds…")),
+        "%%TLERR%%": esc(tr("Couldn't load the timeline.")), "%%TLRETRY%%": esc(tr("Retry")),
         # token lets the same-origin page trigger the loopback-only self-updater (macOS app only)
         "%%UPD_TOKEN%%": (_SHUTDOWN_TOKEN or "") if self_update_supported() else "",
         "%%UPD_NOW%%": esc(tr("Update & restart")),
@@ -5073,7 +5115,7 @@ class H(BaseHTTPRequestHandler):
                                            g("goto", ""), g("sq", ""), g("sqtools", "")))
         if u.path == "/timeline":
             return self._send(self.timeline(g("proj"), root, g("sort", "new"),
-                                            gint("off"), gint("lim", 200)))
+                                            gint("off"), gint("lim", 200), ajax=g("ajax") == "1"))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot", "/pickroot"):
@@ -5311,14 +5353,26 @@ class H(BaseHTTPRequestHandler):
         return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=rootp, proj=proj_filter)
 
     # ---- project timeline: every session's messages merged into one chronological stream ----
-    def timeline(self, proj_filter, root=None, sort="new", off=0, lim=200):
+    def timeline(self, proj_filter, root=None, sort="new", off=0, lim=200, ajax=False):
+        """The merge across every session in a project (below, via _project_timeline_entries)
+        can take several seconds cold on a large project (200 sessions / 70k+ messages measured
+        ~9s). So this always responds in two passes, the same shape as search's ajax=1 fragment
+        path: a plain (non-ajax) request returns the page shell + a spinner placeholder in
+        milliseconds, WITHOUT touching the merge; the placeholder's own JS (in SHELL) immediately
+        re-requests the same URL with &ajax=1, which does the expensive merge and returns a bare
+        fragment (messages + chips + paging) that gets swapped into the placeholder. This applies
+        uniformly (every navigation gets the shell-then-fill treatment) rather than only on first
+        visit, per owner's ask — simpler than tracking "is this the first load" and always honest
+        about the merge cost even on the fast, already-cached path."""
         roots = active_roots(root)
         rootp = root_param(roots)
         if not proj_filter:
-            return shell(tr("Timeline"), f"<p class=meta>{tr('No project given.')}</p>", root=rootp)
-        t0 = time.perf_counter()
+            empty = f"<p class=meta>{tr('No project given.')}</p>"
+            return empty if ajax else shell(tr("Timeline"), empty, root=rootp)
         # same project-selection logic as index()'s proj_filter, so the timeline covers exactly
-        # the sessions the folder page lists (including multi-provider merging via proj_canon)
+        # the sessions the folder page lists (including multi-provider merging via proj_canon).
+        # This part (index scan + canon) is cheap — it's the per-session parse/merge below
+        # (_project_timeline_entries) that's slow, so only that part is deferred to ajax=1.
         all_items = [it for r in roots for it in get_index(r)]
         all_items, _dup = dedupe_sids(all_items)
         canon = proj_canon(all_items)
@@ -5334,12 +5388,6 @@ class H(BaseHTTPRequestHandler):
             sort = "new"
         lim = max(1, min(lim, 2000))
 
-        entries = _project_timeline_entries((rootp, pf), items)  # per-session cache, k-way merged
-        total = len(entries)
-        ordered = entries if sort == "old" else list(reversed(entries))
-        off = max(0, min(off, max(0, total - 1))) if total else 0
-        page = ordered[off:off + lim]
-
         def q(**kw):
             parts = [f"{k}={urllib.parse.quote(str(v))}" for k, v in kw.items() if v not in (None, "")]
             return "/timeline?" + "&".join(parts) if parts else "/timeline"
@@ -5352,6 +5400,27 @@ class H(BaseHTTPRequestHandler):
         sorttoggle = (f'<div class=bar><span class=meta>{tr("Sort")}:</span> '
                       f'<a class="{"on" if sort=="new" else ""}" href="{qbase(sort="new", off=0)}">{tr("Newest first")}</a>'
                       f'<a class="{"on" if sort=="old" else ""}" href="{qbase(sort="old", off=0)}">{tr("Oldest first")}</a></div>')
+
+        crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rootp})}" title="{esc(tr("this folder"))}">📁 {esc(_roots_label(roots))}</a>' if rootp else ""
+        ws_href = "/?" + urllib.parse.urlencode({"proj": proj_filter, "root": rootp})
+        crumb = (f'<div class=crumbs>{crumb_root}{" <span class=crumbsep>›</span> " if crumb_root else ""}'
+                 f'<a class=crumb href="{ws_href}" title="{esc(tr("this workspace"))}">📂 {esc(label)}</a>'
+                 f' <span class=crumbsep>›</span> <span class=crumbcur>🕓 {tr("Timeline")}</span></div>')
+        head = crumb + f'<h3 style="margin:4px 0 8px">🕓 {tr("Read all messages in one timeline")}</h3>'
+
+        if not ajax:
+            building_msg = esc(tr("Building this project's timeline — the first open of a large project takes a few seconds…"))
+            placeholder = f'<div id=tlbuild class=searching><span class=spin></span> {building_msg}</div>'
+            return shell(tr("Timeline") + " — " + label, head + sorttoggle + placeholder,
+                         root=rootp, proj=proj_filter)
+
+        # ---- expensive part: only runs for the ajax=1 fragment request ----
+        t0 = time.perf_counter()
+        entries = _project_timeline_entries((rootp, pf), items)  # per-session cache, k-way merged
+        total = len(entries)
+        ordered = entries if sort == "old" else list(reversed(entries))
+        off = max(0, min(off, max(0, total - 1))) if total else 0
+        page = ordered[off:off + lim]
 
         prev_href = qbase(off=max(0, off - lim)) if off > 0 else ""
         next_href = qbase(off=off + lim) if off + lim < total else ""
@@ -5377,18 +5446,11 @@ class H(BaseHTTPRequestHandler):
         navkeys = (f'<span id=navkeys hidden data-prevpage="{esc(prev_href)}" data-nextpage="{esc(next_href)}"></span>')
 
         ms = int((time.perf_counter() - t0) * 1000)
-        crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rootp})}" title="{esc(tr("this folder"))}">📁 {esc(_roots_label(roots))}</a>' if rootp else ""
-        ws_href = "/?" + urllib.parse.urlencode({"proj": proj_filter, "root": rootp})
-        crumb = (f'<div class=crumbs>{crumb_root}{" <span class=crumbsep>›</span> " if crumb_root else ""}'
-                 f'<a class=crumb href="{ws_href}" title="{esc(tr("this workspace"))}">📂 {esc(label)}</a>'
-                 f' <span class=crumbsep>›</span> <span class=crumbcur>🕓 {tr("Timeline")}</span></div>')
-        head = (crumb + f'<h3 style="margin:4px 0 8px">🕓 {tr("Read all messages in one timeline")}</h3>'
-                f'<p class=meta>{len(items)} {tr("sessions")} · {total} {tr("messages")} · {tr("server")} {ms}ms</p>')
-        if not entries:
-            head += f'<div class=card><b>{tr("No messages in this project.")}</b></div>'
-        return shell(tr("Timeline") + " — " + label,
-                     head + navkeys + sorttoggle + chip_html + pgbar + "".join(body) + pgbar,
-                     root=rootp, proj=proj_filter)
+        stat = f'<p class=meta>{len(items)} {tr("sessions")} · {total} {tr("messages")} · {tr("server")} {ms}ms</p>'
+        empty_card = f'<div class=card><b>{tr("No messages in this project.")}</b></div>' if not entries else ""
+        # bare fragment (no shell()) — the placeholder's JS swaps this straight into #tlbuild,
+        # same shape as /search's ajax=1 fragment
+        return stat + empty_card + navkeys + chip_html + pgbar + "".join(body) + pgbar
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to="", ajax=False):

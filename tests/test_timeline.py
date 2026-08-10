@@ -104,6 +104,12 @@ class TimelineBase(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
             return r.status, r.read().decode("utf-8")
 
+    def get_ajax(self, path):
+        """Same request with &ajax=1 appended — the fragment path that carries the actual
+        (possibly expensive) merge, mirroring how /search's ajax=1 is used in its own tests."""
+        sep = "&" if "?" in path else "?"
+        return self.get(f"{path}{sep}ajax=1")
+
 
 class MergedOrdering(TimelineBase):
     @classmethod
@@ -117,8 +123,9 @@ class MergedOrdering(TimelineBase):
 
     def test_merged_stream_interleaves_both_sessions(self):
         # a correct chronological merge must contain messages from BOTH sessions on one page,
-        # not session A in full followed by session B in full
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        # not session A in full followed by session B in full — the merge itself only runs on
+        # the ajax=1 fragment request now, so that's what we fetch here
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertEqual(status, 200)
         self.assertIn("s1 msg1", body)
         self.assertIn("s2 msg1", body)
@@ -126,23 +133,23 @@ class MergedOrdering(TimelineBase):
         self.assertIn("s2 reply1", body)
 
     def test_newest_first_default(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertEqual(status, 200)
         # the latest message overall is s1's 00:05:00 one
         self.assertIn("s1 msg2 latest", self._first_msg_text(body))
 
     def test_oldest_first(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=old")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=old")
         self.assertEqual(status, 200)
         self.assertIn("s1 msg1", self._first_msg_text(body))
 
     def test_sort_directions_give_different_first_message(self):
-        _, new_body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=new")
-        _, old_body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=old")
+        _, new_body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=new")
+        _, old_body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&sort=old")
         self.assertNotEqual(self._first_msg_text(new_body), self._first_msg_text(old_body))
 
     def test_source_badge_links_session_and_turn(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertEqual(status, 200)
         # session A's first turn (gi=0) must be reachable via goto=0 back into /session
         # matches this file's existing convention (see session()'s crumb links): hrefs built
@@ -152,22 +159,24 @@ class MergedOrdering(TimelineBase):
         self.assertIn(expected_href, body)
 
     def test_distinct_session_links_present(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         links = set(re.findall(r'/session\?p=([^&"]+)&(?:amp;)?goto=\d+', body))
         self.assertGreaterEqual(len(links), 2)
 
     def test_category_chips_render_with_counts(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertIn("class=chip-f", body)
         self.assertIn('data-cat="*"', body)
         self.assertIn('data-cat="you"', body)
         self.assertIn("class=cnt", body)
 
     def test_no_intersection_observer(self):
+        # checked on the shell (non-ajax) response — it's the one that must paint instantly
         status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertNotIn("new IntersectionObserver", body)
 
     def test_sort_toggle_present(self):
+        # the sort toggle is cheap to render (no merge needed) so it lives in the shell itself
         status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
         self.assertIn("sort=new", body)
         self.assertIn("sort=old", body)
@@ -180,33 +189,33 @@ class Paging(TimelineBase):
         cls._start(cls.root)
 
     def test_lim_slices_correctly(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5")
         self.assertEqual(status, 200)
         self.assertEqual(body.count("class=tlentry"), 5)
 
     def test_next_present_when_more_remain(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=0")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=0")
         self.assertIn(">Next", body)
         self.assertIn("off=5", body)
 
     def test_prev_absent_on_first_page(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=0")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=0")
         self.assertNotIn("Prev</a>", body)
 
     def test_prev_present_on_later_page(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=5")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=5")
         self.assertIn("Prev</a>", body)
         self.assertIn("off=0", body)
 
     def test_last_page_has_no_next(self):
         # 24 messages, lim=5 -> pages at off 0,5,10,15,20 (last has 4 items)
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=20")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5&off=20")
         self.assertEqual(status, 200)
         self.assertEqual(body.count("class=tlentry"), 4)
         self.assertNotIn(">Next", body)
 
     def test_total_count_shown(self):
-        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=5")
         self.assertIn("24", body)
 
 
@@ -305,6 +314,11 @@ class MissingProject(TimelineBase):
         self.assertEqual(status, 200)
         self.assertNotIn("class=tlentry", body)
 
+    def test_unknown_proj_ajax_fragment_does_not_500(self):
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote("/nowhere/at/all"))
+        self.assertEqual(status, 200)
+        self.assertNotIn("class=tlentry", body)
+
 
 class ProjectPageEntryPoints(TimelineBase):
     """Feature A (scope select on the folder-only search form) + the new timeline link,
@@ -331,6 +345,79 @@ class ProjectPageEntryPoints(TimelineBase):
         self.assertIn("name=scope", form_html)
         for scope_key in app.SCOPES:
             self.assertIn(f'value="{scope_key}"', form_html)
+
+
+class ShellThenFragment(TimelineBase):
+    """The 4.0.27 progress-indicator split: a plain /timeline request must paint instantly (shell
+    + spinner placeholder, no merge, no rendered messages), and only &ajax=1 does the expensive
+    per-session merge and returns a bare message-list fragment (no page shell/header)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.proj_dir, cls.sid_a, cls.sid_b = build_two_session_root()
+        cls._start(cls.root)
+
+    def test_shell_returns_quickly_with_placeholder_and_no_messages(self):
+        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        self.assertEqual(status, 200)
+        # placeholder + spinner markup (reuses the same .searching/.spin the search ajax path uses)
+        self.assertIn("id=tlbuild", body)
+        self.assertIn("class=searching", body)
+        self.assertIn("class=spin", body)
+        # the honest explanatory line
+        self.assertIn("Building this project", body)
+        # must NOT have done the merge — no rendered message bodies, chips, or paging yet
+        self.assertNotIn("class=tlentry", body)
+        self.assertNotIn("class=chip-f", body)
+        self.assertNotIn("s1 msg1", body)
+        self.assertNotIn("s2 msg1", body)
+
+    def test_ajax_fragment_has_messages_and_not_full_shell(self):
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        self.assertEqual(status, 200)
+        self.assertIn("class=tlentry", body)
+        self.assertIn("s1 msg1", body)
+        self.assertIn("s2 msg1", body)
+        # bare fragment, not a second full page — no doctype/html/header duplication
+        self.assertNotIn("<html", body)
+        self.assertNotIn("<!doctype", body.lower())
+        self.assertNotIn("<header", body)
+
+    def test_chips_and_paging_present_in_fragment_not_shell(self):
+        shell_status, shell_body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=1")
+        frag_status, frag_body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=1")
+        self.assertEqual(shell_status, 200)
+        self.assertEqual(frag_status, 200)
+        self.assertNotIn("class=chip-f", shell_body)
+        self.assertNotIn("class=cnt", shell_body)
+        self.assertNotIn(">Next", shell_body)
+        self.assertIn("class=chip-f", frag_body)
+        self.assertIn("class=cnt", frag_body)
+        self.assertIn(">Next", frag_body)
+
+    def test_fragment_ordering_and_paging_match_full_page_before_the_split(self):
+        # regression guard: build the pre-split full page's message order + Prev/Next state
+        # directly from the merge helper (same thing the old single-pass timeline() used), and
+        # check the ajax=1 fragment's own ordering/paging against it for identical params
+        # matches the (rootp, pf) cache key app.timeline() itself computes: with a single
+        # configured root, root_param() collapses to "" (means "all roots"); the project key is
+        # the canonical cwd (proj_canon maps each provider's folder-slug proj key to it)
+        all_items = app.get_index(self.root)
+        canon = app.proj_canon(all_items)
+        proj_items = [it for it in all_items
+                      if it["proj"] == PROJ_CWD or canon.get(it["proj"], it["proj"]) == PROJ_CWD]
+        entries = app._project_timeline_entries(("", PROJ_CWD), proj_items)
+        ordered = list(reversed(entries))  # default sort=new
+        lim = 1
+        expected_first_title_gi = (ordered[0]["path"], ordered[0]["gi"]) if ordered else None
+        _, frag_body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + f"&lim={lim}")
+        m = re.search(r'/session\?p=([^&"]+)&(?:amp;)?goto=(\d+)', frag_body)
+        self.assertIsNotNone(m)
+        got_path = urllib.parse.unquote(m.group(1))
+        got_gi = int(m.group(2))
+        self.assertEqual((got_path, got_gi), expected_first_title_gi)
+        # paging text ("1–1 / N") must match total entries
+        self.assertIn(f"/ {len(entries)}", frag_body)
 
 
 if __name__ == "__main__":
