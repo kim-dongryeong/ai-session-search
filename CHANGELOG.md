@@ -19,6 +19,19 @@ blank tab.
   first open) still fill in almost instantly; the spinner is just honest about the cases where
   it can't be.
 
+- **Fix: one-click "Update & restart" could land the app on a temporary random port and
+  create a dead duplicate "installed app."** The updater swaps in the new version while the
+  previous one is still shutting down; if the new version tried to take over the usual port
+  before the old one had finished exiting, it gave up right away and grabbed whatever random
+  port was free instead. The browser saw that random port as a brand-new site, showed the
+  first-run "install as app" page again, and — if you clicked through it — created a second,
+  permanently broken "installed app" shortcut pointing at a port that would never exist again.
+  The app now waits a few seconds for its usual port to free up before giving up on it; if it
+  truly can't have that port back, it picks another stable port instead of a random one, says
+  so plainly (on the console and with a dismissible note in the app itself), and — while it's
+  on that temporary stopgap — won't offer to install itself as an app at all, since doing so is
+  exactly what created the broken duplicate in the first place.
+
 ## 4.0.26 — 2026-08-10
 
 Read a whole project's conversation history as one story, and narrow a folder search to just

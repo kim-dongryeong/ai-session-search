@@ -3652,8 +3652,10 @@ def render_turn(gi, t, q="", thread_link=None, ctx=False):
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
-<script>/* before first paint: ?welcome=1 → show the install modal from the very first frame */
-try{if(new URLSearchParams(location.search).get('welcome')==='1'&&!(window.matchMedia&&(matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: window-controls-overlay)').matches)))document.documentElement.classList.add('welcome');}catch(e){}</script>
+<script>/* before first paint: ?welcome=1 → show the install modal from the very first frame —
+   unless we're on a temporary (non-canonical) port, where #installmodal isn't even rendered
+   (see %%INSTALLMODAL%%) and adding the 'welcome' class would just leave the page blank. */
+try{if(!%%TEMP_PORT_JS%%&&new URLSearchParams(location.search).get('welcome')==='1'&&!(window.matchMedia&&(matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: window-controls-overlay)').matches)))document.documentElement.classList.add('welcome');}catch(e){}</script>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -3711,6 +3713,10 @@ header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
 @media(prefers-color-scheme:dark){.updnotes{color:#7fb0ff}}
 .updx{background:none;border:0;font-size:15px;cursor:pointer;color:inherit;opacity:.55;padding:2px 6px;line-height:1}
 .updx:hover{opacity:1}
+/* temporary-port warning (server-rendered, only when this run isn't on its canonical
+   port) — same bar idiom as the update notice above, just amber instead of blue/green */
+.portwarn{background:linear-gradient(90deg,#fff3e0,#fdeee0);color:#5a3a12}
+@media(prefers-color-scheme:dark){.portwarn{background:linear-gradient(90deg,#3a2a12,#33210f);color:#f0dfc4}}
 .modal-ov{display:none;position:fixed;inset:0;z-index:50;overflow:hidden;color:#fff;align-items:center;justify-content:center;padding:30px 20px;background:
 radial-gradient(1600px 1100px at 6% -18%,rgba(255,96,210,.55),rgba(255,96,210,0) 64%),
 radial-gradient(1700px 1200px at 110% 115%,rgba(56,224,255,.55),rgba(56,224,255,0) 64%),
@@ -4072,11 +4078,12 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   </form>
   <div class=header-tools>
     <button type=button id=copyurl class=advbtn title="%%COPYURLTITLE%%">🔗</button>
-    <button type=button id=installbtn class=advbtn style="display:none" title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>
+    %%INSTALLBTN%%
     %%LANGSW%%
     %%VERBADGE%%
   </div>
 </header>
+%%PORTWARN%%
 %%ROOTBAR%%
 <div class=wrap id=wrap>%%BODY%%</div>
 %%INSTALLMODAL%%
@@ -4832,10 +4839,27 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
               f'<h3 style="margin:0 0 12px">⌨️ {esc(tr("Keyboard shortcuts"))}</h3><table class=kbtab>'
               + "".join(f'<tr><td><kbd>{esc(k)}</kbd></td><td>{esc(v)}</td></tr>' for k, v in kbrows)
               + '</table></div></div>')
+    # On a temporary (non-canonical) port: suppress "Install as app" entirely — installing
+    # a PWA against a temporary origin is exactly what produces a broken duplicate bundle
+    # once the port goes back to normal — and show a dismissible warning instead, reusing
+    # the update-bar CSS idiom (.updbar/.updtxt/.updx) with an amber .portwarn accent.
+    install_btn = ('' if _ON_TEMP_PORT else
+        '<button type=button id=installbtn class=advbtn style="display:none" '
+        'title="%%INSTALLTITLE%%">%%INSTALLLBL%%</button>')
+    port_warn = ('' if not _ON_TEMP_PORT else
+        '<div class="updbar portwarn" id=portwarn><span class=updtxt>⚠️ '
+        + esc(tr("Running on a temporary port — the installed app window may not connect. "
+                 "Restart once the other AI Session Search process has fully exited to "
+                 "return to the usual port."))
+        + '</span><button type=button class=updx title="' + esc(tr("dismiss"))
+        + '" onclick="this.parentElement.remove()">✕</button></div>')
     repl = {
         "%%KBHELP%%": kbhelp,
         "%%CONVONLY%%": esc(tr("conversation only — press t to show tools")),
-        "%%INSTALLMODAL%%": install_modal,
+        "%%INSTALLMODAL%%": ('' if _ON_TEMP_PORT else install_modal),
+        "%%INSTALLBTN%%": install_btn,
+        "%%PORTWARN%%": port_warn,
+        "%%TEMP_PORT_JS%%": ("true" if _ON_TEMP_PORT else "false"),
         "%%TITLE%%": esc(title), "%%BODY%%": body, "%%Q%%": esc(q),
         "%%SCOPEOPTS%%": scopeopts, "%%DAYSOPTS%%": daysopts,
         "%%FROM%%": esc(from_), "%%TO%%": esc(to),
@@ -6273,7 +6297,48 @@ def _port_free(port, host="127.0.0.1"):
     finally:
         s.close()
 
+# How long we retry the intended (committed) port before giving up on it. A self-update
+# swaps the app bundle out from under a still-running old server, then launches the new
+# build (_install_helper) — the old process can take a few seconds to actually release its
+# socket after _replace_stale_server asks it to shut down. 14 attempts spaced 0.25s apart
+# cover ~3.5s of retry: comfortably longer than the old process's own ~2s graceful-exit
+# window, without making a genuine failure (a FOREIGN app squatting on the port) feel slow.
+_PORT_BIND_ATTEMPTS = 14
+_PORT_BIND_DELAY = 0.25
+
+def _bind_retrying(host, port, attempts=_PORT_BIND_ATTEMPTS, delay=_PORT_BIND_DELAY):
+    """Try to bind `port`, retrying briefly on OSError ("address already in use"). A
+    predecessor process that was just asked to exit doesn't always release its socket
+    instantly, so we give the OS a few seconds before treating the port as unavailable.
+    Returns the bound server, or None if `port` is still taken after the retry window."""
+    for i in range(attempts):
+        try:
+            return make_server(host, port)
+        except OSError:
+            if i < attempts - 1:
+                time.sleep(delay)
+    return None
+
+def _bind_fallback(host, avoid_port):
+    """`avoid_port` would not bind even after retrying. Prefer another PORT_CANDIDATES
+    port over an ephemeral one — it's stable and reusable across restarts, unlike a random
+    port, which is what produced the duplicate-PWA bug this exists to avoid. An ephemeral
+    port (0) is the last resort, used only if the whole candidate range is unavailable.
+    Returns (server, landed_on_a_stable_candidate: bool)."""
+    for p in PORT_CANDIDATES:
+        if p == avoid_port:
+            continue
+        try:
+            return make_server(host, p), True
+        except OSError:
+            continue
+    return make_server(host, 0), False
+
 _SHUTDOWN_TOKEN = None   # set at server start when bound to loopback; None disables /api/shutdown
+_ON_TEMP_PORT = False    # True once main() lands on a port other than its intended/canonical
+                         # one; the UI reads this to warn instead of silently misbehaving, and
+                         # to suppress the "Install as app" affordance (installing a PWA against
+                         # a temporary origin is exactly what mints a broken duplicate bundle).
 
 def _write_runtime_file(port):
     global _SHUTDOWN_TOKEN
@@ -6486,23 +6551,42 @@ def main(argv=None):
             if _replace_stale_server(running, args.host) and committed is None:
                 committed = running   # adopt the freed port as ours
 
+    global _ON_TEMP_PORT
+    _ON_TEMP_PORT = False
     if args.port is not None:
+        # An explicit --port is the user's own choice, not our port-identity scheme \u2014 try
+        # it once, same immediate ephemeral fallback as before. No retries, no candidate
+        # fallback, no "temporary port" UI (there's no canonical port to compare it to).
         port = args.port
-    elif app_launch:
-        # committed port wins; first run picks the lowest free candidate and commits it.
-        port = committed or next((p for p in PORT_CANDIDATES if _port_free(p, args.host)),
-                                 DEFAULT_PORT)
+        try:
+            srv = make_server(args.host, port)
+        except OSError:
+            print(f"  \u26a0\ufe0f  Port {port} is in use by another app \u2014 using a temporary port this time.")
+            srv = make_server(args.host, 0)
     else:
-        port = DEFAULT_PORT
-    try:
-        srv = make_server(args.host, port)
-    except OSError:
-        # Our committed/target port is held by a FOREIGN app (we never kill those \u2014 only
-        # servers that answer /api/status as ours). Fall back to an ephemeral port for this
-        # session, but do NOT commit it, so we return to the stable port once the foreign
-        # app is gone. (This is the one case a PWA can still be transiently wrong.)
-        print(f"  \u26a0\ufe0f  Port {port} is in use by another app \u2014 using a temporary port this time.")
-        srv = make_server(args.host, 0)
+        if app_launch:
+            # committed port wins; first run picks the lowest free candidate and commits it.
+            port = committed or next((p for p in PORT_CANDIDATES if _port_free(p, args.host)),
+                                     DEFAULT_PORT)
+        else:
+            port = DEFAULT_PORT
+        # Give a just-killed predecessor's socket a few seconds to be released (see
+        # _bind_retrying) before accepting that the port is genuinely unavailable.
+        srv = _bind_retrying(args.host, port)
+        if srv is None:
+            srv, landed_stable = _bind_fallback(args.host, port)
+            _ON_TEMP_PORT = True
+            actual = srv.server_address[1]
+            if landed_stable:
+                print(f"  \u26a0\ufe0f  Port {port} is still in use after waiting \u2014 using port {actual} "
+                      f"this time. It should return to {port} once the other process is gone.")
+            else:
+                # Our committed/target port (and the whole candidate range) is held by a
+                # FOREIGN app (we never kill those \u2014 only servers that answer /api/status as
+                # ours). Fall back to an ephemeral port for this session, but do NOT commit
+                # it, so we return to the stable port once the foreign app is gone.
+                print(f"  \u26a0\ufe0f  Port {port} is in use by another app \u2014 using a temporary port "
+                      f"{actual} this time.")
     if app_launch and committed is None and srv.server_address[1] in PORT_CANDIDATES:
         _commit_port(srv.server_address[1])   # remember this machine's port for next launch
     try:
