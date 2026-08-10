@@ -27,6 +27,7 @@ import difflib
 import glob
 import gzip
 import hashlib
+import heapq
 import hmac
 import html
 import json
@@ -2947,53 +2948,86 @@ def _ts_epoch(ts):
     except Exception:
         return None
 
-_TIMELINE_CACHE = {"by_key": {}, "lock": threading.Lock()}
+_TIMELINE_SESSION_CACHE = {"by_path": {}, "lock": threading.Lock()}
+_TIMELINE_MERGED_CACHE = {"by_key": {}, "lock": threading.Lock()}
 
-def _timeline_entries(cache_key, items):
-    """Merged, ascending-by-time entries for every turn in `items` (a project's sessions), each
-    {"ts": epoch-or-None-carried-forward, "path", "sid", "title", "gi", "turn"}.
-
-    Cached per `cache_key` (caller passes something identifying the project+root, e.g.
-    (rootp, canonical-proj-key)), invalidated the same way get_index()'s callers already reason
-    about staleness elsewhere in this file: (session count, max mtime) of the project's own
-    items — cheap to recompute each request and changes whenever a session is added/edited.
+def _session_timeline_entries(it):
+    """Ascending-by-time entries for ONE session's turns, each {"ts", "path", "sid", "title",
+    "gi", "turn"}. Cached per path on (mtime_ns, size) — the same identity load_session() itself
+    revalidates on — so an actively-written project only ever re-parses the one session that
+    actually changed, not the whole project (see _project_timeline_entries below). Returns
+    (entries, key) so callers can use `key` as a cheap per-session change signature without a
+    second stat() call.
 
     Tie rule for turns with no timestamp of their own (some providers omit ts on some lines):
-    carry the previous turn's effective timestamp forward within the same session (falling back
-    to the next known timestamp for any leading gap, or the session's mtime if it has no
-    timestamps at all). That keeps an untimed turn sorted immediately next to its own session's
-    neighbours instead of collapsing all untimed turns to one end of the merged stream. The
-    final sort is stable, so turns that end up with the same effective timestamp keep their
-    original (per-session, chronological) relative order."""
-    n = len(items)
-    max_mtime = max((it["mtime"] for it in items), default=0.0)
-    fresh = (n, max_mtime)
-    with _TIMELINE_CACHE["lock"]:
-        hit = _TIMELINE_CACHE["by_key"].get(cache_key)
-    if hit and hit[0] == fresh:
-        return hit[1]
-    entries = []
+    carry the previous turn's effective timestamp forward within this session (falling back to
+    the next known timestamp for a leading gap, or the session's mtime if it has no timestamps
+    at all). This is entirely self-contained per session, so it holds exactly the same whether
+    computed here or as part of a whole-project pass."""
+    path = it["path"]
+    try:
+        st = os.stat(path)
+    except OSError:
+        return [], None
+    key = (st.st_mtime_ns, st.st_size)
+    with _TIMELINE_SESSION_CACHE["lock"]:
+        hit = _TIMELINE_SESSION_CACHE["by_path"].get(path)
+    if hit and hit[0] == key:
+        return hit[1], key
+    try:
+        turns = load_session(path)["turns"]
+    except Exception:
+        turns = []
+    anchor = it["mtime"]
+    filled = []
+    last = None
+    for t in turns:
+        e = _ts_epoch(t.get("ts"))
+        if e is not None:
+            last = e
+        filled.append(e if e is not None else last)
+    first_known = next((e for e in filled if e is not None), anchor)
+    filled = [e if e is not None else first_known for e in filled]
+    entries = [{"ts": e, "path": path, "sid": it["sid"], "title": it["title"], "gi": gi, "turn": t}
+               for gi, (t, e) in enumerate(zip(turns, filled))]
+    with _TIMELINE_SESSION_CACHE["lock"]:
+        _TIMELINE_SESSION_CACHE["by_path"][path] = (key, entries)
+    return entries, key
+
+def _project_timeline_entries(cache_key, items):
+    """Merged, ascending-by-time entries across every session in `items` (a project's sessions).
+
+    Incremental: each session's entries come from _session_timeline_entries()'s own per-file
+    cache, so touching one session in an actively-used project re-parses only that one file —
+    not the other ~200 unaffected ones. The per-session lists are already sorted ascending, so
+    they're combined with heapq.merge() (a k-way merge, O(n log k) for n entries over k
+    sessions) instead of concatenating everything and re-sorting from scratch.
+
+    heapq.merge's tie-break (equal timestamps) is "earlier input iterable wins", i.e. `items`
+    order — the exact same tie-break the previous single-pass-then-stable-sort implementation
+    produced (it appended each session's turns in `items` order before sorting), so merge order
+    is identical to the old whole-project path.
+
+    The merged list itself is cached per `cache_key` (project+root), invalidated by a signature
+    of every session's own (mtime_ns, size) — so repeated paging with nothing changed reuses the
+    merged list too (no re-merge), and when exactly one session changed, only that session
+    re-parses AND only one k-way merge over the (now mostly-cached) per-session lists runs."""
+    per_session = []
+    sig = []
     for it in items:
-        try:
-            turns = load_session(it["path"])["turns"]
-        except Exception:
-            continue
-        anchor = it["mtime"]
-        filled = []
-        last = None
-        for t in turns:
-            e = _ts_epoch(t.get("ts"))
-            if e is not None:
-                last = e
-            filled.append(e if e is not None else last)
-        first_known = next((e for e in filled if e is not None), anchor)
-        filled = [e if e is not None else first_known for e in filled]
-        for gi, (t, e) in enumerate(zip(turns, filled)):
-            entries.append({"ts": e, "path": it["path"], "sid": it["sid"], "title": it["title"], "gi": gi, "turn": t})
-    entries.sort(key=lambda en: en["ts"])
-    with _TIMELINE_CACHE["lock"]:
-        _TIMELINE_CACHE["by_key"][cache_key] = (fresh, entries)
-    return entries
+        entries, key = _session_timeline_entries(it)
+        if entries:
+            per_session.append(entries)
+        sig.append((it["path"], key))
+    sig = tuple(sig)
+    with _TIMELINE_MERGED_CACHE["lock"]:
+        hit = _TIMELINE_MERGED_CACHE["by_key"].get(cache_key)
+    if hit and hit[0] == sig:
+        return hit[1]
+    ordered = list(heapq.merge(*per_session, key=lambda en: en["ts"])) if per_session else []
+    with _TIMELINE_MERGED_CACHE["lock"]:
+        _TIMELINE_MERGED_CACHE["by_key"][cache_key] = (sig, ordered)
+    return ordered
 
 _HOME = os.path.expanduser("~")
 def short_path(p):
@@ -5300,7 +5334,7 @@ class H(BaseHTTPRequestHandler):
             sort = "new"
         lim = max(1, min(lim, 2000))
 
-        entries = _timeline_entries((rootp, pf), items)          # cached, ascending by time
+        entries = _project_timeline_entries((rootp, pf), items)  # per-session cache, k-way merged
         total = len(entries)
         ordered = entries if sort == "old" else list(reversed(entries))
         off = max(0, min(off, max(0, total - 1))) if total else 0

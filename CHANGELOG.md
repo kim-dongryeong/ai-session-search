@@ -16,9 +16,10 @@ your own messages.
   purpose. Every message uses the exact same rendering as the session view, so the category
   filter chips (🧑 my messages, ✦ agent, ⚠️ errors, ✏️ edits, …) and digit-key shortcuts work
   identically; each message also carries a small badge back to its own session
-  (with full context) at that exact point. The merged stream is cached per project (keyed on its
-  session count + newest mtime) so paging through it after the first load is instant even for a
-  folder with dozens of sessions.
+  (with full context) at that exact point. Each session's messages are cached individually
+  (keyed on that session's own file), then merged — so on a project you're actively working in
+  right now, a click that lands after Claude Code just wrote a new message only re-reads that
+  one session instead of re-parsing the whole folder; paging is otherwise instant.
 - **The per-folder search box now has the same scope selector as the main search bar** (🧑 Only
   me / ✦ Only Claude / conversation-only / code / commands), so you can narrow a
   "search this folder only" search to just your own messages without leaving the folder page.

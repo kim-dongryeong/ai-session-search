@@ -210,6 +210,86 @@ class Paging(TimelineBase):
         self.assertIn("24", body)
 
 
+class IncrementalCache(unittest.TestCase):
+    """Per-session cache (_session_timeline_entries) + merged k-way merge
+    (_project_timeline_entries): an unchanged session's entries are never rebuilt, a changed
+    session reparses only itself, and the merge order matches the old whole-project
+    concatenate-then-stable-sort approach exactly."""
+
+    def setUp(self):
+        self.root, self.proj_dir, self.sid_a, self.sid_b = build_two_session_root()
+        # isolate from whatever other test modules/classes left behind in these module-level caches
+        app._TIMELINE_SESSION_CACHE["by_path"].clear()
+        app._TIMELINE_MERGED_CACHE["by_key"].clear()
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _item(self, sid):
+        path = os.path.join(self.proj_dir, sid + ".jsonl")
+        st = os.stat(path)
+        return {"path": path, "sid": sid, "title": sid, "mtime": st.st_mtime}
+
+    def test_unchanged_session_reuses_cache(self):
+        it = self._item(self.sid_a)
+        entries1, key1 = app._session_timeline_entries(it)
+        entries2, key2 = app._session_timeline_entries(it)
+        self.assertEqual(key1, key2)
+        # same cached list object came back — it was not rebuilt the second time
+        self.assertIs(entries1, entries2)
+
+    def test_changed_session_reparses_only_itself(self):
+        it_a, it_b = self._item(self.sid_a), self._item(self.sid_b)
+        entries_a1, key_a1 = app._session_timeline_entries(it_a)
+        entries_b1, key_b1 = app._session_timeline_entries(it_b)
+        # append one more message to session A only (simulates Claude Code actively writing)
+        with open(it_a["path"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user", "timestamp": "2026-01-01T00:06:00Z", "cwd": PROJ_CWD,
+                                  "message": {"role": "user", "content": "s1 msg3 new"}}) + "\n")
+        it_a2, it_b2 = self._item(self.sid_a), self._item(self.sid_b)  # refreshed mtime/size
+        entries_a2, key_a2 = app._session_timeline_entries(it_a2)
+        entries_b2, key_b2 = app._session_timeline_entries(it_b2)
+        # session A: cache key changed and it was actually reparsed (one more entry)
+        self.assertNotEqual(key_a1, key_a2)
+        self.assertEqual(len(entries_a2), len(entries_a1) + 1)
+        # session B: untouched — same key, same cached list object (never rebuilt)
+        self.assertEqual(key_b1, key_b2)
+        self.assertIs(entries_b1, entries_b2)
+
+    def test_merge_order_matches_naive_full_sort(self):
+        items = [self._item(self.sid_a), self._item(self.sid_b)]
+        ordered = app._project_timeline_entries(("test", "merge-order"), items)
+        # reference: the old whole-project approach — concatenate each session's own (already
+        # carry-forward-filled) entries in `items` order, then one stable sort by ts
+        naive = []
+        for it in items:
+            entries, _ = app._session_timeline_entries(it)
+            naive.extend(entries)
+        naive.sort(key=lambda en: en["ts"])
+        self.assertEqual([(en["path"], en["gi"]) for en in ordered],
+                         [(en["path"], en["gi"]) for en in naive])
+        self.assertGreaterEqual(len(ordered), 5)   # sanity: both sessions actually contributed
+
+    def test_merged_list_reused_when_nothing_changed(self):
+        items = [self._item(self.sid_a), self._item(self.sid_b)]
+        key = ("test", "merge-cache")
+        ordered1 = app._project_timeline_entries(key, items)
+        ordered2 = app._project_timeline_entries(key, items)
+        self.assertIs(ordered1, ordered2)   # cache hit — not re-merged
+
+    def test_merged_list_rebuilt_when_one_session_changes(self):
+        items = [self._item(self.sid_a), self._item(self.sid_b)]
+        key = ("test", "merge-cache-2")
+        ordered1 = app._project_timeline_entries(key, items)
+        with open(items[0]["path"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user", "timestamp": "2026-01-01T00:06:00Z", "cwd": PROJ_CWD,
+                                  "message": {"role": "user", "content": "s1 msg3 new"}}) + "\n")
+        items2 = [self._item(self.sid_a), self._item(self.sid_b)]
+        ordered2 = app._project_timeline_entries(key, items2)
+        self.assertIsNot(ordered1, ordered2)
+        self.assertEqual(len(ordered2), len(ordered1) + 1)
+
+
 class MissingProject(TimelineBase):
     @classmethod
     def setUpClass(cls):
