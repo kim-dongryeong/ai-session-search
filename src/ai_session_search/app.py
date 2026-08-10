@@ -47,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.25"
+__version__ = "4.0.26"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -2909,6 +2909,92 @@ def agg_stats(items):
             s["loop"] += 1
     return s
 
+# ---- event-filter chip bar (shared by the session view and the project timeline) ----
+CHIP_LBL = {"you": "🧑 My messages", "agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
+            "memory": "🧠 Memory", "command": "❯ Commands", "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
+
+def chip_bar_html(turns):
+    """The '0=All / 1..9=category' filter-chip bar (with per-category counts) that the client-side
+    applyFilter()/digit-key JS (see the page script) drives via .chip-f[data-cat]/.msg[data-cats].
+    `turns` is whatever set of turns the counts should cover (a session's turns, or a whole
+    project's merged turns for the timeline)."""
+    cc = {"you": 0, "agent": 0, "error": 0, "edit": 0, "memory": 0, "command": 0, "commit": 0, "test": 0, "url": 0}
+    for t in turns:
+        if t["role"] == "you":
+            cc["you"] += 1
+        elif t["role"] == "assistant" and any(k in ("text", "channel") for k, _ in t["segs"]):
+            cc["agent"] += 1
+        for c in t["tags"]:
+            if c in cc:
+                cc[c] += 1
+    chips = [f'<div class=chips><button class=chip-f data-cat="*"><kbd class=chipkey>0</kbd> {tr("All")}</button>']
+    knum = 0
+    for c, lbl in CHIP_LBL.items():
+        if cc[c]:
+            knum += 1
+            key = f'<kbd class=chipkey>{knum}</kbd> ' if knum <= 9 else ''
+            chips.append(f'<button class=chip-f data-cat="{c}">{key}{tr(lbl)}<span class=cnt>{cc[c]}</span></button>')
+    chips.append('</div>')
+    return "".join(chips)
+
+# ---- project timeline: merge every session's turns into one chronological stream -------------
+def _ts_epoch(ts):
+    """ISO timestamp -> epoch seconds (comparable with os.stat().st_mtime), or None."""
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+_TIMELINE_CACHE = {"by_key": {}, "lock": threading.Lock()}
+
+def _timeline_entries(cache_key, items):
+    """Merged, ascending-by-time entries for every turn in `items` (a project's sessions), each
+    {"ts": epoch-or-None-carried-forward, "path", "sid", "title", "gi", "turn"}.
+
+    Cached per `cache_key` (caller passes something identifying the project+root, e.g.
+    (rootp, canonical-proj-key)), invalidated the same way get_index()'s callers already reason
+    about staleness elsewhere in this file: (session count, max mtime) of the project's own
+    items — cheap to recompute each request and changes whenever a session is added/edited.
+
+    Tie rule for turns with no timestamp of their own (some providers omit ts on some lines):
+    carry the previous turn's effective timestamp forward within the same session (falling back
+    to the next known timestamp for any leading gap, or the session's mtime if it has no
+    timestamps at all). That keeps an untimed turn sorted immediately next to its own session's
+    neighbours instead of collapsing all untimed turns to one end of the merged stream. The
+    final sort is stable, so turns that end up with the same effective timestamp keep their
+    original (per-session, chronological) relative order."""
+    n = len(items)
+    max_mtime = max((it["mtime"] for it in items), default=0.0)
+    fresh = (n, max_mtime)
+    with _TIMELINE_CACHE["lock"]:
+        hit = _TIMELINE_CACHE["by_key"].get(cache_key)
+    if hit and hit[0] == fresh:
+        return hit[1]
+    entries = []
+    for it in items:
+        try:
+            turns = load_session(it["path"])["turns"]
+        except Exception:
+            continue
+        anchor = it["mtime"]
+        filled = []
+        last = None
+        for t in turns:
+            e = _ts_epoch(t.get("ts"))
+            if e is not None:
+                last = e
+            filled.append(e if e is not None else last)
+        first_known = next((e for e in filled if e is not None), anchor)
+        filled = [e if e is not None else first_known for e in filled]
+        for gi, (t, e) in enumerate(zip(turns, filled)):
+            entries.append({"ts": e, "path": it["path"], "sid": it["sid"], "title": it["title"], "gi": gi, "turn": t})
+    entries.sort(key=lambda en: en["ts"])
+    with _TIMELINE_CACHE["lock"]:
+        _TIMELINE_CACHE["by_key"][cache_key] = (fresh, entries)
+    return entries
+
 _HOME = os.path.expanduser("~")
 def short_path(p):
     if not p:
@@ -3670,6 +3756,8 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 @media(prefers-color-scheme:dark){.card{background:#1b1e24;border-color:#2a2e35}}
 .card a.t{font-weight:650;color:#1f6feb;text-decoration:none;font-size:15.5px}
 .meta{color:#8a8f98;font-size:12px;margin-top:3px}
+.tlentry{margin-top:14px}
+.tlsrc{margin:0 0 -4px 2px}
 .chip{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;margin-right:5px;background:#eef1f4;color:#555}
 @media(prefers-color-scheme:dark){.chip{background:#2a2e35;color:#aeb4bd}}
 a.chiplink{text-decoration:none;cursor:pointer}
@@ -4949,6 +5037,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
                                            g("goto", ""), g("sq", ""), g("sqtools", "")))
+        if u.path == "/timeline":
+            return self._send(self.timeline(g("proj"), root, g("sort", "new"),
+                                            gint("off"), gint("lim", 200)))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot", "/pickroot"):
@@ -5067,7 +5158,13 @@ class H(BaseHTTPRequestHandler):
                 + f'<div class=meta>✦ Claude {st["asst"]} · ⚙ {tr("tool results")} {st["tool"]}</div>'
                 f'<form class=ssearch method=get action=/search style="margin-top:8px">'
                 f'<input type=hidden name=proj value="{esc(proj_filter)}">{hidden_root}'
-                f'<input type=search name=q placeholder="🔎 {tr("Search this folder only…")}"><button>{tr("Search")}</button></form></div>')
+                f'<input type=search name=q placeholder="🔎 {tr("Search this folder only…")}">'
+                f'<select name=scope title="{esc(tr("search scope"))}" style="max-width:160px">'
+                + "".join(f'<option value="{k}">{esc(tr(v))}</option>' for k, v in SCOPES.items())
+                + f'</select><button>{tr("Search")}</button></form>'
+                f'<div style="margin-top:6px"><a class="chip chiplink" href="/timeline?{urllib.parse.urlencode({"proj": proj_filter, "root": rootp})}" '
+                f'title="{esc(tr("merge every session in this folder into one chronological stream"))}">'
+                f'🕓 {tr("Read all messages in one timeline")}</a></div></div>')
         else:
             by = {}
             for it in all_items:
@@ -5178,6 +5275,86 @@ class H(BaseHTTPRequestHandler):
         else:
             crumb = f'<div class=crumbs><span class=crumbcur>📁 {esc(rootlabel)}</span> <span class=hint>{len(items)} {tr("sessions")}</span></div>'
         return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=rootp, proj=proj_filter)
+
+    # ---- project timeline: every session's messages merged into one chronological stream ----
+    def timeline(self, proj_filter, root=None, sort="new", off=0, lim=200):
+        roots = active_roots(root)
+        rootp = root_param(roots)
+        if not proj_filter:
+            return shell(tr("Timeline"), f"<p class=meta>{tr('No project given.')}</p>", root=rootp)
+        t0 = time.perf_counter()
+        # same project-selection logic as index()'s proj_filter, so the timeline covers exactly
+        # the sessions the folder page lists (including multi-provider merging via proj_canon)
+        all_items = [it for r in roots for it in get_index(r)]
+        all_items, _dup = dedupe_sids(all_items)
+        canon = proj_canon(all_items)
+        ckey = lambda p: canon.get(p, p)
+        proj_cwd = {p: short_path(c) for p, c in canon.items()}
+        for c in canon.values():
+            proj_cwd.setdefault(c, short_path(c))
+        pf = ckey(proj_filter)
+        items = [it for it in all_items if it["proj"] == proj_filter or ckey(it["proj"]) == pf]
+        label = proj_cwd.get(proj_filter, proj_filter)
+
+        if sort not in ("new", "old"):
+            sort = "new"
+        lim = max(1, min(lim, 2000))
+
+        entries = _timeline_entries((rootp, pf), items)          # cached, ascending by time
+        total = len(entries)
+        ordered = entries if sort == "old" else list(reversed(entries))
+        off = max(0, min(off, max(0, total - 1))) if total else 0
+        page = ordered[off:off + lim]
+
+        def q(**kw):
+            parts = [f"{k}={urllib.parse.quote(str(v))}" for k, v in kw.items() if v not in (None, "")]
+            return "/timeline?" + "&".join(parts) if parts else "/timeline"
+
+        def qbase(**over):
+            p = {"proj": proj_filter, "root": rootp, "sort": sort, "lim": lim}
+            p.update(over)
+            return q(**p)
+
+        sorttoggle = (f'<div class=bar><span class=meta>{tr("Sort")}:</span> '
+                      f'<a class="{"on" if sort=="new" else ""}" href="{qbase(sort="new", off=0)}">{tr("Newest first")}</a>'
+                      f'<a class="{"on" if sort=="old" else ""}" href="{qbase(sort="old", off=0)}">{tr("Oldest first")}</a></div>')
+
+        prev_href = qbase(off=max(0, off - lim)) if off > 0 else ""
+        next_href = qbase(off=off + lim) if off + lim < total else ""
+        pg = []
+        if prev_href:
+            pg.append(f'<a href="{prev_href}">← {tr("Prev")}</a>')
+        if next_href:
+            pg.append(f'<a href="{next_href}">{tr("Next")} {min(lim, total - off - lim)} →</a>')
+        pgbar = (f'<div class="bar pg sessnav">{"".join(pg)}'
+                 f'<span class=meta>{(off + 1) if total else 0}–{min(off + lim, total)} / {total}</span></div>') if total else ""
+
+        chip_html = chip_bar_html([en["turn"] for en in entries])
+
+        body = []
+        for i, en in enumerate(page):
+            gi_global = off + i     # unique dom id across pages (also keeps in-page permalinks stable)
+            src_href = "/session?" + urllib.parse.urlencode({"p": en["path"], "goto": en["gi"]})
+            badge = (f'<div class="meta tlsrc"><a class="chip chiplink" href="{src_href}" '
+                     f'title="{esc(tr("open in its own session, with full context"))}">📄 {esc(en["title"][:60])}'
+                     f'{"…" if len(en["title"]) > 60 else ""}</a></div>')
+            body.append(f'<div class=tlentry>{badge}{render_turn(gi_global, en["turn"])}</div>')
+
+        navkeys = (f'<span id=navkeys hidden data-prevpage="{esc(prev_href)}" data-nextpage="{esc(next_href)}"></span>')
+
+        ms = int((time.perf_counter() - t0) * 1000)
+        crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rootp})}" title="{esc(tr("this folder"))}">📁 {esc(_roots_label(roots))}</a>' if rootp else ""
+        ws_href = "/?" + urllib.parse.urlencode({"proj": proj_filter, "root": rootp})
+        crumb = (f'<div class=crumbs>{crumb_root}{" <span class=crumbsep>›</span> " if crumb_root else ""}'
+                 f'<a class=crumb href="{ws_href}" title="{esc(tr("this workspace"))}">📂 {esc(label)}</a>'
+                 f' <span class=crumbsep>›</span> <span class=crumbcur>🕓 {tr("Timeline")}</span></div>')
+        head = (crumb + f'<h3 style="margin:4px 0 8px">🕓 {tr("Read all messages in one timeline")}</h3>'
+                f'<p class=meta>{len(items)} {tr("sessions")} · {total} {tr("messages")} · {tr("server")} {ms}ms</p>')
+        if not entries:
+            head += f'<div class=card><b>{tr("No messages in this project.")}</b></div>'
+        return shell(tr("Timeline") + " — " + label,
+                     head + navkeys + sorttoggle + chip_html + pgbar + "".join(body) + pgbar,
+                     root=rootp, proj=proj_filter)
 
     # ---- search ----
     def search(self, q, scope, root=None, days="", proj="", from_="", to="", ajax=False):
@@ -5688,27 +5865,9 @@ class H(BaseHTTPRequestHandler):
                    + f'<a href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
                    f'<span class=meta>{counts_html(n, system=True)}</span>'
                    '</div>')
-        # event-filter chips (counts over ALL turns)
-        cc = {"you": 0, "agent": 0, "error": 0, "edit": 0, "memory": 0, "command": 0, "commit": 0, "test": 0, "url": 0}
-        for t in turns:
-            if t["role"] == "you":
-                cc["you"] += 1
-            elif t["role"] == "assistant" and any(k in ("text", "channel") for k, _ in t["segs"]):
-                cc["agent"] += 1
-            for c in t["tags"]:
-                if c in cc:
-                    cc[c] += 1
-        # every filter is a (combinable) chip; "Code only" is separate because it's a reprocessed view, not a filter
-        CHIP_LBL = {"you": "🧑 My messages", "agent": "✦ Agent", "error": "⚠️ Errors", "edit": "✏️ Edits",
-                    "memory": "🧠 Memory", "command": "❯ Commands", "commit": "⎇ Commits", "test": "🧪 Tests", "url": "🔗 URL"}
-        chips = [f'<div class=chips><button class=chip-f data-cat="*"><kbd class=chipkey>0</kbd> {tr("All")}</button>']
-        knum = 0
-        for c, lbl in CHIP_LBL.items():
-            if cc[c]:
-                knum += 1
-                key = f'<kbd class=chipkey>{knum}</kbd> ' if knum <= 9 else ''
-                chips.append(f'<button class=chip-f data-cat="{c}">{key}{tr(lbl)}<span class=cnt>{cc[c]}</span></button>')
-        chips.append('</div>')
+        # event-filter chips (counts over ALL turns); every filter is a (combinable) chip —
+        # "Code only" is separate because it's a reprocessed view, not a filter
+        chips = [chip_bar_html(turns)]
 
         opts = []
         for v in LIM_OPTIONS:

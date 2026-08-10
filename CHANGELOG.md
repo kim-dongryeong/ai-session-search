@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.0.26 — 2026-08-10
+
+Read a whole project's conversation history as one story, and narrow a folder search to just
+your own messages.
+
+- **New: a project timeline that merges every session in a folder into one chronological
+  message stream.** Open it from a folder page ("🕓 Read all messages in one timeline"). Work on
+  a project usually spans many separate sessions over days or weeks; picking through them one at
+  a time made it hard to follow what actually happened, in order. The timeline weaves every
+  session's messages together by real timestamp (a turn with no timestamp of its own — some
+  providers omit it on some lines — sorts right next to its own session's neighbours, not
+  dumped at one end), sorts newest-first or oldest-first (a visible toggle), and pages through
+  the result with classic Prev/Next links (plus `[` / `]`) — no auto-loading on scroll, on
+  purpose. Every message uses the exact same rendering as the session view, so the category
+  filter chips (🧑 my messages, ✦ agent, ⚠️ errors, ✏️ edits, …) and digit-key shortcuts work
+  identically; each message also carries a small badge back to its own session
+  (with full context) at that exact point. The merged stream is cached per project (keyed on its
+  session count + newest mtime) so paging through it after the first load is instant even for a
+  folder with dozens of sessions.
+- **The per-folder search box now has the same scope selector as the main search bar** (🧑 Only
+  me / ✦ Only Claude / conversation-only / code / commands), so you can narrow a
+  "search this folder only" search to just your own messages without leaving the folder page.
+
 ## 4.0.25 — 2026-08-09
 
 Pasting a sentence now lands on the session that actually contains it.
