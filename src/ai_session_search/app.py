@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.27"
+__version__ = "4.0.28"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -100,7 +100,7 @@ _ROOTLOCK = threading.Lock()
 _STARLOCK = threading.Lock()
 _STARS = set()
 _SETTINGSLOCK = threading.Lock()
-_SETTINGS = {}   # {"default_lim": int|"all", "lazy_render": bool} — missing key = current default behavior
+_SETTINGS = {}   # {"default_lim": int|"all", "lazy_render": bool, "timeline_lim": int} — missing key = current default behavior
 
 def load_stars():
     try:
@@ -166,6 +166,17 @@ def get_default_lim():
 
 def get_lazy_render():
     return bool(_SETTINGS.get("lazy_render", True))
+
+def get_timeline_lim():
+    """Resolved default per-page setting for the /timeline view (a distinct concern from the
+    session view's default_lim — the timeline has no 'all' option, since a large project's
+    timeline can be ~70,000 messages and an unbounded page would hang the browser). Always
+    returns an int; falls back to 200 if unset or invalid."""
+    v = _SETTINGS.get("timeline_lim", 200)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 200
 
 # ---- update check -----------------------------------------------------------
 # Privacy: this is the ONLY thing the app ever sends over the network. It is a plain
@@ -660,6 +671,9 @@ def root_param(sel):
     return "" if len(sel) >= len(ROOTS) else ",".join(sel)
 DEFAULT_LIM = 1000
 LIM_OPTIONS = [1000, 2000, 5000, 10000, 20000, 50000]
+# the /timeline view's own per-page options — deliberately no "all": a large project's timeline
+# can be ~70,000 messages, so unbounded would hang the browser. Capped at 2000 server-side too.
+TIMELINE_LIM_OPTIONS = [50, 100, 200, 500, 1000, 2000]
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 INJECT_PREFIXES = ("<ide_opened_file>", "<ide_selection>", "<system-reminder>", "<command-", "<task-notification>")
@@ -4374,6 +4388,15 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       if(ok){ok.hidden=false;setTimeout(function(){ok.hidden=true;},1500);}
     });
   });
+  // timeline view: its own per-page default (timeline_lim), independent of the session view's
+  // default_lim — see get_timeline_lim()/get_default_lim() in app.py.
+  var stld=document.getElementById('settlimdef'), tls=document.getElementById('tllimsel');
+  if(stld&&tls)stld.addEventListener('click',function(){
+    fetch('/api/settings?timeline_lim='+encodeURIComponent(tls.value)).then(function(r){return r.json();}).then(function(){
+      var ok=document.getElementById('settlimdefok');
+      if(ok){ok.hidden=false;setTimeout(function(){ok.hidden=true;},1500);}
+    });
+  });
   var lzt=document.getElementById('lazytoggle');
   if(lzt)lzt.addEventListener('change',function(){
     fetch('/api/settings?lazy_render='+(lzt.checked?'1':'0'));
@@ -5046,6 +5069,16 @@ class H(BaseHTTPRequestHandler):
                 kw["default_lim"] = dl if dl == "all" else (parse_lim(dl) if dl != "" else None)
             if "lazy_render" in qs:
                 kw["lazy_render"] = g("lazy_render") == "1"
+            if "timeline_lim" in qs:
+                tl = g("timeline_lim")
+                try:
+                    tl_int = int(tl)
+                except (TypeError, ValueError):
+                    tl_int = None
+                if tl_int in TIMELINE_LIM_OPTIONS:
+                    kw["timeline_lim"] = tl_int
+                # else: not one of the allowed timeline per-page options — ignore silently,
+                # same as an unparsable value, rather than persisting a bogus setting.
             settings = set_settings(**kw) if kw else dict(_SETTINGS)
             return self._send_json({"settings": settings})
         if u.path == "/api/stars.json":
@@ -5139,7 +5172,7 @@ class H(BaseHTTPRequestHandler):
                                            g("goto", ""), g("sq", ""), g("sqtools", "")))
         if u.path == "/timeline":
             return self._send(self.timeline(g("proj"), root, g("sort", "new"),
-                                            gint("off"), gint("lim", 200), ajax=g("ajax") == "1"))
+                                            gint("off"), g("lim", ""), ajax=g("ajax") == "1"))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path in ("/addroot", "/delroot", "/pickroot"):
@@ -5377,7 +5410,7 @@ class H(BaseHTTPRequestHandler):
         return shell(tr("AI Session Search"), crumb + head + favbar + statsblock + "".join(sortbar) + "".join(projbar) + "".join(rows), root=rootp, proj=proj_filter)
 
     # ---- project timeline: every session's messages merged into one chronological stream ----
-    def timeline(self, proj_filter, root=None, sort="new", off=0, lim=200, ajax=False):
+    def timeline(self, proj_filter, root=None, sort="new", off=0, lim="", ajax=False):
         """The merge across every session in a project (below, via _project_timeline_entries)
         can take several seconds cold on a large project (200 sessions / 70k+ messages measured
         ~9s). So this always responds in two passes, the same shape as search's ajax=1 fragment
@@ -5410,6 +5443,14 @@ class H(BaseHTTPRequestHandler):
 
         if sort not in ("new", "old"):
             sort = "new"
+        lim_raw = lim
+        try:
+            lim = int(lim_raw) if lim_raw != "" else get_timeline_lim()
+        except (TypeError, ValueError):
+            lim = get_timeline_lim()
+        # clamp a hand-edited/out-of-range lim server-side (a large project's timeline can be
+        # ~70,000 messages — unbounded would hang the browser); the clamped value, not the raw
+        # requested one, is what gets shown as selected in the per-page <select> below.
         lim = max(1, min(lim, 2000))
 
         def q(**kw):
@@ -5425,6 +5466,21 @@ class H(BaseHTTPRequestHandler):
                       f'<a class="{"on" if sort=="new" else ""}" href="{qbase(sort="new", off=0)}">{tr("Newest first")}</a>'
                       f'<a class="{"on" if sort=="old" else ""}" href="{qbase(sort="old", off=0)}">{tr("Oldest first")}</a></div>')
 
+        # per-page selector — cheap to render (just the effective `lim`, already resolved above),
+        # so it lives in the shell alongside the sort toggle rather than the ajax=1 fragment; a
+        # change navigates the whole page (like the sort toggle's links) which naturally re-runs
+        # the shell-then-fill flow with the new lim and off reset to 0.
+        tl_opts = "".join(f'<option value="{v}"{" selected" if lim == v else ""}>{v}</option>'
+                           for v in TIMELINE_LIM_OPTIONS)
+        limform = ('<form class=psize method=get action=/timeline>'
+                   f'<input type=hidden name=proj value="{esc(proj_filter)}">'
+                   + (f'<input type=hidden name=root value="{esc(rootp)}">' if rootp else "")
+                   + f'<input type=hidden name=sort value="{esc(sort)}">'
+                   + f'{tr("per page")} <select id=tllimsel name=lim onchange="this.form.submit()">' + tl_opts + '</select>'
+                   + f'<button type=button id=settlimdef class=chip title="{esc(tr("Use the current per-page value as the default for the timeline"))}">📌 {tr("set as default")}</button>'
+                   + f'<span id=settlimdefok class=hint hidden>{tr("saved")} ✓</span>'
+                   + '</form>')
+
         crumb_root = f'<a class=crumb href="/?{urllib.parse.urlencode({"root": rootp})}" title="{esc(tr("this folder"))}">📁 {esc(_roots_label(roots))}</a>' if rootp else ""
         ws_href = "/?" + urllib.parse.urlencode({"proj": proj_filter, "root": rootp})
         crumb = (f'<div class=crumbs>{crumb_root}{" <span class=crumbsep>›</span> " if crumb_root else ""}'
@@ -5435,7 +5491,7 @@ class H(BaseHTTPRequestHandler):
         if not ajax:
             building_msg = esc(tr("Building this project's timeline — the first open of a large project takes a few seconds…"))
             placeholder = f'<div id=tlbuild class=searching><span class=spin></span> {building_msg}</div>'
-            return shell(tr("Timeline") + " — " + label, head + sorttoggle + placeholder,
+            return shell(tr("Timeline") + " — " + label, head + sorttoggle + limform + placeholder,
                          root=rootp, proj=proj_filter)
 
         # ---- expensive part: only runs for the ajax=1 fragment request ----

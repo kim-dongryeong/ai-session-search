@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.28 — 2026-08-10
+
+The project timeline now lets you choose how many messages a page shows, instead of only
+accepting the count through a hand-edited URL.
+
+- **New: a per-page selector on the timeline, with its own saved default.** The timeline has
+  always accepted a `lim` URL parameter to control how many merged messages one page shows, but
+  there was no control for it in the page itself — you had to edit the address bar by hand. A
+  dropdown (50 / 100 / 200 / 500 / 1000 / 2000) now sits next to the sort toggle; changing it
+  reloads the timeline at that page size and jumps back to the first page. A 📌 "set as default"
+  button next to it saves the current choice as your default for future timeline visits — this is
+  a separate setting from the session view's own per-page default, since the two views serve very
+  different message counts (a session might be a few hundred messages; a project timeline can run
+  into the tens of thousands), so picking a large default for one shouldn't force it onto the
+  other. There's deliberately no "show all" option here, unlike the session view — a busy
+  project's timeline can be ~70,000 messages, and loading all of them into the browser at once
+  would hang the tab. A hand-edited URL with an out-of-range `lim` is still clamped to the same
+  2000-message cap the server has always enforced.
+
 ## 4.0.27 — 2026-08-10
 
 The project timeline now opens instantly, with an honest "building…" indicator instead of a

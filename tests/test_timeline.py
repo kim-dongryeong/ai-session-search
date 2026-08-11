@@ -299,6 +299,97 @@ class IncrementalCache(unittest.TestCase):
         self.assertEqual(len(ordered2), len(ordered1) + 1)
 
 
+class PerPageSelector(TimelineBase):
+    """The /timeline per-page <select> (mirrors the session view's, but with its own
+    timeline_lim setting — no 'all' option, capped at 2000 server-side)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.proj_dir, cls.sid = build_many_message_root(n=12)  # 24 messages total
+        cls._start(cls.root)
+
+    def setUp(self):
+        app._SETTINGS = {}
+
+    def test_selector_present_with_default_200_selected(self):
+        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        self.assertEqual(status, 200)
+        self.assertIn("id=tllimsel", body)
+        self.assertIn('<option value="200" selected>200</option>', body)
+
+    def test_selector_reflects_saved_timeline_lim_default(self):
+        app._SETTINGS = {"timeline_lim": 500}
+        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        self.assertEqual(status, 200)
+        self.assertIn('<option value="500" selected>500</option>', body)
+        self.assertNotIn('<option value="200" selected>200</option>', body)
+
+    def test_explicit_lim_query_param_changes_fragment_count(self):
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=3")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.count("class=tlentry"), 3)
+
+    def test_off_resets_to_zero_in_nav_links_when_lim_changes(self):
+        # the per-page <form> carries no hidden `off` input, so submitting it (changing lim)
+        # naturally omits off from the resulting request — i.e. resets to page 1.
+        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&off=5&lim=3")
+        self.assertEqual(status, 200)
+        m = re.search(r'<form class=psize method=get action=/timeline>.*?</form>', body, re.S)
+        self.assertIsNotNone(m)
+        self.assertNotIn('name=off', m.group(0))
+
+    def test_out_of_range_lim_is_clamped_and_shown_selected(self):
+        status, body = self.get("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=999999")
+        self.assertEqual(status, 200)
+        self.assertIn('<option value="2000" selected>2000</option>', body)
+        self.assertNotIn('value="999999"', body)
+
+    def test_out_of_range_lim_clamped_in_ajax_fragment_too(self):
+        # 24 total messages < 2000 cap, so a clamped lim=2000 must return all 24, not error
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD) + "&lim=999999")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.count("class=tlentry"), 24)
+
+
+class TimelineLimSetting(TimelineBase):
+    """timeline_lim persists via /api/settings and is honoured by H.timeline() when `lim` is
+    absent from the request — and is independent of the session view's default_lim."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.proj_dir, cls.sid = build_many_message_root(n=12)  # 24 messages total
+        cls._start(cls.root)
+
+    def setUp(self):
+        app._SETTINGS = {}
+
+    def test_timeline_lim_persists_via_api_settings(self):
+        status, body = self.get("/api/settings?timeline_lim=500")
+        self.assertEqual(status, 200)
+        self.assertEqual(app._SETTINGS.get("timeline_lim"), 500)
+        self.assertIn('"timeline_lim": 500', body)
+
+    def test_timeline_lim_honoured_when_lim_absent(self):
+        self.get("/api/settings?timeline_lim=500")
+        status, body = self.get_ajax("/timeline?proj=" + urllib.parse.quote(PROJ_CWD))
+        self.assertEqual(status, 200)
+        self.assertEqual(body.count("class=tlentry"), 24)  # only 24 exist, well under 500
+
+    def test_invalid_timeline_lim_rejected(self):
+        status, body = self.get("/api/settings?timeline_lim=12345")
+        self.assertEqual(status, 200)
+        self.assertNotIn("timeline_lim", app._SETTINGS)
+
+    def test_timeline_lim_does_not_affect_default_lim(self):
+        self.get("/api/settings?timeline_lim=500")
+        self.assertNotIn("default_lim", app._SETTINGS)
+
+    def test_default_lim_does_not_affect_timeline_lim(self):
+        self.get("/api/settings?default_lim=2000")
+        self.assertNotIn("timeline_lim", app._SETTINGS)
+        self.assertEqual(app.get_timeline_lim(), 200)
+
+
 class MissingProject(TimelineBase):
     @classmethod
     def setUpClass(cls):
