@@ -1,5 +1,29 @@
 # Changelog
 
+## 4.0.29 — 2026-08-12
+
+One-click update now actually relaunches you into the new version, and the app never
+quietly moves to a different address behind your back.
+
+- **Fix: "Update & restart" could install the new version and then never relaunch it.**
+  macOS's `open` activates an already-running copy of an app instead of starting a new one,
+  so the handoff to the freshly installed build silently never happened — the old server
+  kept running and the page sat on "Restarting into the new version…" forever. The
+  updater now forces a genuinely new instance (`open -n`), and — instead of just assuming
+  that worked — actively confirms the new version came up before declaring success. If it
+  still doesn't show up after a retry, you get a clear message telling you to quit and
+  reopen the app yourself, rather than an update bar that spins indefinitely.
+- **Fix: the progress text no longer looks like a button while it isn't one.** "Updating…"
+  and "Restarting…" now render as plain status text with a spinner — they're not clickable
+  while the update is in flight. The button look comes back only when there's actually
+  something to click again (an error to retry).
+- **Fix: the app never silently starts on a different port than usual.** Previously, if its
+  usual port was taken by another program, it would quietly fall back to a different one —
+  which broke the installed app shortcut and could leave a dead duplicate behind. Now, if
+  the usual port is unavailable, it tells you so in a dialog (naming the port and, when it
+  can tell, what's using it) and lets you choose: quit and free it up, or continue once on a
+  temporary port. It never makes that choice for you.
+
 ## 4.0.28 — 2026-08-10
 
 The project timeline now lets you choose how many messages a page shows, instead of only

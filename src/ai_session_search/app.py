@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.28"
+__version__ = "4.0.29"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -398,7 +398,14 @@ def _set_update(state, detail="", pct=None, target=None):
 
 def _install_helper(mount_app, dst_app, mount_point):
     """Write + spawn a detached helper that swaps the bundle and relaunches. The running
-    server keeps going; the relaunched build reclaims the port via _replace_stale_server."""
+    server keeps going; the relaunched build reclaims the port via _replace_stale_server.
+
+    Uses `open -n` (not plain `open`) to launch the new bundle: macOS's `open` activates
+    an already-running instance of the same app instead of starting a new process, which
+    silently defeats the whole handover (no new instance -> nobody kills the old server ->
+    the UI waits forever). `-n` forces a genuinely new process. run_self_update() then
+    polls to confirm the new instance actually came up (see _wait_for_relaunch) instead of
+    assuming `open -n` succeeded."""
     import subprocess, tempfile
     script = f'''#!/bin/bash
 set -e
@@ -414,7 +421,7 @@ mv "$DST.new" "$DST"
 rm -rf "$DST.bak"
 hdiutil detach "$MNT" -quiet 2>/dev/null || true
 sleep 1
-open "$DST"
+open -n "$DST"
 '''
     fd, path = tempfile.mkstemp(suffix="-aiss-update.sh")
     with os.fdopen(fd, "w") as f:
@@ -428,9 +435,37 @@ def _shq(s):
     """Single-quote a string for safe embedding in the bash helper."""
     return "'" + str(s).replace("'", "'\\''") + "'"
 
-def run_self_update(dry_run=False):
+# How long we wait, after launching the new instance, for /api/status on the committed
+# port to report a version different from the one that started the update. This runs in
+# the OLD server's own background thread (it already owns _UPDATE and the UI already
+# polls it via GET /api/self_update, so it's the natural place — no new endpoint needed).
+# 45s covers a slow first-launch code-signature check on a cold Mac without leaving the
+# user staring at "Restarting…" indefinitely if the relaunch genuinely failed.
+_RELAUNCH_VERIFY_WINDOW = 45.0
+
+def _wait_for_relaunch(port, old_version, window=_RELAUNCH_VERIFY_WINDOW, host="127.0.0.1"):
+    """Poll /api/status on `port` until a NEW instance answers with a version other than
+    `old_version` (proof the relaunch actually happened, not just that we launched
+    something), or `window` seconds pass. Returns True once verified, False on timeout."""
+    deadline = time.time() + window
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}/api/status", timeout=2) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            if d.get("app") == "ai-session-search" and d.get("version") and d.get("version") != old_version:
+                return True
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return False
+
+def run_self_update(dry_run=False, port=None):
     """Background worker: download → verify → install. Updates _UPDATE state throughout.
-    Never raises; every failure lands in state='error' with a human detail."""
+    Never raises; every failure lands in state='error' with a human detail.
+
+    `port` is this (old, still-running) server's own port — passed in by the request
+    handler that started this thread — used after install to verify the relaunch actually
+    happened (see _wait_for_relaunch)."""
     import subprocess, tempfile
     dst = _frozen_app_bundle()
     if not dst:
@@ -491,6 +526,29 @@ def run_self_update(dry_run=False):
     _set_update("installing", tr("Installing and restarting…"), 95, target=tag)
     _install_helper(src_app, dst, mount)
     _set_update("relaunching", tr("Restarting into the new version…"), 100, target=tag)
+    if dry_run or not port:
+        return
+    _verify_and_finish_relaunch(port, dst, __version__)
+
+def _verify_and_finish_relaunch(port, dst, old_version):
+    """Called right after _install_helper launches the new instance. Confirms it actually
+    took over (see _wait_for_relaunch) instead of assuming `open -n` worked; retries the
+    launch once if not; otherwise leaves the old server running and puts the updater into
+    a terminal error state with an actionable message, rather than the UI spinning forever."""
+    if _wait_for_relaunch(port, old_version):
+        return   # the new instance took over; it now owns the port and _UPDATE state
+    # Didn't come up in time — retry the launch once (open -n again, no need to
+    # re-stage/re-swap the bundle) before giving up and leaving the old server running.
+    import subprocess
+    try:
+        subprocess.Popen(["open", "-n", dst], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    if _wait_for_relaunch(port, old_version):
+        return
+    _set_update("error", tr("The update installed, but the new version didn't start. "
+                             "Please quit AI Session Search and open it again."))
 
 # ---- i18n -------------------------------------------------------------------
 # The UI is authored in English; the English string is its own translation key.
@@ -3721,6 +3779,13 @@ header a.home{text-shadow:0 1px 6px rgba(8,25,80,.4)}
 .updtxt{flex:1;min-width:190px}.updcur{opacity:.6}
 .updbtn{background:#1061b7;color:#fff;text-decoration:none;padding:5px 12px;border:0;border-radius:7px;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
 .updbtn:disabled{opacity:.7;cursor:default}
+/* Non-actionable progress states (Updating…/Restarting…) must not look like a clickable
+   button — drop the button chrome and render it as plain status text with a spinner, the
+   same idiom as .searching below. Actionable states (error/retry) go back through the
+   plain .updbtn rule above by removing this class. */
+.updbtn.working{background:none;color:inherit;padding:0;border:0;font-weight:600;cursor:default;box-shadow:none;display:inline-flex;align-items:center;gap:7px}
+.updbtn.working .updspin{width:13px;height:13px;border:2px solid #c7ced8;border-top-color:#1f6feb;border-radius:50%;animation:aisspin .7s linear infinite;flex:none;display:inline-block}
+@media(prefers-color-scheme:dark){.updbtn.working .updspin{border-color:#3a3f47;border-top-color:#5a9cff}}
 .updcmd{background:rgba(0,0,0,.06);padding:4px 9px;border-radius:6px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
 @media(prefers-color-scheme:dark){.updcmd{background:rgba(255,255,255,.1)}}
 .updnotes{color:#1061b7;text-decoration:none;white-space:nowrap}
@@ -4684,18 +4749,24 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     go.disabled=true;
     var txt=bar.querySelector('.updtxt');
     var mn=bar.querySelector('#updmanual'); if(mn)mn.remove();
-    function setMsg(s){go.textContent=s;}
-    setMsg('%%UPD_WORKING%%');
+    // working=true renders `s` as plain status text with a spinner and strips the button
+    // chrome (it's not clickable while an update is in flight); working=false restores the
+    // normal button look for actionable states (error/retry).
+    function setMsg(s,working){
+      go.classList.toggle('working',!!working);
+      go.innerHTML=working?'<span class=updspin></span>'+s:s;
+    }
+    setMsg('%%UPD_WORKING%%',true);
     fetch('/api/self_update',{method:'POST',headers:{'X-Shutdown-Token':updTok}})
       .then(function(r){if(!r.ok)throw new Error('start');return r.json();})
       .then(function(){poll();})
-      .catch(function(){setMsg('%%UPD_FAILED%%');go.disabled=false;});
+      .catch(function(){setMsg('%%UPD_FAILED%%',false);go.disabled=false;});
     function poll(){
       fetch('/api/self_update').then(function(r){return r.json();}).then(function(s){
         if(!s){return setTimeout(poll,1000);}
-        if(s.pct)setMsg('%%UPD_WORKING%% '+s.pct+'%');
+        if(s.pct)setMsg('%%UPD_WORKING%% '+s.pct+'%',true);
         if(s.state==='manual'){ // app was renamed \u2014 auto-update can't cross identities; reinstall once
-          setMsg('%%UPD_NEEDINSTALL%%'); go.disabled=true;
+          setMsg('%%UPD_NEEDINSTALL%%',true); go.disabled=true;
           if(txt&&s.detail)txt.textContent=s.detail;
           if(!bar.querySelector('#updmanual2')){
             var a=document.createElement('a');a.id='updmanual2';a.className='updbtn';
@@ -4705,23 +4776,38 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
           return;
         }
         if(s.state==='error'||s.state==='uptodate'){
-          setMsg((s.state==='error'?'%%UPD_FAILED%%':'')+(s.detail?(' \u2014 '+s.detail):''));
+          setMsg((s.state==='error'?'%%UPD_FAILED%%':'')+(s.detail?(' \u2014 '+s.detail):''),false);
           go.disabled=false; return;
         }
         if(s.state==='relaunching'||s.state==='installing'){
-          setMsg('%%UPD_RESTART%%'); return waitForRelaunch(s.target||d.latest);
+          setMsg('%%UPD_RESTART%%',true); return waitForRelaunch(s.target||d.latest);
         }
         setTimeout(poll,1000);
       }).catch(function(){ // server may have gone down for the swap \u2014 start watching for the new one
-        setMsg('%%UPD_RESTART%%'); waitForRelaunch(d.latest);
+        setMsg('%%UPD_RESTART%%',true); waitForRelaunch(d.latest);
       });
     }
     function waitForRelaunch(want){
-      // the new build reclaims the same port; poll /api/status until its version changes, then reload
-      fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
-        if(st&&st.version&&st.version!==d.current){location.reload();return;}
-        setTimeout(function(){waitForRelaunch(want);},1500);
-      }).catch(function(){setTimeout(function(){waitForRelaunch(want);},1500);});
+      // the new build reclaims the same port; poll /api/status until its version changes,
+      // then reload. Bounded by the same window the server-side verification uses (see
+      // _RELAUNCH_VERIFY_WINDOW) \u2014 past it, stop spinning forever and show the actionable
+      // failure message instead (the server independently reaches the same conclusion and
+      // sets state='error', but we don't want the UI itself stuck polling if that race is lost).
+      var deadline=Date.now()+45000;
+      (function check(){
+        fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
+          if(st&&st.version&&st.version!==d.current){location.reload();return;}
+          if(Date.now()>deadline)return relaunchFailed();
+          setTimeout(check,1500);
+        }).catch(function(){
+          if(Date.now()>deadline)return relaunchFailed();
+          setTimeout(check,1500);
+        });
+      })();
+      function relaunchFailed(){
+        setMsg('%%UPD_RELAUNCH_FAILED%%',false);
+        go.disabled=false;
+      }
     }
   }
 })();
@@ -4917,6 +5003,7 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         "%%UPD_FAILED%%": esc(tr("Update failed")),
         "%%UPD_NEEDINSTALL%%": esc(tr("Manual reinstall needed")),
         "%%UPD_MANUAL%%": esc(tr("download manually")),
+        "%%UPD_RELAUNCH_FAILED%%": esc(tr("Installed, but didn't restart — please quit and open it again")),
     }
     out = SHELL
     for k, v in repl.items():
@@ -4977,7 +5064,9 @@ class H(BaseHTTPRequestHandler):
                 busy = _UPDATE["state"] in ("checking", "downloading", "verifying", "installing", "relaunching")
             if not busy:
                 dry = bool(os.environ.get("AISS_UPDATE_DRYRUN"))
-                threading.Thread(target=run_self_update, kwargs={"dry_run": dry}, daemon=True).start()
+                threading.Thread(target=run_self_update,
+                                 kwargs={"dry_run": dry, "port": self.server.server_address[1]},
+                                 daemon=True).start()
             return self._send_json({"ok": True})
         self._send_json({"ok": True, "pid": os.getpid()})
         _cleanup_runtime_file()
@@ -6390,6 +6479,82 @@ def _bind_fallback(host, avoid_port):
             continue
     return make_server(host, 0), False
 
+def _port_holder_name(port):
+    """Best-effort process name of whatever is squatting on `port` (macOS only; used only
+    to make the conflict dialog below more useful — never fatal if it can't tell)."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import subprocess
+        pids = subprocess.run(["/usr/sbin/lsof", "-ti", f"tcp:{port}"], capture_output=True,
+                              text=True, timeout=3).stdout.strip().splitlines()
+        if not pids:
+            return None
+        r = subprocess.run(["/bin/ps", "-p", pids[0], "-o", "comm="],
+                           capture_output=True, text=True, timeout=3)
+        name = r.stdout.strip()
+        return os.path.basename(name) if name else None
+    except Exception:
+        return None
+
+def _port_conflict_dialog(port, holder):
+    """Our committed/canonical port is held by a process that is NOT one of our own
+    (already-stale) servers, even after the retry window. We used to silently fall back to
+    another port (or, if the whole PORT_CANDIDATES range was busy, an ephemeral one) — that
+    broke the installed PWA, which is keyed by origin (host:port), and once minted a
+    permanently dead duplicate app shortcut. The owner's explicit rule: never drift ports
+    silently. A double-clicked .app has no visible stdout, so we must surface this via a
+    native dialog, not a print().
+
+    Returns 'quit' or 'temp' (proceed once on a temporary port). Falls back to printing to
+    stdout and returning 'quit' on any non-macOS platform, or if osascript itself fails —
+    so a broken dialog can never silently turn into a port drift either."""
+    who = f" ({holder})" if holder else ""
+    msg = (f"AI Session Search's usual port ({port}) is being used by another program{who}.\n\n"
+           "Quit and free it up, or start this once on a temporary port — the address will "
+           "return to normal automatically once the other program is gone.")
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["/usr/bin/osascript", "-e",
+                 "button returned of (display dialog " + json.dumps(msg) +
+                 ' with title "AI Session Search" buttons {"Quit", "Use a temporary port"} '
+                 'default button "Quit")'],
+                capture_output=True, text=True, timeout=600)
+            choice = (r.stdout or "").strip()
+            if choice == "Use a temporary port":
+                return "temp"
+            if choice == "Quit":
+                return "quit"
+        except Exception:
+            pass
+    print(f"  ⚠️  {msg}")
+    return "quit"
+
+def _handle_port_conflict(host, port):
+    """`port` didn't bind even after the retry window in _bind_retrying — everything that
+    could be ours was already reclaimed earlier (_replace_stale_server), so this is a
+    genuine conflict with something else. Never fall back silently (see
+    _port_conflict_dialog's docstring for why). Returns (srv, landed_on_temp_port) to
+    proceed on, or None if the user chose to quit."""
+    holder = _port_holder_name(port)
+    choice = _port_conflict_dialog(port, holder)
+    if choice != "temp":
+        return None
+    srv, landed_stable = _bind_fallback(host, port)
+    actual = srv.server_address[1]
+    if landed_stable:
+        print(f"  ⚠️  Port {port} is still in use after waiting — using port {actual} "
+              f"this time. It should return to {port} once the other process is gone.")
+    else:
+        # The whole candidate range is unavailable too — last resort, an ephemeral port
+        # for this session only. Never committed, so we return to the stable port once
+        # the foreign app is gone.
+        print(f"  ⚠️  Port {port} is in use by another app — using a temporary port "
+              f"{actual} this time.")
+    return srv, True
+
 _SHUTDOWN_TOKEN = None   # set at server start when bound to loopback; None disables /api/shutdown
 _ON_TEMP_PORT = False    # True once main() lands on a port other than its intended/canonical
                          # one; the UI reads this to warn instead of silently misbehaving, and
@@ -6630,19 +6795,15 @@ def main(argv=None):
         # _bind_retrying) before accepting that the port is genuinely unavailable.
         srv = _bind_retrying(args.host, port)
         if srv is None:
-            srv, landed_stable = _bind_fallback(args.host, port)
-            _ON_TEMP_PORT = True
-            actual = srv.server_address[1]
-            if landed_stable:
-                print(f"  \u26a0\ufe0f  Port {port} is still in use after waiting \u2014 using port {actual} "
-                      f"this time. It should return to {port} once the other process is gone.")
-            else:
-                # Our committed/target port (and the whole candidate range) is held by a
-                # FOREIGN app (we never kill those \u2014 only servers that answer /api/status as
-                # ours). Fall back to an ephemeral port for this session, but do NOT commit
-                # it, so we return to the stable port once the foreign app is gone.
-                print(f"  \u26a0\ufe0f  Port {port} is in use by another app \u2014 using a temporary port "
-                      f"{actual} this time.")
+            # Still occupied after the retry window by something that is NOT one of our own
+            # (already-stale) servers \u2014 those get killed by _replace_stale_server earlier,
+            # before we ever reach this bind. Never drift to another port silently: ask.
+            resolved = _handle_port_conflict(args.host, port)
+            if resolved is None:
+                print(f"  \u26a0\ufe0f  Port {port} is in use by another program \u2014 quitting. "
+                      f"Free it up and start AI Session Search again.")
+                return 1
+            srv, _ON_TEMP_PORT = resolved
     if app_launch and committed is None and srv.server_address[1] in PORT_CANDIDATES:
         _commit_port(srv.server_address[1])   # remember this machine's port for next launch
     try:
