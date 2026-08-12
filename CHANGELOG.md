@@ -23,6 +23,17 @@ quietly moves to a different address behind your back.
   the usual port is unavailable, it tells you so in a dialog (naming the port and, when it
   can tell, what's using it) and lets you choose: quit and free it up, or continue once on a
   temporary port. It never makes that choice for you.
+- **Fix: a page in the session view now really is the size you chose.** Setting "per page" to,
+  say, 5000 used to mean something different depending on how you scrolled: the "↓ Load 100
+  more messages" button at the bottom could keep pulling in messages past the 5000 you asked
+  for, quietly merging the next page into the one you were reading, and the opposite button at
+  the top could do the same going backward. Loading more or earlier messages now always stops
+  exactly at the edge of the current page — moving to another page is what Prev/Next (or `[`/`]`)
+  are for. And with "Lazy-load long sessions" turned on (the default), a large per-page value no
+  longer leaves most of the page sitting behind a button you have to click over and over — the
+  rest of the page now fills itself in automatically, a chunk at a time with a loading spinner,
+  and stops the moment the full page is on screen. `g`/`Home`/`Shift+G` still take you to the
+  session's true first/last message, jumping to the right page first if you're not already on it.
 
 ## 4.0.28 — 2026-08-10
 

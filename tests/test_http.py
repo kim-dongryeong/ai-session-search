@@ -407,8 +407,8 @@ class ImplicitPhraseHttp(unittest.TestCase):
 
 def build_long_root():
     """A session long enough (well past DEFAULT_LIM=1000 turns) that a goto deep inside it
-    lands on an OFF-CENTER window — i.e. the rendered page does not start at turn 0 — so the
-    server paints a #loadprev top sentinel (see 'the top of a lazily-windowed session' bug)."""
+    lands on an OFF-CENTER window — i.e. the rendered page does not start at turn 0 — so
+    data-firstpage (the g/Home/Cmd+Up target) must point back at the first page."""
     root = tempfile.mkdtemp()
     proj = os.path.join(root, "-Users-x-long")
     os.makedirs(proj)
@@ -423,10 +423,10 @@ def build_long_root():
 
 
 class LazyWindowGotoHttp(unittest.TestCase):
-    """Server-side half of the g/Home/Cmd+Up 'load to true top' fix: unit tests can only
-    reach the rendered HTML, not the browser-side scroll behavior, so this is a cheap smoke
-    test that the wiring shipped — the #loadprev sentinel is present for an off-center goto
-    window, and the loadAllThenTop JS function name is present to drive it."""
+    """Server-side half of the g/Home/Cmd+Up 'go to true top' behavior: unit tests can only
+    reach the rendered HTML, not the browser-side navigation, so this is a cheap smoke test
+    that the wiring shipped — data-firstpage points at the first page (off=0) for an
+    off-center goto window, and the loadAllThenTop JS function name is present to drive it."""
 
     @classmethod
     def setUpClass(cls):
@@ -449,13 +449,17 @@ class LazyWindowGotoHttp(unittest.TestCase):
     def test_offcenter_goto_window_has_loadprev_and_load_all_then_top(self):
         # goto=1000 in a 1300-turn session with an explicit lim=200 (independent of whatever
         # default_lim this machine's persisted settings.json happens to hold): the centered
-        # window is turns [900,1100), starting well past 0, so the top sentinel must be
-        # painted...
+        # window is turns [900,1100) — that IS the page (off=900), so there is nothing earlier
+        # to load *within the page*; #loadprev must NOT appear (it would mean crossing into the
+        # previous page, which is the bug this fix removes)...
         status, body = self.get("/session?p=" + urllib.parse.quote(self.path) + "&goto=1000&lim=200")
         self.assertEqual(status, 200)
-        self.assertIn('id=loadprev', body)
-        # ...and the client-side loader that walks it all the way to the true top must be
-        # wired into the page (g / Home / Cmd+Up all call this).
+        self.assertNotIn('id=loadprev', body)
+        # ...instead the page carries a data-firstpage target (off=0) so g/Home/Cmd+Up navigate
+        # straight to the first page instead of walking backward past the page boundary.
+        self.assertIn('data-firstpage="', body)
+        self.assertNotIn('data-firstpage=""', body)
+        # the client-side function that drives g / Home / Cmd+Up must still be wired into the page.
         self.assertIn('loadAllThenTop', body)
 
 

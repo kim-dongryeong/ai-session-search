@@ -4307,12 +4307,12 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       var af=document.querySelector('.chip-f.active');                      // a filter chip is active → back to All
       if(af){var all=document.querySelector('.chip-f[data-cat="*"]');if(all)all.click();return;}
       return;}
-    // Home / Cmd+Up: mirror of g — jump to the true top of a lazily-windowed session. Handled
-    // here (ahead of the metaKey/ctrlKey/altKey bailout below) so Cmd+Up isn't swallowed by it.
-    // Only hijacked when a #loadprev top sentinel is actually present; otherwise fall through
+    // Home / Cmd+Up: mirror of g — jump to the true top of the session. Handled here (ahead of
+    // the metaKey/ctrlKey/altKey bailout below) so Cmd+Up isn't swallowed by it. Only hijacked
+    // when we're not already on the first page (data-firstpage present); otherwise fall through
     // to the browser's native Home/Cmd+Up scrolling untouched (no preventDefault).
     if(!typing&&(e.key==='Home'||(e.metaKey&&!e.ctrlKey&&!e.altKey&&e.code==='ArrowUp'))){
-      if(prv){e.preventDefault();loadAllThenTop();}
+      if(nk&&nk.getAttribute('data-firstpage')){e.preventDefault();loadAllThenTop();}
       return;}
     if(typing||e.metaKey||e.ctrlKey||e.altKey)return;
     if(C==='Slash'&&e.shiftKey){e.preventDefault();toggleHelp();return;}          // ? = help
@@ -4340,7 +4340,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(C==='KeyU'){e.preventDefault();nav('data-list');return;}                   // back to the session (thread) list
     if(C==='KeyH'&&e.shiftKey){e.preventDefault();location.href='/';return;}      // home (all workspaces)
     if(C==='KeyG'){e.preventDefault();
-      if(e.shiftKey)loadAllThenBottom();else if(prv)loadAllThenTop();else window.scrollTo(0,0);
+      if(e.shiftKey)loadAllThenBottom();else loadAllThenTop();
       return;}
   });
   // copy buttons (code view)
@@ -4470,15 +4470,18 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(navigator.clipboard){navigator.clipboard.writeText(s);return;}
     var t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t);
   }
-  // session view: the server paints a window; earlier/later messages are loaded only on
-  // explicit request — clicking "Load more"/"Load earlier" buttons, or the g/Shift+G/Home/
-  // Cmd+Up shortcuts below (which drive these same loaders programmatically, in a loop) —
-  // never merely by scrolling into view. No IntersectionObserver here on purpose.
+  // session view: the server paints a window bounded to the CURRENT PAGE ([off, off+lim)).
+  // #loadfwd (when present) only ever spans within that page — see data-end server-side — so
+  // crossing to another page is exclusively Prev/Next's job (or the g/Shift+G/Home/Cmd+Up page
+  // jumps below, via data-firstpage/data-lastpage). No IntersectionObserver here on purpose.
   var markTools=function(){if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});};
-  // forward: append [since,end) in 100-message chunks, only on button click (or the loop below)
+  // forward: append [since,end) in 100-message chunks. data-auto=1 (lazy render on) means this
+  // runs itself to completion as soon as the page loads — no click needed — painting the rest
+  // of THIS PAGE progressively (small chunks so the browser keeps painting) and then removing
+  // the sentinel once it reaches the page end (data-end), never past it.
   var fwd=document.getElementById('loadfwd');
   if(fwd){
-    var fp=fwd.getAttribute('data-p'),fsince=+fwd.getAttribute('data-since'),fend=+fwd.getAttribute('data-end'),fq=fwd.getAttribute('data-q')||'',fbusy=false;
+    var fp=fwd.getAttribute('data-p'),fsince=+fwd.getAttribute('data-since'),fend=+fwd.getAttribute('data-end'),fq=fwd.getAttribute('data-q')||'',fauto=fwd.getAttribute('data-auto')==='1',fbusy=false;
     var floadMore=function(){
       if(!fwd||fbusy||fsince>=fend)return; fbusy=true;
       var take=Math.min(100,fend-fsince);
@@ -4488,16 +4491,20 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
           fsince=(d&&d.end)?d.end:(fsince+take); markTools(); fbusy=false;
           if(!fwd)return;
           if(fsince>=fend){fwd.remove();fwd=null;}
+          else if(fauto)setTimeout(floadMore,0);   // keep filling this page, chunk by chunk
         }).catch(function(){fbusy=false;});
     };
     var fbtn=fwd.querySelector('button'); if(fbtn)fbtn.addEventListener('click',floadMore);
+    if(fauto)floadMore();   // progressive fill starts immediately, no click required
   }
-  // Shift+G: load every remaining message (not just what's near the viewport), then land on
-  // the true bottom. Reuses floadMore's fetch/busy-flag — no separate/racing loader.
-  // gLoadingAll is shared with loadAllThenTop below (g / Home / Cmd+Up) so the two "load
-  // everything" loops — one walking forward, one backward — can never run concurrently.
+  // Shift+G: jump to the session's true last message — the page that contains it if we're not
+  // already on it (data-lastpage), otherwise finish filling this (last) page and land at its
+  // bottom. Reuses floadMore's fetch/busy-flag — no separate/racing loader. gLoadingAll is
+  // shared with loadAllThenTop below so the two "finish this page" loops can't run concurrently.
   var gLoadingAll=false;
   function loadAllThenBottom(){
+    var lp=nk&&nk.getAttribute('data-lastpage');
+    if(lp){location.href=lp;return;}
     if(!fwd){window.scrollTo(0,document.body.scrollHeight);return;}
     if(gLoadingAll)return;
     gLoadingAll=true;
@@ -4509,42 +4516,14 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       setTimeout(step,30);
     })();
   }
-  // backward: prepend [from-take,from) with scroll anchoring so the view doesn't jump.
-  // Button-triggered only (or the g/Home/Cmd+Up loop below) — no auto-load on scroll.
-  var prv=document.getElementById('loadprev');
-  if(prv){
-    var pp=prv.getAttribute('data-p'),pfrom=+prv.getAttribute('data-from'),pq=prv.getAttribute('data-q')||'',pbusy=false;
-    var ploadMore=function(){
-      if(!prv||pbusy||pfrom<=0)return; pbusy=true;
-      var take=Math.min(100,pfrom),since=pfrom-take;
-      fetch('/api/session_tail?p='+encodeURIComponent(pp)+'&since='+since+'&limit='+take+(pq?'&q='+encodeURIComponent(pq):''))
-        .then(function(r){return r.json();}).then(function(d){
-          if(d&&d.html&&prv){
-            var h0=document.documentElement.scrollHeight;
-            prv.insertAdjacentHTML('afterend',d.html); markTools();
-            window.scrollTo(0,window.scrollY+(document.documentElement.scrollHeight-h0));
-          }
-          pfrom=since; pbusy=false;
-          if(prv&&pfrom<=0){prv.remove();prv=null;}
-        }).catch(function(){pbusy=false;});
-    };
-    var pbtn=prv.querySelector('button'); if(pbtn)pbtn.addEventListener('click',ploadMore);
-  }
-  // g / Home / Cmd+Up: mirror of Shift+G/loadAllThenBottom — when a goto landed us mid-session
-  // (a #loadprev top sentinel is present), repeatedly drive ploadMore's fetch/busy-flag until
-  // every earlier message is loaded (sentinel removed / pfrom reaches 0), then land on the true
-  // top. Each step re-checks the same pbusy flag, so there's no double-fetch race.
+  // g / Home / Cmd+Up: jump to the session's true first message — the first page if we're not
+  // already on it (data-firstpage; a plain navigation, since the first page always starts at
+  // the true top so no further client-side loading is needed once there), otherwise just scroll
+  // to the top of the current (first) page.
   function loadAllThenTop(){
-    if(!prv){window.scrollTo(0,0);return;}
-    if(gLoadingAll)return;
-    gLoadingAll=true;
-    (function step(){
-      if(!prv){gLoadingAll=false;window.scrollTo(0,0);return;}
-      if(pbusy){setTimeout(step,30);return;}
-      if(pfrom<=0){gLoadingAll=false;window.scrollTo(0,0);return;}
-      ploadMore();
-      setTimeout(step,30);
-    })();
+    var fp=nk&&nk.getAttribute('data-firstpage');
+    if(fp){location.href=fp;return;}
+    window.scrollTo(0,0);
   }
   // live-update: poll the session file and APPEND new messages in place, like a chat — no reload.
   try{if(sessionStorage.getItem('aiss:tail')){sessionStorage.removeItem('aiss:tail');window.scrollTo(0,document.body.scrollHeight);}}catch(_){}
@@ -6098,25 +6077,36 @@ class H(BaseHTTPRequestHandler):
         # read around a match. (filtered/human view keeps classic Prev/Next paging.)
         continuous = filt == "all"
         INIT_CHUNK = 120
+        # A page means exactly `lim` messages: [off, page_end) — page_end is the page's own end,
+        # NEVER len(turns). Streaming (lazy fill, below) may only fill in THIS range; crossing
+        # into the next/previous page is exclusively Prev/Next's job (see pg/navkeys further down).
+        page_end = min(off + lim, len(turns)) if lim is not None else len(turns)
         # paint the whole window for a goto (the target must be in the DOM to scroll to it);
-        # otherwise paint the first chunk instantly and stream the window's remainder.
+        # otherwise paint the first chunk instantly and stream the rest of THIS PAGE automatically.
         lazy = (continuous and goto_gi is None and len(page) > INIT_CHUNK
                 and lim_raw == "" and get_lazy_render())
         shown = page[:INIT_CHUNK] if lazy else page
         body = []
-        if continuous and page and page[0][0] > 0:
-            # top control — clicking prepends 100 earlier messages inline (no auto-load on scroll)
+        # Backward sentinel: bound to the page start (`off`) — page[0][0] IS `off` for the
+        # continuous (filt=all) view, so there is never anything earlier to load *within this
+        # page*; reaching further back is a previous-page navigation (see g/Home/Cmd+Up below,
+        # which jump to the first/last page via data-firstpage/data-lastpage instead of an inline
+        # loader that used to walk past the page boundary).
+        if continuous and page and page[0][0] > off:
             body.append(f'<div id=loadprev class=loadmore data-p="{esc(path)}" data-from="{page[0][0]}" '
-                        f'data-q="{esc(q)}"><button type=button>↑ {tr("Load earlier messages")}</button></div>')
+                        f'data-floor="{off}" data-q="{esc(q)}">'
+                        f'<button type=button>↑ {tr("Load earlier messages")}</button></div>')
         for gi, t in shown:
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
             body.append(render_turn(gi, t, q, tl))
-        if continuous and shown and shown[-1][0] + 1 < len(turns):
-            # bottom control — clicking appends 100 more messages toward the end of the session
-            # (no auto-load on scroll; g/Shift+G/Home/Cmd+Up drive this + loadprev programmatically)
+        if continuous and shown and shown[-1][0] + 1 < page_end:
+            # This only renders when the page isn't fully painted yet, i.e. lazy==True (see above:
+            # a non-lazy render always paints straight through to page_end). So this is always the
+            # progressive-fill sentinel — JS drives it to completion automatically (no click), then
+            # removes it once shown[-1]+1 reaches page_end (never past it).
             body.append(f'<div id=loadfwd class=loadmore data-p="{esc(path)}" data-since="{shown[-1][0] + 1}" '
-                        f'data-end="{len(turns)}" data-q="{esc(q)}">'
-                        f'<button type=button>↓ {tr("Load 100 more messages")}</button></div>')
+                        f'data-end="{page_end}" data-q="{esc(q)}" data-auto=1>'
+                        f'<span class=searching><span class=spin></span> {tr("Loading more messages…")}</span></div>')
         if goto_gi is not None:
             body.append(
                 '<script>window.addEventListener("load",function(){'
@@ -6160,10 +6150,18 @@ class H(BaseHTTPRequestHandler):
         pgbar = f'<div class=pg>{"".join(pg)}</div>' if pg else ""
         # targets for the keyboard shortcuts (j/k session, [/] page, m only-me toggle)
         def _sh(s): return f'/session?p={urllib.parse.quote(s["path"])}' if s else ""
+        # last page's `off` (the page containing the session's final message), for Shift+G
+        last_off = max(0, ((total - 1) // lim) * lim) if (lim is not None and lim > 0 and total > 0) else 0
         navkeys = ('<span id=navkeys hidden'
                    f' data-prevsess="{esc(_sh(prev))}" data-nextsess="{esc(_sh(nxt))}"'
                    f' data-prevpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=max(0, off-lim)) if (lim is not None and off > 0) else "")}"'
                    f' data-nextpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=off+lim) if (lim is not None and off+lim < total) else "")}"'
+                   # g/Home/Cmd+Up and Shift+G: go to the true first/last message of the SESSION,
+                   # which may live on a different page — a plain navigation to that page's `off`
+                   # (with the browser's natural top-of-page / bottom-after-fill landing) rather
+                   # than an inline loader that used to walk past the current page's boundary.
+                   f' data-firstpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=0) if (lim is not None and off > 0) else "")}"'
+                   f' data-lastpage="{esc(url(filter=(filt if filt=="human" else ""), q=q, lim=lim_raw, off=last_off) if (lim is not None and off + lim < total) else "")}"'
                    f' data-onlyme="{esc(url(filter="human", q=q, lim=lim_raw))}" data-showall="{esc(url(q=q, lim=lim_raw))}"'
                    f' data-list="{esc((("/?" + urllib.parse.urlencode({"proj": proj, "root": rt})) if proj else "/") + "#" + sid)}"'
                    f' data-code="{esc(url(view="code", q=q))}" data-filt="{esc(filt)}"></span>')
