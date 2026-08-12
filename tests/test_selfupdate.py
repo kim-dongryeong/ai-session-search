@@ -1,10 +1,13 @@
 """Unit tests for the in-app self-updater (macOS). These stay hermetic: no network,
 no real .app, no privileged commands — the OS-touching parts (codesign/spctl/hdiutil)
 are exercised manually against real bundles during release, not here."""
+import http.client
+import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -94,6 +97,159 @@ class Worker(unittest.TestCase):
         # the mount app path is single-quoted (spaces handled)
         self.assertIn("'/Volumes/upd/AI Session Search.app'", body)
         os.unlink(captured["script"])
+
+
+class DownloadRetry(unittest.TestCase):
+    """The .dmg download and the release-metadata fetch both hit the same intermittently
+    flaky GitHub host (first connection closed without a response). Neither retried at
+    all before; now both do, bounded, and a permanent HTTPError is never retried."""
+
+    def setUp(self):
+        app._set_update("idle", "", 0, target=None)
+
+    def _fake_response(self, body):
+        class FakeResp:
+            def __init__(self, data):
+                self._data = data
+                self.headers = {"Content-Length": str(len(data))}
+            def read(self, n=-1):
+                out = self._data[:n] if n and n > 0 else self._data
+                self._data = self._data[len(out):]
+                return out
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        return FakeResp(body)
+
+    def test_download_retries_after_remote_disconnected_then_succeeds(self):
+        payload = b"x" * 1000
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise http.client.RemoteDisconnected("Remote end closed connection without response")
+            return self._fake_response(payload)
+
+        with mock.patch.object(app, "_frozen_app_bundle", return_value="/tmp/Fake.app"), \
+             mock.patch.object(app, "_latest_release_asset",
+                               return_value=("99.0.0", "https://example/x.dmg")), \
+             mock.patch.object(app, "_urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(app, "_verify_bundle", return_value=(True, "ok", None)), \
+             mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stderr="", stdout="")), \
+             mock.patch.object(os, "listdir", return_value=["Fake.app"]), \
+             mock.patch.object(app, "_install_helper"):
+            app.run_self_update(dry_run=True)
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(app._UPDATE["state"], "verified")
+
+    def test_download_exhausts_retries_lands_in_error_with_friendly_message(self):
+        def fake_urlopen(req, timeout=None):
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+
+        with mock.patch.object(app, "_frozen_app_bundle", return_value="/tmp/Fake.app"), \
+             mock.patch.object(app, "_latest_release_asset",
+                               return_value=("99.0.0", "https://example/x.dmg")), \
+             mock.patch.object(app, "_urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(time, "sleep", return_value=None):
+            app.run_self_update(dry_run=True)
+        self.assertEqual(app._UPDATE["state"], "error")
+        self.assertIn("Download failed", app._UPDATE["detail"])
+        self.assertIn("RemoteDisconnected", app._UPDATE["detail"])
+
+    def test_download_404_not_retried(self):
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            raise urllib.error.HTTPError("https://example/x.dmg", 404, "Not Found", {}, None)
+
+        with mock.patch.object(app, "_frozen_app_bundle", return_value="/tmp/Fake.app"), \
+             mock.patch.object(app, "_latest_release_asset",
+                               return_value=("99.0.0", "https://example/x.dmg")), \
+             mock.patch.object(app, "_urlopen", side_effect=fake_urlopen):
+            app.run_self_update(dry_run=True)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(app._UPDATE["state"], "error")
+
+    def test_partial_file_from_failed_attempt_does_not_corrupt_retry(self):
+        good = b"y" * 500
+        bad = b"z" * 200
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # simulate a response that dies partway through the read
+                class DyingResp:
+                    def __init__(self):
+                        self.headers = {"Content-Length": str(len(bad))}
+                        self._sent = False
+                    def read(self, n=-1):
+                        if not self._sent:
+                            self._sent = True
+                            return bad
+                        raise http.client.RemoteDisconnected("Remote end closed connection without response")
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *a):
+                        return False
+                return DyingResp()
+            return self._fake_response(good)
+
+        tmp_holder = {}
+        real_mkdtemp = __import__("tempfile").mkdtemp
+
+        def fake_mkdtemp(prefix=None):
+            d = real_mkdtemp(prefix=prefix)
+            tmp_holder["dir"] = d
+            return d
+
+        with mock.patch.object(app, "_frozen_app_bundle", return_value="/tmp/Fake.app"), \
+             mock.patch.object(app, "_latest_release_asset",
+                               return_value=("99.0.0", "https://example/x.dmg")), \
+             mock.patch.object(app, "_urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(app, "_verify_bundle", return_value=(True, "ok", None)), \
+             mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stderr="", stdout="")), \
+             mock.patch.object(os, "listdir", return_value=["Fake.app"]), \
+             mock.patch.object(app, "_install_helper"), \
+             mock.patch("tempfile.mkdtemp", side_effect=fake_mkdtemp):
+            app.run_self_update(dry_run=True)
+        self.assertEqual(app._UPDATE["state"], "verified")
+        with open(os.path.join(tmp_holder["dir"], "update.dmg"), "rb") as f:
+            self.assertEqual(f.read(), good)   # not bad+good concatenated
+
+
+class MetadataRetry(unittest.TestCase):
+    def test_latest_release_asset_retries_after_remote_disconnected(self):
+        payload = {"tag_name": "v99.0.0",
+                   "assets": [{"name": app._dmg_asset_name(), "browser_download_url": "https://example/x.dmg"}]}
+        calls = {"n": 0}
+
+        class FakeResp:
+            def __init__(self, data):
+                import io
+                self._buf = io.BytesIO(json.dumps(data).encode())
+            def read(self, *a):
+                return self._buf.read(*a)
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise http.client.RemoteDisconnected("Remote end closed connection without response")
+            return FakeResp(payload)
+
+        with mock.patch.object(app, "_urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(time, "sleep", return_value=None):
+            tag, url = app._latest_release_asset()
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(tag, "99.0.0")
+        self.assertEqual(url, "https://example/x.dmg")
 
 
 class EndpointGuards(unittest.TestCase):

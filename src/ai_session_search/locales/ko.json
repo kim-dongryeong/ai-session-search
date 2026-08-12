@@ -319,6 +319,7 @@
   "No matching download found for this release.": "이 릴리스에 맞는 다운로드를 찾지 못했어요.",
   "Already up to date.": "이미 최신이에요.",
   "Downloading the update…": "업데이트 내려받는 중…",
+  "Download failed — check your connection and try again.": "다운로드 실패 — 인터넷 연결을 확인하고 다시 시도하세요.",
   "Verifying the signature…": "서명 검증 중…",
   "Refusing to install: ": "설치 거부: ",
   "Installing and restarting…": "설치하고 재시작 중…",

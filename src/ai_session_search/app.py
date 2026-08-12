@@ -30,6 +30,7 @@ import hashlib
 import heapq
 import hmac
 import html
+import http.client
 import json
 import os
 import pickle
@@ -48,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.29"
+__version__ = "4.0.30"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -368,19 +369,51 @@ def _verify_bundle(app_path):
         return False, f"bundle-id mismatch (got {got_bid}, expected {want_bid})", "bundle_id"
     return True, f"verified: team {got_team}, {got_bid}", None
 
+# GitHub's release-asset host (and, less often, the api.github.com metadata endpoint)
+# intermittently closes the very first connection of a request without sending a
+# response (http.client.RemoteDisconnected) — a transient, harmless hiccup, not a real
+# failure. Neither call retried at all, so one flaky connection aborted the whole update.
+# _RETRYABLE_NET_ERRORS lists the exception types worth a short bounded retry; anything
+# else (e.g. urllib.error.HTTPError for a real 404) is a permanent failure and must NOT
+# be retried — it's re-raised/returned immediately so the caller doesn't waste time.
+_RETRYABLE_NET_ERRORS = (http.client.RemoteDisconnected, http.client.IncompleteRead,
+                          urllib.error.URLError, ConnectionError, TimeoutError, OSError)
+
+
+def _is_retryable_net_error(e):
+    """True for transient network failures worth retrying, False for permanent ones
+    (in particular urllib.error.HTTPError — a real HTTP status like 404 won't change
+    on retry)."""
+    if isinstance(e, urllib.error.HTTPError):
+        return False
+    return isinstance(e, _RETRYABLE_NET_ERRORS)
+
+
 def _latest_release_asset():
-    """(tag, download_url) for this arch's .dmg on the latest release, or (None, None)."""
+    """(tag, download_url) for this arch's .dmg on the latest release, or (None, None).
+    Retries up to 3 times (0.5s/1s backoff) on transient network errors — the metadata
+    endpoint hits the same flaky host as the .dmg download itself, so an update could
+    otherwise fail before it even starts downloading."""
     name = _dmg_asset_name()
     if not name:
         return None, None
-    try:
-        req = urllib.request.Request(
-            f"https://api.github.com/repos/{REPO_SLUG}/releases/latest",
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": f"ai-session-search/{__version__}"})
-        with _urlopen(req, timeout=10) as r:
-            data = json.load(r)
-    except Exception as e:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO_SLUG}/releases/latest",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": f"ai-session-search/{__version__}"})
+    attempts = 3
+    backoffs = [0.5, 1.0]
+    data = None
+    for attempt in range(attempts):
+        try:
+            with _urlopen(req, timeout=10) as r:
+                data = json.load(r)
+            break
+        except Exception as e:
+            if not _is_retryable_net_error(e) or attempt == attempts - 1:
+                return None, None
+            time.sleep(backoffs[attempt])
+    if data is None:
         return None, None
     tag = (data.get("tag_name") or "").lstrip("vV").strip() or None
     url = next((a.get("browser_download_url") for a in data.get("assets", [])
@@ -479,21 +512,47 @@ def run_self_update(dry_run=False, port=None):
     _set_update("downloading", tr("Downloading the update…"), 10, target=tag)
     tmpdir = tempfile.mkdtemp(prefix="aiss-upd-")
     dmg = os.path.join(tmpdir, "update.dmg")
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"ai-session-search/{__version__}"})
-        with _urlopen(req, timeout=60) as r, open(dmg, "wb") as out:
-            total = int(r.headers.get("Content-Length") or 0)
-            got = 0
-            while True:
-                chunk = r.read(262144)
-                if not chunk:
-                    break
-                out.write(chunk)
-                got += len(chunk)
-                if total:
-                    _set_update("downloading", tr("Downloading the update…"), 10 + int(70 * got / total))
-    except Exception as e:
-        return _set_update("error", f"download failed: {e}")
+    # The download itself hits the same flaky GitHub release-asset host as
+    # _latest_release_asset() — retry the *whole* attempt a few times (0.5s/1s/2s
+    # backoff) on transient errors. Each attempt restarts the file from scratch (an
+    # ~11MB .dmg doesn't need resume support) so a partial file from a failed attempt
+    # can never get concatenated with a retry's bytes.
+    attempts = 4
+    backoffs = [0.5, 1.0, 2.0]
+    last_err = None
+    for attempt in range(attempts):
+        try:
+            if os.path.exists(dmg):
+                os.remove(dmg)          # truncate any partial bytes from a prior attempt
+            req = urllib.request.Request(url, headers={"User-Agent": f"ai-session-search/{__version__}"})
+            with _urlopen(req, timeout=60) as r, open(dmg, "wb") as out:
+                total = int(r.headers.get("Content-Length") or 0)
+                got = 0
+                while True:
+                    chunk = r.read(262144)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        _set_update("downloading", tr("Downloading the update…"), 10 + int(70 * got / total))
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            if not _is_retryable_net_error(e) or attempt == attempts - 1:
+                break
+            _set_update("downloading", tr("Downloading the update…"), 10)   # reset for the retry
+            time.sleep(backoffs[attempt])
+    if last_err is not None:
+        try:
+            if os.path.exists(dmg):
+                os.remove(dmg)
+        except OSError:
+            pass
+        detail = f"{type(last_err).__name__}: {str(last_err)[:160]}"
+        return _set_update("error", tr("Download failed — check your connection and try again.") +
+                            f" ({detail})")
     _set_update("verifying", tr("Verifying the signature…"), 85)
     mount = os.path.join(tmpdir, "mnt")
     os.makedirs(mount, exist_ok=True)

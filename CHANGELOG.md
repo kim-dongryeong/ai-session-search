@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.30 — 2026-08-12
+
+A one-click update could fail outright when the download server dropped the very first
+connection — a common, harmless hiccup — because nothing retried.
+
+- **Fix: a single dropped connection could fail the whole update.** GitHub's download
+  server occasionally closes the very first connection of a request without answering it
+  at all; that's normal and the very next attempt almost always succeeds. The updater
+  previously had no retry logic anywhere, so this harmless hiccup showed up to you as
+  "Update failed — download failed: Remote end closed connection without response" and
+  you had to click "Update" again yourself. It now retries the download (and the
+  behind-the-scenes check for the latest release) a few times with a short pause between
+  attempts before giving up.
+- **Better wording when an update genuinely can't be downloaded.** If every retry fails
+  (for example your connection is actually down), you now see "Download failed — check
+  your connection and try again." instead of a raw exception string. The technical detail
+  is still included in parentheses for a bug report, and the Update button goes back to
+  being clickable so you can try again right away.
+
 ## 4.0.29 — 2026-08-12
 
 One-click update now actually relaunches you into the new version, and the app never
