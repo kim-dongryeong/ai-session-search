@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.30"
+__version__ = "4.0.31"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -4701,10 +4701,17 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   function applyFilter(){
     var keys=Object.keys(active).filter(function(k){return active[k];});
     document.querySelectorAll('.msg').forEach(function(m){
-      if(!keys.length){m.style.display='';return;}
-      var cats=(m.getAttribute('data-cats')||'').split(' ');
-      var hit=keys.some(function(k){return cats.indexOf(k)>=0;});
-      m.style.display=hit?'':'none';
+      var vis='';
+      if(keys.length){
+        var cats=(m.getAttribute('data-cats')||'').split(' ');
+        vis=keys.some(function(k){return cats.indexOf(k)>=0;})?'':'none';
+      }
+      m.style.display=vis;
+      // in the in-session search view each result is wrapped by its own
+      // "Load 100 before/after" controls — a hidden result must not leave them behind
+      [m.previousElementSibling,m.nextElementSibling].forEach(function(s){
+        if(s&&s.classList&&s.classList.contains('ctxctl'))s.style.display=vis;
+      });
     });
     buildMinimap();
   }
@@ -6065,6 +6072,9 @@ class H(BaseHTTPRequestHandler):
             bar = (f'<div class=bar><a class=backfull href="{url()}">← {tr("full conversation")}</a>'
                    f'<span class=meta>🔎 <b>{esc(sq)}</b> — {len(show)} {tr("messages matched in this session")}{mode}{extra} · {ms}ms'
                    f'<span id=perf></span></span></div>')
+            # the same 0/1..9 category chips as the full conversation, counted over the
+            # matched messages only (so a count of 0 never shows a chip you can't use)
+            bar += chip_bar_html([turns[gi] for gi in show])
             return shell(meta["title"][:50], head + bar
                          + ("".join(body) or f"<p class=meta>{tr('No matches in the conversation (try “+… in tool results” above).')}</p>"), q, root=rt)
 

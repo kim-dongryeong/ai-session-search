@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.31 — 2026-08-13
+
+- **In-session search results now have the category filter chips.** Searching inside one
+  conversation (the 🔎 box at the top of a session) showed a flat list of matches with no way
+  to narrow it. It now carries the same `0`=All / `1`,`2`,… chip bar as the full conversation
+  (🧑 My messages, ✦ Agent, ⚠️ Errors, ✏️ Edits, 🧠 Memory, ❯ Commands, ⎇ Commits, 🧪 Tests,
+  🔗 URL), with counts computed over the matched messages only, so a chip never appears for a
+  category that has no hits. Filtering also hides the "▲ Load 100 before / ▼ Load 100 after"
+  buttons attached to a hidden result, instead of leaving them stranded.
+
 ## 4.0.30 — 2026-08-12
 
 A one-click update could fail outright when the download server dropped the very first

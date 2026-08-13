@@ -280,6 +280,16 @@ class SessionSearchContext(unittest.TestCase):
         # the matched turn itself is still rendered with its permalink id
         self.assertIn('id="t150"', body)
 
+    def test_sq_view_has_category_filter_chips(self):
+        # the in-session search results get the same 0/1..9 category chip bar as the full
+        # conversation, with counts taken over the matched messages only (here: 1 'you' turn).
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.path)
+                                 + "&sq=UNIQUEMARKER")
+        self.assertEqual(status, 200)
+        self.assertIn('class=chip-f data-cat="*"', body)
+        self.assertIn('class=chip-f data-cat="you"', body)
+        self.assertIn("My messages<span class=cnt>1</span>", body)
+
     def test_sq_view_omits_context_button_at_session_edge(self):
         # a match at turn 0 has nothing earlier to load — no "before" control should render.
         root, path = build_long_root(n=50, marker_at=0)
