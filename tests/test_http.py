@@ -86,6 +86,15 @@ class HttpSmoke(unittest.TestCase):
         self.assertIn("데모 세션", body)
         self.assertIn("Project stats", body)
 
+    def test_html_pages_are_never_cached(self):
+        # After a self-update the process serving pages is a different build, so a browser-cached
+        # page (Back button / bfcache) would show the OLD version badge. HTML must be no-store,
+        # and the pageshow fallback must be wired for browsers that restore it regardless.
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
+            self.assertIn("no-store", (r.headers.get("Cache-Control") or ""))
+            body = r.read().decode("utf-8")
+        self.assertIn("addEventListener('pageshow'", body)
+
     def test_session_attribution(self):
         status, body = self.get("/session?p=" + urllib.parse.quote(self.session_path) + "&lim=all")
         self.assertEqual(status, 200)

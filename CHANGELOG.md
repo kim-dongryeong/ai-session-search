@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.32 — 2026-08-14
+
+- **Fix: the Back button could show the version (and page) from before an update.** Pages were
+  cacheable, so after a self-update the browser would restore a copy rendered by the *old*
+  build — the version badge in the top-right flipped back to the previous number on Back, and
+  forward again on any fresh request. Pages are now sent `Cache-Control: no-store` (everything
+  is served from your own machine, so re-fetching costs nothing), and a `pageshow` handler
+  catches browsers that restore from the back/forward cache anyway: it asks the running server
+  which version it is and reloads on a mismatch. This was cosmetic — the new build was always
+  the one actually serving — but it made it look like the update had come undone.
+
 ## 4.0.31 — 2026-08-13
 
 - **In-session search results now have the category filter chips.** Searching inside one

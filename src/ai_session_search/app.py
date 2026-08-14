@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.31"
+__version__ = "4.0.32"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -4856,6 +4856,20 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     }
   }
 })();
+// A page restored from the back/forward cache was rendered by whatever build was running at
+// the time — after a self-update that is the OLD version, so Back would show a stale version
+// badge (and stale markup) even though the new build is what's actually serving. Responses are
+// sent no-store, which already opts out of bfcache in Chrome; this handles any browser that
+// restores the page anyway: ask the live server what it is now, and reload on a mismatch.
+window.addEventListener('pageshow',function(e){
+  if(!e.persisted)return;
+  var b=document.querySelector('.verbadge');
+  if(!b)return;
+  var shown=b.textContent.replace(/^v/,'').trim();
+  fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
+    if(st&&st.version&&st.version!==shown)location.reload();
+  }).catch(function(){});
+});
 </script>
 </body></html>"""
 
@@ -5066,6 +5080,14 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        # Never let the browser reuse a stored copy of a page. Two reasons: (1) after a
+        # self-update the process serving these pages is a DIFFERENT build, so a cached page
+        # would show the OLD version badge (and old markup) on Back; (2) the underlying
+        # transcripts change on disk constantly. Everything is served from localhost, so
+        # re-fetching costs nothing. This also opts the page out of Chrome's bfcache — the
+        # pageshow handler in the page script is the belt-and-braces fallback for browsers
+        # that restore it anyway.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
