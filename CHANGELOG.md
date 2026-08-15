@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.33 — 2026-08-15
+
+- **Fix: Codex, Gemini, and Antigravity replies were labelled "Claude".** The assistant-message
+  label was hardcoded, so opening a Codex transcript showed `✦ Claude` above every reply that
+  Codex had written. Each session now shows the agent that actually wrote it — `🌀 Codex`,
+  `✨ Gemini`, `✨ Antigravity`, or `✦ Claude`. This applies everywhere a message is rendered:
+  the conversation view, in-session search, threads, sub-agent views, the incremental
+  "load more" fragments, and the cross-session search snippets.
+  In the **project timeline**, which merges several sessions into one stream, the label is
+  decided per message from its own session — so a folder holding both Codex and Claude work
+  labels each message correctly.
+- **Screens that cover every provider at once now stay neutral.** The legend, the index page
+  blurb, and a workspace summary that spans more than one agent say `✦ Agent` instead of naming
+  one; the search scope filter is now `✦ Only the agent` rather than `✦ Only Claude`. The legend
+  descriptions ("the agent's reasoning", "output of a tool the agent ran", …) were reworded the
+  same way.
+
 ## 4.0.32 — 2026-08-14
 
 - **Fix: the Back button could show the version (and page) from before an update.** Pages were

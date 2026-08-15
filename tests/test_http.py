@@ -54,13 +54,30 @@ def build_fixture_root():
     with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as fh:
         for o in lines:
             fh.write(json.dumps(o, ensure_ascii=False) + "\n")
-    return root, os.path.join(proj, sid + ".jsonl")
+
+    # a Codex transcript alongside the Claude one — provider_of() keys off the "rollout-" filename
+    # alone (not the folder), so this can live in the same synthetic root as the Claude fixture.
+    codex_sid = "019c8b6e-2595-7111-aaaa-bbbbccccdddd"
+    codex_lines = [
+        {"type": "session_meta", "payload": {"id": codex_sid, "cwd": "/Users/x/codexdemo"}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+         "content": [{"type": "input_text", "text": "코덱스한테 물어봄"}]}},
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+         "content": [{"type": "output_text", "text": "코덱스가 답함"}]}},
+    ]
+    codex_path = os.path.join(proj, f"rollout-2026-02-24T01-56-17-{codex_sid}.jsonl")
+    with open(codex_path, "w", encoding="utf-8") as fh:
+        for o in codex_lines:
+            fh.write(json.dumps(o, ensure_ascii=False) + "\n")
+
+    return root, os.path.join(proj, sid + ".jsonl"), codex_path
 
 
 class HttpSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.root, cls.session_path = build_fixture_root()
+        cls.root, cls.session_path, cls.codex_session_path = build_fixture_root()
         # pin to the fixture: "/" with no root param now browses ALL roots, and
         # configure() auto-discovers the machine's real ~/.claude, ~/.codex, ~/.gemini
         app.configure(cls.root)
@@ -106,6 +123,14 @@ class HttpSmoke(unittest.TestCase):
         self.assertIn('<details class="fold tasknote" open>', body)
         self.assertIn("&lt;b&gt;계획&lt;/b&gt;", body)     # user HTML is escaped
         self.assertIn("session-id", body)
+
+    def test_codex_assistant_label_not_claude(self):
+        # a Codex session's assistant turn must say "Codex", never the hardcoded "✦ Claude" that
+        # used to be baked into ROLE_LABEL regardless of which agent actually wrote the transcript
+        status, body = self.get("/session?p=" + urllib.parse.quote(self.codex_session_path) + "&lim=all")
+        self.assertEqual(status, 200)
+        self.assertIn("🌀 Codex", body)
+        self.assertNotIn("✦ Claude", body)
 
     def test_search_scopes(self):
         status, body = self.get("/search?q=" + urllib.parse.quote("계획"))
