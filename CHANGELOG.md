@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.34 — 2026-08-15
+
+- **New: per-message favorites (★).** Every message — in the conversation view, in-session
+  search results, threads, sub-agent views, and the project timeline — now has a small ☆
+  button next to its permalink. Click it to save that one message; a new **⭐ Favorites** page
+  (linked from the top of the index) lists everything you saved, grouped by session, each with
+  its excerpt and a jump link straight to that message. This is separate from the existing
+  whole-session ⭐ stars.
+- **Favorites survive moving your history to another computer.** A favorite is keyed by the
+  session UUID embedded in the transcript's *filename* plus the message's position — never by
+  the file's absolute path. So whether you copy a session folder to a new machine and add it as
+  a search folder, or transplant the files into the new machine's own session folder, the same
+  favorites file keeps working: the app re-finds each session by scanning the current folders
+  for that filename. To migrate, copy the single file shown at the bottom of the Favorites page
+  (`~/.config/ai-session-search/favorites.json`) to the same location on the new computer. If a
+  favorite's session isn't in any added folder yet, the page says so instead of a dead link.
+
 ## 4.0.33 — 2026-08-15
 
 - **Fix: Codex, Gemini, and Antigravity replies were labelled "Claude".** The assistant-message

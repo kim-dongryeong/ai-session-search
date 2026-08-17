@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.33"
+__version__ = "4.0.34"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -96,12 +96,15 @@ ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
 STARS_FILE = os.path.join(CONFIG_DIR, "stars.json")   # starred session-ids, persisted per machine
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")  # user prefs (default per-page, lazy-render), persisted per machine
 UPDATE_FILE = os.path.join(CONFIG_DIR, "update.json")  # cached latest-release check (throttled to 1/day)
+FAVS_FILE = os.path.join(CONFIG_DIR, "favorites.json")  # per-message favorites (★), persisted per machine
 REPO_SLUG = "kim-dongryeong/ai-session-search"
 _ROOTLOCK = threading.Lock()
 _STARLOCK = threading.Lock()
+_FAVSLOCK = threading.Lock()
 _STARS = set()
 _SETTINGSLOCK = threading.Lock()
 _SETTINGS = {}   # {"default_lim": int|"all", "lazy_render": bool, "timeline_lim": int} — missing key = current default behavior
+_FAVS = {}   # "sid:gi" -> {"sid","gi","provider","role","title","excerpt","ts","path","added"} — see fav_key()
 
 def load_stars():
     try:
@@ -128,6 +131,47 @@ def set_stars(sids, on):
         _STARS = s
         save_stars(s)
         return sorted(s)
+
+def fav_key(sid, gi):
+    """The logical identity of a favorited message — see FAVS_FILE for why sid+gi (not a path)."""
+    return f"{sid}:{gi}"
+
+def load_favs():
+    """{"sid:gi": entry} keyed for O(1) lookup/dedup — see set_fav(). A broken/missing file is
+    just an empty favorites set, same as load_stars()/load_settings()."""
+    try:
+        with open(FAVS_FILE, encoding="utf-8") as fh:
+            d = json.load(fh)
+        favs = d.get("favs", []) if isinstance(d, dict) else []
+        return {fav_key(f["sid"], f["gi"]): f for f in favs
+                if isinstance(f, dict) and "sid" in f and "gi" in f}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+def save_favs(favs):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(FAVS_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"favs": list(favs.values())}, fh, ensure_ascii=False, indent=0)
+    except OSError:
+        pass
+
+def set_fav(entry, on):
+    """Add/remove one favorite (keyed by sid:gi); persist; return the on-state actually applied.
+    Adding a key that's already there is a no-op (the FIRST save wins) rather than an update —
+    the stored excerpt/title reflect the message as it was when first starred, which is fine
+    since transcripts are append-only and this text never changes."""
+    global _FAVS
+    key = fav_key(entry["sid"], entry["gi"])
+    with _FAVSLOCK:
+        d = dict(_FAVS)
+        if on:
+            d.setdefault(key, entry)
+        else:
+            d.pop(key, None)
+        _FAVS = d
+        save_favs(d)
+        return key in d
 
 def load_settings():
     try:
@@ -728,10 +772,11 @@ def configure(primary_root=None, extra_roots=(), exclusive=False):
     """(Re)initialize app state. Called by main(); tests call it directly.
     exclusive=True uses ONLY primary + extra_roots (no auto-discovery, no saved roots) —
     used by --demo so it never touches your real Claude/Codex/Gemini history."""
-    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS, _SETTINGS, _EXCLUSIVE
+    global ROOT, ROOTS, DEFAULT_ROOTS, SAVED_ROOTS, _STARS, _SETTINGS, _FAVS, _EXCLUSIVE
     _EXCLUSIVE = exclusive   # demo/test data must never read or write the disk cache
     _STARS = load_stars()
     _SETTINGS = load_settings()
+    _FAVS = load_favs()
     primary = os.path.abspath(os.path.expanduser(primary_root or default_primary_root()))
     if exclusive:
         DEFAULT_ROOTS = [primary] + [os.path.abspath(os.path.expanduser(p))
@@ -1273,6 +1318,31 @@ def _gemini_load(path):
 def _agy_sid(path):
     m = re.search(r"/brain/([0-9a-f\-]+)/", path.replace(os.sep, "/"))
     return m.group(1) if m else os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+
+# sid_of() ties together the per-provider sid extractors above (_codex_sid, _agy_sid,
+# _gemini_sid) — the one place that answers "what's this transcript's stable id". It's the
+# favorites key (see FAVS_FILE): a session folder copied to another root, or a whole
+# ~/.claude tree moved to a new computer, keeps its filename even though the absolute path
+# changes — so sid survives both moves and a plain path never would.
+# _gemini_sid reads the file's first line (its sid isn't reliably in the filename), so this
+# is memoized per path — sid_of() runs once per rendered message, and a path's sid never
+# changes, so re-deriving it on every message would mean re-opening the file that often.
+_SID_CACHE = {}
+_SID_CACHE_LOCK = threading.Lock()
+
+def sid_of(path):
+    with _SID_CACHE_LOCK:
+        hit = _SID_CACHE.get(path)
+    if hit is not None:
+        return hit
+    sid = ({"codex": _codex_sid, "agy": _agy_sid, "gemini": _gemini_sid}
+           .get(provider_of(path), lambda p: os.path.basename(p)[:-6]))(path)
+    with _SID_CACHE_LOCK:
+        _SID_CACHE[path] = sid
+        if len(_SID_CACHE) > 4096:            # bounded, same trim pattern as the session cache
+            for k in list(_SID_CACHE)[:len(_SID_CACHE) - 4096]:
+                del _SID_CACHE[k]
+    return sid
 
 def _agy_uri_to_path(uri):
     from urllib.parse import unquote
@@ -1900,6 +1970,21 @@ def find_session_by_sid(root, sid):
     for p in sorted(glob.glob(os.path.join(root, "*", sid + ".jsonl"))):
         return p
     return None
+
+def scan_current_sids():
+    """sid -> current path, across every session file in every current ROOT (any provider).
+    Used to resolve a favorite's "go to" link (see H.favs()): the favorite was saved with a
+    path, but that path may be stale — the session's folder may have moved to a new root, or
+    this whole ROOTS list may belong to a different computer than the one that saved the
+    favorite (see FAVS_FILE). The sid survives both because it's read from the filename, not
+    the path. First match wins on a sid collision across roots (shouldn't normally happen)."""
+    m = {}
+    for r in ROOTS:
+        for p in session_files(r):
+            sid = sid_of(p)
+            if sid not in m:
+                m[sid] = p
+    return m
 
 def adjacent_sessions(root, current_path):
     """Prev/next session in the SAME project, chronological (by mtime). Work spans sessions."""
@@ -2898,6 +2983,22 @@ def find_by_sid(sid):
                 return it["path"]
     return None
 
+def _turn_plaintext(t):
+    """Plain-text join of a turn's segments (tool calls/results summarized, not raw JSON blobs) —
+    shared by the agent-facing session API (search text) and the favorites excerpt (FAVS_FILE)."""
+    parts = []
+    for k, v in t["segs"]:
+        if k == "channel":
+            pc = parse_channel(v)
+            parts.append(pc[1] if pc else v)
+        elif k == "tool_use":
+            parts.append(_tool_use_search_text(v))
+        elif k in ("text", "thinking", "tool_result", "injected"):
+            parts.append(v)
+        elif k == "task_notification":
+            parts.append(task_notification_text(v))
+    return " ".join(parts).strip()
+
 def session_api(path=None, sid=None, limit=400, full=False):
     """Full session content (meta + turns as plain text) for an agent to read.
     full=True lifts the turn-count and per-turn text caps (CLI --full)."""
@@ -2912,23 +3013,11 @@ def session_api(path=None, sid=None, limit=400, full=False):
     m = data["meta"]
     turns = []
     for gi, t in enumerate(data["turns"] if full else data["turns"][:max(1, min(int(limit or 400), 2000))]):
-        parts = []
-        for k, v in t["segs"]:
-            if k == "channel":
-                pc = parse_channel(v)
-                parts.append(pc[1] if pc else v)
-            elif k == "tool_use":
-                parts.append(_tool_use_search_text(v))
-            elif k in ("text", "thinking", "tool_result", "injected"):
-                parts.append(v)
-            elif k == "task_notification":
-                parts.append(task_notification_text(v))
-        text = " ".join(parts).strip()
+        text = _turn_plaintext(t)
         if text:
             turns.append({"turn": gi, "role": t["role"], "text": text if full else text[:4000]})
     prov = provider_of(path)
-    real_sid = ({"codex": _codex_sid, "agy": _agy_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
-    return {"sid": real_sid, "provider": prov, "title": m["title"], "workspace": m.get("cwd", ""),
+    return {"sid": sid_of(path), "provider": prov, "title": m["title"], "workspace": m.get("cwd", ""),
             "counts": m["n"], "tokens": m.get("tok"), "models": m.get("models"),
             "path": path, "turns": turns}
 
@@ -3712,11 +3801,18 @@ def _result_kind(txt):
                 return "edit"
     return "other"
 
-def render_turn(gi, t, q="", thread_link=None, ctx=False, prov="claude"):
+def render_turn(gi, t, q="", thread_link=None, ctx=False, prov="claude", path="", fgi=None):
     """`prov` picks the assistant-turn label (🌀 Codex / ✨ Gemini / ✦ Claude / ✨ Antigravity) for
     this turn's *session* — callers that mix sessions of different providers on one page (the
     project timeline) must pass the provider of THIS turn's own session, not one for the whole
-    page. Defaults to "claude" so call sites that never see a non-Claude session need no change."""
+    page. Defaults to "claude" so call sites that never see a non-Claude session need no change.
+
+    `path` (the session file this turn comes from) opts the message into the ★ favorites feature:
+    it stamps `.msg` with `data-sid`/`data-p` (the favorites identity — see FAVS_FILE) and adds the
+    ☆ toggle button. Omitted (the default) → no favorites UI, unchanged from before this feature.
+    `fgi` is the message's index within ITS OWN session file, when that differs from `gi` (`gi`
+    doubles as this DOM node's id, e.g. the project timeline numbers messages across many merged
+    sessions for uniqueness — `fgi` keeps the favorites key correct there). Defaults to `gi`."""
     role, segs, ts, tags = t["role"], t["segs"], t["ts"], t["tags"]
     label_src = ASSISTANT_LABEL.get(prov, ROLE_LABEL["assistant"]) if role == "assistant" else ROLE_LABEL.get(role, role)
     role_label, role_desc = tr(label_src), tr(ROLE_DESC.get(role, ""))
@@ -3786,10 +3882,15 @@ def render_turn(gi, t, q="", thread_link=None, ctx=False, prov="claude"):
     elif role == "you" and t.get("qtok"):
         extra += tok_badge(t["qtok"], "tokb qtok")
     plink = f'<a class=permalink href="#t{gi}" title="{esc(tr("copy link to this message"))}">🔗</a>'
+    favdata, favbtn = "", ""
+    if path:
+        favdata = f' data-sid="{esc(sid_of(path))}" data-p="{esc(path)}"'
+        favbtn = (f'<button class=favbtn data-gi="{gi if fgi is None else fgi}" '
+                  f'title="{esc(tr("Favorite this message"))}">☆</button>')
     who = (f'<div class=who><span title="{esc(role_desc)}">{role_label} {badges}</span>'
-           f'<span class=whoR>{extra}{tstr}{plink}{link}</span></div>')
+           f'<span class=whoR>{extra}{tstr}{favbtn}{plink}{link}</span></div>')
     ctxcls = " ctxmsg" if ctx else ""
-    return f'<div class="msg {role}{ctxcls}" id="t{gi}" data-cats="{cats}"{data}>{who}{"".join(parts)}</div>'
+    return f'<div class="msg {role}{ctxcls}" id="t{gi}" data-cats="{cats}"{data}{favdata}>{who}{"".join(parts)}</div>'
 
 # ---- HTML shell (token-replace, NOT str.format — so CSS/JS braces stay literal) ----
 SHELL = r"""<!doctype html><html lang=ko><head><meta charset=utf-8>
@@ -3964,6 +4065,11 @@ a.chiplink:hover{background:#dbe5ff;color:#1f6feb}
 .favbar{font-size:12px;color:#8a8f98;margin:4px 0 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .favbar a,.favbar .favimp{color:#1f6feb;text-decoration:none;cursor:pointer}
 .favbar a:hover,.favbar .favimp:hover{text-decoration:underline}
+/* /favs page: one row per favorited message, grouped under its session's .card */
+.favrow{padding:8px 0;border-top:1px solid #eceff3}
+@media(prefers-color-scheme:dark){.favrow{border-color:#2a2e35}}
+.favexc{display:block;margin:4px 0;color:#444}
+@media(prefers-color-scheme:dark){.favexc{color:#cfd4db}}
 .chip-f{cursor:pointer;border:1px solid #d0d4da;background:#fff;color:#333;border-radius:14px;padding:3px 11px;font-size:12px}
 .chip-f .chipkey{background:rgba(0,0,0,.09);border-radius:4px;padding:0 4px;font-size:10px;font-family:ui-monospace,Menlo,monospace}
 .chip-f.active .chipkey{background:rgba(255,255,255,.28)}
@@ -4183,6 +4289,12 @@ mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:6
 @media(prefers-color-scheme:dark){.kbtab kbd{background:#2a2e35;border-color:#3a3f47}}
 .starbtn{border:0;background:transparent;cursor:pointer;font-size:16px;color:#c9ad3a;padding:0 2px;vertical-align:middle;line-height:1}
 .starbtn.on{color:#e6b800}
+/* per-message favorite (★) — see FAVS_FILE. Dim until hovered or on, same pattern as
+   .permalink below; the gold #f5b301 "on" color needs no separate dark-mode rule (like
+   .starbtn's gold above, it already reads fine on both light and dark backgrounds). */
+.favbtn{border:0;background:transparent;cursor:pointer;font-size:13px;color:inherit;opacity:.35;padding:0 2px;vertical-align:middle;line-height:1}
+.favbtn:hover{opacity:1}
+.favbtn.on{opacity:1;color:#f5b301}
 .permalink{text-decoration:none;font-size:11px;opacity:.35;cursor:pointer}
 .permalink:hover{opacity:1}
 .sessnav{justify-content:space-between;font-size:12.5px}
@@ -4313,6 +4425,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
           if(typeof bindChipFilters==='function')bindChipFilters();   // category chip filter + 0-9 shortcuts
           if(typeof buildMinimap==='function')buildMinimap();
           if(typeof markTools==='function')markTools();
+          if(typeof hydrateFavs==='function')hydrateFavs();   // paint ★ on the newly-arrived messages
         })
         .catch(function(){
           ph.className='meta';
@@ -4557,7 +4670,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       fetch('/api/session_tail?p='+encodeURIComponent(fp)+'&since='+fsince+'&limit='+take+(fq?'&q='+encodeURIComponent(fq):''))
         .then(function(r){return r.json();}).then(function(d){
           if(d&&d.html&&fwd)fwd.insertAdjacentHTML('beforebegin',d.html);
-          fsince=(d&&d.end)?d.end:(fsince+take); markTools(); fbusy=false;
+          fsince=(d&&d.end)?d.end:(fsince+take); markTools(); hydrateFavs(); fbusy=false;
           if(!fwd)return;
           if(fsince>=fend){fwd.remove();fwd=null;}
           else if(fauto)setTimeout(floadMore,0);   // keep filling this page, chunk by chunk
@@ -4615,6 +4728,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
           var m=document.querySelectorAll('.msg');
           if(m.length)m[m.length-1].insertAdjacentHTML('afterend',d.html);
           if(toolsHidden)document.querySelectorAll('.msg[data-tool]').forEach(function(x){x.classList.add('khide');});
+          hydrateFavs();
           if(nearBottom)window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
         }).catch(function(){busy=false;});
     }
@@ -4632,6 +4746,31 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
   }
   // stars are server-side (persisted to CONFIG_DIR/stars.json), pre-painted on render
   function paintStar(b,on){b.textContent=on?'\u2605':'\u2606';b.classList.toggle('on',on);}
+  // Per-message favorites (\u2605, CONFIG_DIR/favorites.json). Unlike stars above, .favbtn is NOT
+  // pre-painted server-side (a page can carry thousands of them) \u2014 instead every .favbtn starts
+  // \u2606, and this fetches /api/favs once and paints the ones that are actually on. Named (not an
+  // IIFE) so it can re-run for content that arrives later via /api/session_tail or the timeline's
+  // ajax fragment \u2014 same reason bindChipFilters below is a named, re-invocable function.
+  function paintFav(b,on){b.textContent=on?'\u2605':'\u2606';b.classList.toggle('on',on);}
+  var _favKeys=null;
+  function hydrateFavs(){
+    var btns=document.querySelectorAll('.favbtn');
+    if(!btns.length)return;
+    function paint(keys){
+      btns.forEach(function(b){
+        if(b._favSeen)return; b._favSeen=true;
+        var msg=b.closest('.msg'); if(!msg)return;
+        var key=(msg.getAttribute('data-sid')||'')+':'+(b.getAttribute('data-gi')||'');
+        if(keys[key])paintFav(b,true);
+      });
+    }
+    if(_favKeys){paint(_favKeys);return;}
+    fetch('/api/favs').then(function(r){return r.json();}).then(function(d){
+      _favKeys={};((d&&d.keys)||[]).forEach(function(k){_favKeys[k]=1;});
+      paint(_favKeys);
+    }).catch(function(){});
+  }
+  hydrateFavs();
   // one-time migration of any old browser-local stars into the server file
   try{var mig=[],i,k;for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k&&k.indexOf('aiss:star:')===0&&localStorage.getItem(k)==='1')mig.push(k.slice(10));}
     if(mig.length){fetch('/api/star?sid='+encodeURIComponent(mig.join(','))+'&on=1').then(function(){
@@ -4662,6 +4801,29 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(b){e.preventDefault();var sid=b.getAttribute('data-sid');var on=!b.classList.contains('on');
       document.querySelectorAll('.starbtn[data-sid="'+sid+'"]').forEach(function(x){paintStar(x,on);});
       fetch('/api/star?sid='+encodeURIComponent(sid)+'&on='+(on?1:0)).catch(function(){});return;}
+    // per-message favorite: the button itself carries data-sid/data-p on the /favs page (a
+    // standalone list, no .msg wrapper); everywhere else those live on the ancestor .msg (see
+    // render_turn's `path` param).
+    var fb=e.target.closest&&e.target.closest('.favbtn');
+    if(fb){e.preventDefault();
+      var fmsg=fb.closest('.msg');
+      var fsid=fb.getAttribute('data-sid')||(fmsg&&fmsg.getAttribute('data-sid'))||'';
+      var fp=fb.getAttribute('data-p')||(fmsg&&fmsg.getAttribute('data-p'))||'';
+      var fgi=fb.getAttribute('data-gi')||'';
+      var fon=!fb.classList.contains('on');
+      document.querySelectorAll('.favbtn[data-gi="'+fgi+'"]').forEach(function(x){
+        var xmsg=x.closest('.msg'); var xsid=x.getAttribute('data-sid')||(xmsg&&xmsg.getAttribute('data-sid'))||'';
+        if(xsid===fsid)paintFav(x,fon);
+      });
+      var fqs='gi='+encodeURIComponent(fgi)+'&on='+(fon?1:0)
+        +(fp?'&p='+encodeURIComponent(fp):'')+(fsid?'&sid='+encodeURIComponent(fsid):'');
+      fetch('/api/fav?'+fqs).catch(function(){});
+      if(!fon){                     // /favs page: an unfavorited row no longer belongs there
+        var row=fb.closest('.favrow');
+        if(row){var card=row.closest('.card');row.remove();
+          if(card&&!card.querySelector('.favrow'))card.remove();}
+      }
+      return;}
     // message permalink \u2192 copy full URL with #tN
     var pl=e.target.closest&&e.target.closest('.permalink');
     if(pl){e.preventDefault();var url=location.href.split('#')[0]+pl.getAttribute('href');
@@ -4692,7 +4854,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
           if(d&&d.html){
             if(dir==='before')ctl.insertAdjacentHTML('afterend',d.html);
             else ctl.insertAdjacentHTML('beforebegin',d.html);
-            markTools();
+            markTools(); hydrateFavs();
           }
           if(dir==='before'){
             ctl.setAttribute('data-before',since);
@@ -5223,6 +5385,46 @@ class H(BaseHTTPRequestHandler):
             sids = [s for s in (g("sid") or "").split(",") if s.strip()]
             starred = set_stars(sids, g("on") == "1")
             return self._send_json({"starred": starred, "count": len(starred)})
+        if u.path == "/api/favs":
+            # per-message favorites (persisted to CONFIG_DIR/favorites.json), newest-added first —
+            # read-only, so (unlike /api/fav below) no cross-site guard is needed, same as /api/stars.json.
+            favs_list = sorted(_FAVS.values(), key=lambda f: f.get("added", ""), reverse=True)
+            keys = [fav_key(f["sid"], f["gi"]) for f in favs_list]
+            return self._send_json({"favs": favs_list, "file": FAVS_FILE, "keys": keys})
+        if u.path == "/api/fav":
+            # toggle one message's favorite. Turning ON needs `p` (the session path) — the entry's
+            # role/excerpt/title/ts are read fresh from the transcript, not trusted from the client.
+            # Turning OFF only needs the sid:gi identity, so it also accepts `sid` directly — the
+            # /favs page's remove button uses that, since the session file for an old favorite may
+            # no longer be found anywhere (see favs(), "folder not added").
+            sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
+            if sfs in ("cross-site", "same-site"):
+                return self._send_json({"error": "cross-site rejected"}, 403)
+            try:
+                gi = int(g("gi"))
+            except (TypeError, ValueError):
+                return self._send_json({"error": "bad gi"}, 400)
+            on = g("on") == "1"
+            p = g("p")
+            if on:
+                if not (p and os.path.exists(p) and root_for_path(p) is not None):
+                    return self._send_json({"error": "not found"}, 404)
+                loaded = load_session(p)
+                turns = loaded["turns"] if loaded else []
+                if gi < 0 or gi >= len(turns):
+                    return self._send_json({"error": "bad gi"}, 400)
+                t = turns[gi]
+                entry = {"sid": sid_of(p), "gi": gi, "provider": provider_of(p), "role": t["role"],
+                         "title": loaded["meta"].get("title", ""), "excerpt": _turn_plaintext(t)[:200],
+                         "ts": t.get("ts", ""), "path": p,
+                         "added": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+                result = set_fav(entry, True)
+            else:
+                sid = g("sid") or (sid_of(p) if p else "")
+                if not sid:
+                    return self._send_json({"error": "bad sid"}, 400)
+                result = set_fav({"sid": sid, "gi": gi}, False)
+            return self._send_json({"ok": True, "on": result})
         if u.path == "/api/settings":
             # persist small user prefs (default per-page, lazy-render) to CONFIG_DIR/settings.json.
             # same guard as /api/star: local-only page, reject cross-site fetches.
@@ -5283,7 +5485,7 @@ class H(BaseHTTPRequestHandler):
                     params["q"] = qq
                 return "/session?" + urllib.parse.urlencode(params)
             prov = provider_of(p)
-            html = "".join(render_turn(gi, turns[gi], qq, _tl(gi, turns[gi]), ctx=ctx, prov=prov) for gi in range(since, end))
+            html = "".join(render_turn(gi, turns[gi], qq, _tl(gi, turns[gi]), ctx=ctx, prov=prov, path=p) for gi in range(since, end))
             return self._send_json({"n": len(turns), "end": end, "html": html})
         if u.path == "/manifest.webmanifest":
             # lets Chrome/Edge "Install as app" → standalone window (own Cmd+Tab/Dock entry)
@@ -5342,6 +5544,8 @@ class H(BaseHTTPRequestHandler):
                                             gint("off"), g("lim", ""), ajax=g("ajax") == "1"))
         if u.path == "/subagent":
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
+        if u.path == "/favs":
+            return self._send(self.favs())
         if u.path in ("/addroot", "/delroot", "/pickroot"):
             # CSRF guard for state-changing routes: modern browsers send
             # Sec-Fetch-Site; block explicit cross-site, allow same-origin,
@@ -5564,7 +5768,10 @@ class H(BaseHTTPRequestHandler):
                 # stays neutral ("✦ Agent") rather than naming one — same reasoning as legend_html()
                 f'<p class=meta>{tr("Legend")}: 🧑 {tr("You")} · {tr("✦ Agent")} · ⚙ {tr("Tool result")} · ⓘ {tr("System / injected")} '
                 f'<span class=hint>{tr("(hover a number for its meaning; expand ❓ below for the full legend)")}</span></p>'
-                + legend_html())
+                + legend_html()
+                # a distinct nav entry to /favs (per-message ★), not to be confused with the
+                # whole-session ⭐ stars summarized in favbar just below
+                + f'<p class=meta><a href="/favs">⭐ {tr("Favorites")} ({len(_FAVS)})</a></p>')
         if not items and not proj_filter:
             head += (f'<div class=card><b>{tr("No sessions.")}</b>'
                      f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(rootlabel)}. '
@@ -5697,7 +5904,7 @@ class H(BaseHTTPRequestHandler):
                      f'{"…" if len(en["title"]) > 60 else ""}</a></div>')
             # the timeline merges sessions from every provider into one stream, so the label must
             # come from THIS entry's own session path — never a single provider for the whole page
-            body.append(f'<div class=tlentry>{badge}{render_turn(gi_global, en["turn"], prov=provider_of(en["path"]))}</div>')
+            body.append(f'<div class=tlentry>{badge}{render_turn(gi_global, en["turn"], prov=provider_of(en["path"]), path=en["path"], fgi=en["gi"])}</div>')
 
         navkeys = (f'<span id=navkeys hidden data-prevpage="{esc(prev_href)}" data-nextpage="{esc(next_href)}"></span>')
 
@@ -5939,7 +6146,7 @@ class H(BaseHTTPRequestHandler):
         loaded = load_session(path)          # one cached pass (turns + meta + per-question tokens)
         turns, meta = loaded["turns"], loaded["meta"]
         prov = provider_of(path)
-        sid = ({"codex": _codex_sid, "gemini": _gemini_sid}.get(prov, lambda p: os.path.basename(p)[:-6]))(path)
+        sid = sid_of(path)
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
 
         def url(**kw):
@@ -6100,7 +6307,7 @@ class H(BaseHTTPRequestHandler):
                 tl = url(thread=gi) if turns[gi]["role"] == "you" else None
                 if gi > 0:
                     body.append(_ctxctl("before", gi))
-                body.append(render_turn(gi, turns[gi], sq, tl, prov=prov))
+                body.append(render_turn(gi, turns[gi], sq, tl, prov=prov, path=path))
                 if gi < len(turns) - 1:
                     body.append(_ctxctl("after", gi))
             ms = int((time.perf_counter() - t0) * 1000)
@@ -6153,7 +6360,7 @@ class H(BaseHTTPRequestHandler):
             if gi < 0 or gi >= len(turns) or turns[gi]["role"] != "you":
                 return shell("?", head + f"<p class=meta>{tr('Thread not found.')}</p>", q, root=rt)
             nxt = next((i for i in you_idx if i > gi), len(turns))
-            body = [render_turn(i, turns[i], q, url(thread=i, q=q) if turns[i]["role"] == "you" else None, prov=prov)
+            body = [render_turn(i, turns[i], q, url(thread=i, q=q) if turns[i]["role"] == "you" else None, prov=prov, path=path)
                     for i in range(gi, nxt)]
             ms = int((time.perf_counter() - t0) * 1000)
             bar = ('<div class=bar>'
@@ -6212,7 +6419,7 @@ class H(BaseHTTPRequestHandler):
                         f'<button type=button>↑ {tr("Load earlier messages")}</button></div>')
         for gi, t in shown:
             tl = url(thread=gi, q=q) if t["role"] == "you" else None
-            body.append(render_turn(gi, t, q, tl, prov=prov))
+            body.append(render_turn(gi, t, q, tl, prov=prov, path=path))
         if continuous and shown and shown[-1][0] + 1 < page_end:
             # This only renders when the page isn't fully painted yet, i.e. lazy==True (see above:
             # a non-lazy render always paints straight through to page_end). So this is always the
@@ -6290,7 +6497,7 @@ class H(BaseHTTPRequestHandler):
         turns = classify_turns(path, sub=True)
         sb = subagent_brief(path)
         prov = provider_of(path)
-        body = [render_turn(i, t, q, None, prov=prov) for i, t in enumerate(turns)]
+        body = [render_turn(i, t, q, None, prov=prov, path=path) for i, t in enumerate(turns)]
         ms = int((time.perf_counter() - t0) * 1000)
         back = ""
         if parent and os.path.exists(parent):
@@ -6300,6 +6507,45 @@ class H(BaseHTTPRequestHandler):
                f'agent {esc(sb["agentId"][:12])} · {len(turns)} {tr("messages")} · {tr("server")} {ms}ms<span id=perf></span></span></div>')
         head = (f'<p class=meta>📋 {tr("Instruction")}: {esc(sb["brief"])}</p><h3 style="margin:4px 0">🤖 {tr("Sub-agent conversation")}</h3>')
         return shell(tr("Sub-agent"), head + bar + "".join(body), q, root=rt)
+
+    # ---- favorites (per-message ★, CONFIG_DIR/favorites.json) ----
+    def favs(self):
+        favs_list = sorted(_FAVS.values(), key=lambda f: f.get("added", ""), reverse=True)
+        sid_map = scan_current_sids()          # one scan of ROOTS, reused for every favorite below
+        groups = {}                            # sid -> [entries]; dict preserves first-seen order,
+        for f in favs_list:                    # which is already the added-desc order from above —
+            groups.setdefault(f.get("sid", ""), []).append(f)   # so groups AND rows are both "recent first"
+        cards = []
+        for sid, items in groups.items():
+            head = items[0]
+            cur_path = sid_map.get(sid)
+            if not cur_path:
+                # not found by a fresh scan (moved/renamed/root not added) — fall back to the path
+                # recorded when the favorite was saved, if that still happens to exist
+                stored = head.get("path", "")
+                if stored and os.path.exists(stored):
+                    cur_path = stored
+            badge = prov_badge(head.get("provider", "claude"), root_for_path(cur_path) if cur_path else None)
+            title = esc(head.get("title") or tr("(untitled)"))
+            rows = []
+            for f in items:
+                role = f.get("role", "assistant")
+                role_src = ASSISTANT_LABEL.get(f.get("provider", "claude"), ROLE_LABEL["assistant"]) if role == "assistant" else ROLE_LABEL.get(role, role)
+                when = fmt_ts(f.get("added", "")) or f.get("added", "")
+                gi = f.get("gi", 0)
+                link = (f'<a href="/session?p={urllib.parse.quote(cur_path)}&goto={gi}">{tr("↳ open")}</a>' if cur_path
+                        else f'<span class=hint>{tr("folder not added")}</span>')
+                rows.append(
+                    f'<div class=favrow><span class=chip>{tr(role_src)}</span> '
+                    f'<span class=favexc>{esc(f.get("excerpt", ""))}</span>'
+                    f'<div class=meta>{esc(when)} · {link} · '
+                    f'<button class="favbtn on" data-sid="{esc(sid)}" data-p="{esc(cur_path or "")}" data-gi="{gi}" '
+                    f'title="{esc(tr("Remove from favorites"))}">★</button></div></div>')
+            cards.append(f'<div class=card>{badge} <b>{title}</b>{"".join(rows)}</div>')
+        body = "".join(cards) or f'<p class=meta>{tr("No favorites yet — click ☆ next to any message to add one.")}</p>'
+        backup = (f'<p class=meta>{tr("Favorites are saved to")} <code class=sid>{esc(FAVS_FILE)}</code> — '
+                  f'{tr("to move them to a new computer, copy just this one file to the same location there.")}</p>')
+        return shell(f'⭐ {tr("Favorites")}', f'<h3 style="margin:4px 0 8px">⭐ {tr("Favorites")}</h3>' + body + backup)
 
 # ---- main -------------------------------------------------------------------
 def make_server(host="127.0.0.1", port=DEFAULT_PORT):
