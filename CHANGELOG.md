@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.0.36 — 2026-08-15
+
+- **Fix: retrying a stuck "Restarting into the new version…" re-downloaded the whole update.**
+  If the browser gave up waiting for the relaunch (e.g. the bundle swap was slow because the
+  disk/CPU was busy with something else), the update usually still finished successfully in the
+  background — but the "Installed, but didn't restart" message was the *same* button with its
+  original click handler still attached, so clicking it re-ran the entire download → verify →
+  install flow from scratch and popped the "Download the update, verify it, and restart?"
+  confirm again, even though nothing needed re-downloading. It now just rechecks whether the
+  new version is already running and reloads if so.
+- **The relaunch-verification window is wider and the two ends agree on it.** The browser's own
+  timeout for "did the new version come up" was tighter than the server's own retry budget, so
+  the browser could declare failure while the server was still legitimately retrying. Both sides
+  now share a wider, aligned window.
+
 ## 4.0.35 — 2026-08-15
 
 - **New: newest-first sort in the conversation view.** A `⇅ Newest first` toggle next to

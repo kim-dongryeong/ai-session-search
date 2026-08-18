@@ -10,6 +10,7 @@ JS not applying button styling while working/restarting, and the real
 old-server-running -> new-version-launch -> takeover -> same-port chain end to end."""
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -205,6 +206,34 @@ class UpdateBarNotAButton(unittest.TestCase):
         html = app.shell("Test", "<p>body</p>")
         self.assertIn("relaunchFailed", html)
         self.assertIn("deadline", html)
+
+    def test_relaunch_failure_retry_rechecks_status_instead_of_redownloading(self):
+        # Regression: clicking the "Installed, but didn't restart…" state used to re-run the
+        # WHOLE update flow (confirm() -> re-download -> re-verify) because it's the same
+        # #updgo button with its original click listener still attached. It must instead just
+        # recheck /api/status and reload if the new version is already up — no confirm(), no
+        # POST to /api/self_update.
+        html = app.shell("Test", "<p>body</p>")
+        self.assertIn("go.dataset.relaunchRetry", html)
+        # the recheck branch must come before the confirm() call in source order, so it's
+        # reached first on a retry click
+        i_retry = html.index("go.dataset.relaunchRetry==='1'")
+        i_confirm = html.index("if(!confirm(")
+        self.assertLess(i_retry, i_confirm)
+        # relaunchFailed() must flag the retry state so the next click takes that branch
+        relaunch_failed = html[html.index("function relaunchFailed()"):]
+        self.assertIn("go.dataset.relaunchRetry='1'", relaunch_failed[:300])
+
+    def test_client_relaunch_deadline_not_tighter_than_server_patience(self):
+        # The server (_verify_and_finish_relaunch) waits _RELAUNCH_VERIFY_WINDOW, retries the
+        # launch once, then waits it out again — roughly double the constant. The browser's own
+        # waitForRelaunch deadline must clear that, or it declares failure while the server is
+        # still legitimately retrying (e.g. a slow ditto/mv bundle swap under disk/CPU load).
+        html = app.shell("Test", "<p>body</p>")
+        self.assertGreaterEqual(app._RELAUNCH_VERIFY_WINDOW, 60.0)
+        m = re.search(r"var deadline=Date\.now\(\)\+(\d+);", html)
+        self.assertIsNotNone(m)
+        self.assertGreaterEqual(int(m.group(1)) / 1000.0, 2 * app._RELAUNCH_VERIFY_WINDOW)
 
 
 _SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")

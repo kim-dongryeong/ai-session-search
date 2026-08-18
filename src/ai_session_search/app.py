@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.35"
+__version__ = "4.0.36"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -516,9 +516,12 @@ def _shq(s):
 # port to report a version different from the one that started the update. This runs in
 # the OLD server's own background thread (it already owns _UPDATE and the UI already
 # polls it via GET /api/self_update, so it's the natural place — no new endpoint needed).
-# 45s covers a slow first-launch code-signature check on a cold Mac without leaving the
-# user staring at "Restarting…" indefinitely if the relaunch genuinely failed.
-_RELAUNCH_VERIFY_WINDOW = 45.0
+# 60s covers a slow bundle swap (ditto/mv of the .app, then a code-signature check on
+# launch) when the disk or CPU is busy with something else, without leaving the user
+# staring at "Restarting…" indefinitely if the relaunch genuinely failed. This is a
+# per-attempt window — _verify_and_finish_relaunch waits it out once, retries the launch,
+# then waits it out again, so the server's own total patience is roughly double this.
+_RELAUNCH_VERIFY_WINDOW = 60.0
 
 def _wait_for_relaunch(port, old_version, window=_RELAUNCH_VERIFY_WINDOW, host="127.0.0.1"):
     """Poll /api/status on `port` until a NEW instance answers with a version other than
@@ -4962,6 +4965,19 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     if(go)go.addEventListener('click',function(){startSelfUpdate(bar,go,d);});
   }).catch(function(){});
   function startSelfUpdate(bar,go,d){
+    if(go.dataset.relaunchRetry==='1'){
+      // A previous attempt already downloaded, verified, and installed the update — only the
+      // relaunch confirmation timed out (see waitForRelaunch's deadline below). Re-running the
+      // WHOLE flow here would re-download and re-verify something already on disk, and pop the
+      // scary "Download the update, verify it, and restart" confirm for no reason. Just check
+      // whether the new version is actually up now instead.
+      go.disabled=true;
+      fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
+        if(st&&st.version&&st.version!==d.current){location.reload();return;}
+        go.innerHTML='%%UPD_RELAUNCH_FAILED%%';go.disabled=false;
+      }).catch(function(){go.innerHTML='%%UPD_RELAUNCH_FAILED%%';go.disabled=false;});
+      return;
+    }
     if(!confirm('%%UPD_CONFIRM%%'))return;
     go.disabled=true;
     var txt=bar.querySelector('.updtxt');
@@ -5006,11 +5022,13 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
     }
     function waitForRelaunch(want){
       // the new build reclaims the same port; poll /api/status until its version changes,
-      // then reload. Bounded by the same window the server-side verification uses (see
-      // _RELAUNCH_VERIFY_WINDOW) \u2014 past it, stop spinning forever and show the actionable
-      // failure message instead (the server independently reaches the same conclusion and
-      // sets state='error', but we don't want the UI itself stuck polling if that race is lost).
-      var deadline=Date.now()+45000;
+      // then reload. This deadline must NOT be tighter than the server's own patience (see
+      // _RELAUNCH_VERIFY_WINDOW: one wait, one retried launch, one more wait \u2014 roughly double
+      // that constant) \u2014 otherwise the browser gives up and declares failure while the server
+      // is still legitimately retrying in the background (e.g. the bundle swap itself, ditto+mv
+      // of the .app, was slow because the disk/CPU was busy with something else). 150s clears
+      // that with margin.
+      var deadline=Date.now()+150000;
       (function check(){
         fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(st){
           if(st&&st.version&&st.version!==d.current){location.reload();return;}
@@ -5024,6 +5042,7 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
       function relaunchFailed(){
         setMsg('%%UPD_RELAUNCH_FAILED%%',false);
         go.disabled=false;
+        go.dataset.relaunchRetry='1';   // next click rechecks status instead of re-downloading
       }
     }
   }
