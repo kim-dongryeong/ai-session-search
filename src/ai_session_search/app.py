@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.34"
+__version__ = "4.0.35"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -5538,7 +5538,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/session":
             return self._send(self.session(g("p"), g("q"), g("filter", "all"),
                                            gint("off"), g("lim", ""), g("thread", ""), g("view", ""),
-                                           g("goto", ""), g("sq", ""), g("sqtools", "")))
+                                           g("goto", ""), g("sq", ""), g("sqtools", ""), g("sort", "")))
         if u.path == "/timeline":
             return self._send(self.timeline(g("proj"), root, g("sort", "new"),
                                             gint("off"), g("lim", ""), ajax=g("ajax") == "1"))
@@ -6138,7 +6138,7 @@ class H(BaseHTTPRequestHandler):
         return shell(f"{tr('Search')}: {q}", body, q, scope, rootp, days, from_, to, proj=proj)
 
     # ---- session ----
-    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq="", sqtools=""):
+    def session(self, path, q="", filt="all", off=0, lim_raw="", thread="", view="", goto="", sq="", sqtools="", sort=""):
         rt = root_for_path(path)
         if not path or not os.path.exists(path) or rt is None:
             return shell("?", f"<p>{tr('Session not found.')}</p>")
@@ -6148,9 +6148,14 @@ class H(BaseHTTPRequestHandler):
         prov = provider_of(path)
         sid = sid_of(path)
         you_idx = [i for i, t in enumerate(turns) if t["role"] == "you"]
+        if sort != "new":       # only one non-default value, same convention as /timeline
+            sort = ""
 
         def url(**kw):
             params = {"p": path}
+            s = kw.pop("sort", sort)     # carry the current sort along unless a call overrides it
+            if s:
+                params["sort"] = s
             params.update({k: v for k, v in kw.items() if v not in (None, "")})
             return "/session?" + urllib.parse.urlencode(params)
 
@@ -6370,8 +6375,13 @@ class H(BaseHTTPRequestHandler):
 
         # ---- normal / human-filtered + pagination ----
         lim = parse_lim(lim_raw) if lim_raw != "" else get_default_lim()
+        # sort=new (newest-first): only for the plain conversation view — a goto jump (from
+        # search) always lands in the classic ascending window regardless of sort, per the
+        # design above, so gate on the raw `goto` string here rather than the parsed goto_gi.
+        reverse = sort == "new" and goto == ""
         idxs = you_idx if filt == "human" else range(len(turns))
-        view_turns = [(i, turns[i]) for i in idxs]
+        order = list(idxs)[::-1] if reverse else list(idxs)
+        view_turns = [(i, turns[i]) for i in order]
         total = len(view_turns)
         # goto=<gi>: jump straight to that turn — flip to the page containing it
         goto_gi = None
@@ -6395,8 +6405,11 @@ class H(BaseHTTPRequestHandler):
         # Continuous conversation view (filt=all): the rendered page is just a *window*.
         # The rest of the session streams in as you scroll — forward automatically to the
         # end, earlier on demand — so you never click through 1000-message pages to reach or
-        # read around a match. (filtered/human view keeps classic Prev/Next paging.)
-        continuous = filt == "all"
+        # read around a match. (filtered/human view keeps classic Prev/Next paging.) sort=new
+        # turns this off — its display order isn't a contiguous ascending run of gi's, which is
+        # what the lazy/loadprev/loadfwd sentinels below all assume — so it falls back to plain
+        # Prev/Next paging with the whole page painted at once (see `lazy` below).
+        continuous = filt == "all" and not reverse
         INIT_CHUNK = 120
         # A page means exactly `lim` messages: [off, page_end) — page_end is the page's own end,
         # NEVER len(turns). Streaming (lazy fill, below) may only fill in THIS range; crossing
@@ -6437,9 +6450,16 @@ class H(BaseHTTPRequestHandler):
 
         n = meta["n"]
         showall = f'<a href="{url(q=q, lim=lim_raw)}">← {tr("Show all")}</a>' if filt == "human" else ""
+        # newest-first toggle: flips `sort` and resets to page 1 (off=0), since "page 1" means
+        # something different in each direction. url()'s `sort=` override clears the param
+        # entirely (empty value is dropped) to go back to the default chronological order.
+        sorttoggle = (f'<a class="{"on" if sort == "new" else ""}" '
+                      f'href="{url(filter=(filt if filt == "human" else ""), q=q, lim=lim_raw, off=0, sort=("" if sort == "new" else "new"))}">'
+                      f'⇅ {tr("Newest first")}</a>')
         toggles = ('<div class=bar>' + showall
                    + f'<a href="{url(view="code", q=q)}">🧩 {tr("Code only")}</a>'
-                   f'<span class=meta>{counts_html(n, system=True)}</span>'
+                   + sorttoggle
+                   + f'<span class=meta>{counts_html(n, system=True)}</span>'
                    '</div>')
         # event-filter chips (counts over ALL turns); every filter is a (combinable) chip —
         # "Code only" is separate because it's a reprocessed view, not a filter
@@ -6453,6 +6473,7 @@ class H(BaseHTTPRequestHandler):
                     f'<input type=hidden name=p value="{esc(path)}">'
                     + (f'<input type=hidden name=q value="{esc(q)}">' if q else "")
                     + (f'<input type=hidden name=filter value="{esc(filt)}">' if filt == "human" else "")
+                    + (f'<input type=hidden name=sort value="{esc(sort)}">' if sort else "")
                     + f'{tr("per page")} <select id=limsel name=lim onchange="this.form.submit()">' + "".join(opts) + '</select>'
                     + f'<button type=button id=setdeflim class=chip title="{esc(tr("Use the current per-page value as the default for new sessions"))}">📌 {tr("set as default")}</button>'
                     + f'<span id=setdeflimok class=hint hidden>{tr("saved")} ✓</span>'

@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.35 — 2026-08-15
+
+- **New: newest-first sort in the conversation view.** A `⇅ Newest first` toggle next to
+  "Code only" flips the message order so page 1 shows the most recent messages instead of the
+  first ones — the same `sort=new` convention the project timeline already used. Switching to
+  newest-first falls back to classic Prev/Next paging (the incremental scroll-fill only makes
+  sense for a contiguous ascending run); switching back to chronological restores the usual
+  auto-loading behavior unchanged. Jumping to a message from search (goto=) always lands in the
+  normal ascending order regardless of which sort you had selected.
+
 ## 4.0.34 — 2026-08-15
 
 - **New: per-message favorites (★).** Every message — in the conversation view, in-session
