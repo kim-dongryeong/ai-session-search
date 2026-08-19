@@ -32,6 +32,7 @@ import hmac
 import html
 import http.client
 import json
+import math
 import os
 import pickle
 import re
@@ -49,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.37"
+__version__ = "4.1.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -222,6 +223,282 @@ def get_timeline_lim():
         return int(v)
     except (TypeError, ValueError):
         return 200
+
+# ---- UI style settings (/settings page) --------------------------------------
+# User-chosen code font/colors, table borders, and search-highlight colors, stored under
+# _SETTINGS["style"] (same settings.json as default_lim/lazy_render/timeline_lim above). Unlike
+# those flat scalars, style is a nested dict — but the SAME rule applies: only the keys the user
+# actually changed are persisted (see H.settings()/"/api/style"); anything missing here falls
+# back to STYLE_DEFAULTS, which mirrors the values that were hardcoded into SHELL's <style>
+# block before this feature existed, so an untouched style dict renders byte-for-byte the same
+# page as before (see style_css_text()'s early-return and tests/test_style_settings.py #1).
+#
+# SECURITY: these values are interpolated directly into a server-rendered <style> block (see
+# style_css_text(), used by shell()), so an unvalidated value would be a CSS/HTML injection
+# vector — a font-family or color string could close the <style> tag and inject a <script>.
+# Every value that reaches CSS output is validated by the _valid_*() helpers below, both when
+# it is SAVED ("/api/style") and again when it is RENDERED (resolve_style()/style_css_text()
+# re-validate whatever is in memory/on disk) — settings.json is a plain user-editable file, so
+# render-time validation must not simply trust that save-time validation already ran. A value
+# that fails validation is silently replaced by the default; nothing here ever raises, since a
+# bad style value must never be able to break page rendering.
+STYLE_DEFAULTS = {
+    "preset": "default",
+    "code_font": "ui-monospace, Menlo, monospace",
+    "code_size": 12.5,
+    "code_bg":       {"light": "#fafbfc", "dark": "#15171c"},
+    "code_border":   {"light": "#e6e9ee", "dark": "#2a2e35"},
+    "code_border_w": 1,
+    "code_radius":   6,
+    "table_border":  {"light": "#dfe3e8", "dark": "#2a2e35"},
+    "table_border_w": 1,
+    # dark value matches table.md-table thead th's existing @media(dark) override exactly —
+    # NOT #1b1e24 (that's a different element's dark card/panel background elsewhere in SHELL).
+    "table_head_bg": {"light": "#f0f3f7", "dark": "#23262d"},
+    "table_zebra":   True,
+    # the light values are the existing .hl0..hl5 swatches (app.py, mark/.hl* rule); there was
+    # no dark variant before this feature, so the dark values here are hand-picked darker/muted
+    # tones chosen to keep working with mark's black text (mark{color:#000}) at good contrast —
+    # see the task write-up for the reasoning; there's no "original" dark value to match.
+    "hl": [
+        {"light": "#ffe27a", "dark": "#ceb04a"},
+        {"light": "#9ae6b4", "dark": "#4f9f72"},
+        {"light": "#9ecbff", "dark": "#5f93c9"},
+        {"light": "#fbb6ce", "dark": "#c97ea0"},
+        {"light": "#ffc38a", "dark": "#cc9152"},
+        {"light": "#cbb2f7", "dark": "#9a80c9"},
+    ],
+    "base_size": 14.5,
+    "line_height": 1.65,
+    "content_width": 940,
+}
+
+# Complete, reasonable color combinations for the "theme preset" buttons on /settings — picking
+# one fills every color field (light AND dark) at once. Approximate, representative colors for
+# each named theme, not pixel-accurate ports. Only the color-bearing fields are covered here —
+# font/size/spacing stay whatever the user already has, since a "theme" is about color.
+STYLE_PRESETS = {
+    "github": {
+        "code_bg": {"light": "#f6f8fa", "dark": "#161b22"},
+        "code_border": {"light": "#d0d7de", "dark": "#30363d"},
+        "table_border": {"light": "#d0d7de", "dark": "#30363d"},
+        "table_head_bg": {"light": "#f6f8fa", "dark": "#161b22"},
+        "table_zebra": True,
+        "hl": [
+            {"light": "#fff8c5", "dark": "#7d6a1e"},
+            {"light": "#d2f8d2", "dark": "#1f6d33"},
+            {"light": "#ddf4ff", "dark": "#1b4b91"},
+            {"light": "#ffd7d5", "dark": "#7d2d2d"},
+            {"light": "#ffe9d1", "dark": "#7d4a14"},
+            {"light": "#eee0ff", "dark": "#4a3277"},
+        ],
+    },
+    "dracula": {
+        "code_bg": {"light": "#f4f3f8", "dark": "#282a36"},
+        "code_border": {"light": "#d9d9e3", "dark": "#44475a"},
+        "table_border": {"light": "#d9d9e3", "dark": "#44475a"},
+        "table_head_bg": {"light": "#eae9f2", "dark": "#343746"},
+        "table_zebra": True,
+        "hl": [
+            {"light": "#f1fa8c", "dark": "#8c8f3f"},
+            {"light": "#8ffab0", "dark": "#2f8f52"},
+            {"light": "#8be9fd", "dark": "#3d99ad"},
+            {"light": "#ff9bd8", "dark": "#a84f86"},
+            {"light": "#ffcb96", "dark": "#b3803f"},
+            {"light": "#cba7fb", "dark": "#7c5cb3"},
+        ],
+    },
+    "solarized": {
+        "code_bg": {"light": "#eee8d5", "dark": "#073642"},
+        "code_border": {"light": "#d3cbb7", "dark": "#0f4a58"},
+        "table_border": {"light": "#d3cbb7", "dark": "#0f4a58"},
+        "table_head_bg": {"light": "#e4ddc4", "dark": "#0a4552"},
+        "table_zebra": True,
+        "hl": [
+            {"light": "#f5e6a8", "dark": "#7a6520"},
+            {"light": "#dde8a0", "dark": "#556b1f"},
+            {"light": "#bcdff5", "dark": "#0f4d6e"},
+            {"light": "#f0c6df", "dark": "#5c2050"},
+            {"light": "#f5c9a8", "dark": "#6b3010"},
+            {"light": "#c9c9f0", "dark": "#332f6b"},
+        ],
+    },
+}
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}\Z")
+# safe subset for a CSS font-family list: letters/digits/spaces/commas/hyphens/quotes only —
+# no ; { } < > ( ) / \ : , which is enough to rule out closing the <style> tag or adding a new
+# declaration/selector. Both patterns end in \Z, not $: Python's $ ALSO matches just before a
+# trailing newline, which would let "Menlo\n" (or "#ffffff\n") through — harmless in CSS, but
+# an anchor that means "end of string" should actually mean it.
+_SAFE_FONT_RE = re.compile(r"^[A-Za-z0-9 ,\-'\"]{1,120}\Z")
+
+def _valid_color(v, default):
+    return v if isinstance(v, str) and _HEX_COLOR_RE.match(v) else default
+
+def _valid_pair(light, dark, default_pair):
+    return {"light": _valid_color(light, default_pair["light"]),
+            "dark": _valid_color(dark, default_pair["dark"])}
+
+def _valid_num(v, lo, hi, default, is_int=False):
+    """Parse v as a float and clamp-reject it into [lo, hi]; any parse failure, NaN/inf, or
+    out-of-range value falls back to `default` (never raises, never clamps to the edge — an
+    out-of-range value is treated the same as a garbage one, per the task's injection-defense
+    requirement: silently substitute the default rather than coerce)."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(n) or n < lo or n > hi:
+        return default
+    return int(round(n)) if is_int else n
+
+def _css_num(n):
+    """Format an already-validated numeric style value for CSS text output: trims a trailing
+    '.0' (Python's `16.0` -> '16', not '16.0px') while keeping real fractions as-is (`12.5`
+    stays '12.5') — _valid_num() always returns a plain float for non-integer fields, and
+    str()-ing that directly would emit '16.0px' for a whole-number size."""
+    return f'{n:g}' if isinstance(n, float) else str(n)
+
+def _valid_font(v, default):
+    return v if isinstance(v, str) and _SAFE_FONT_RE.match(v) else default
+
+def _valid_bool(v, default):
+    if isinstance(v, bool):
+        return v
+    if v in ("1", "0"):
+        return v == "1"
+    return default
+
+def _valid_preset(v):
+    return v if v in ("default", "github", "dracula", "solarized") else "default"
+
+def resolve_style(raw):
+    """Validate + fully default-fill a (possibly untrusted) style dict — used by the /settings
+    page to show the effective current values in the advanced form (and by the /api/style
+    reset response). Every field is independently validated via the _valid_*() helpers, so a
+    hand-edited or corrupted settings.json can never produce anything other than a
+    fully-defaulted, safe style dict. style_css_text() below does its OWN validation pass
+    inline (rather than calling this) because it must also know which keys were actually
+    touched, to leave untouched ones out of the emitted CSS entirely — see its docstring."""
+    raw = raw if isinstance(raw, dict) else {}
+    d = {"preset": _valid_preset(raw.get("preset")),
+         "code_font": _valid_font(raw.get("code_font"), STYLE_DEFAULTS["code_font"]),
+         "code_size": _valid_num(raw.get("code_size"), 8, 30, STYLE_DEFAULTS["code_size"]),
+         "code_border_w": _valid_num(raw.get("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"]),
+         "code_radius": _valid_num(raw.get("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"]),
+         "table_border_w": _valid_num(raw.get("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"]),
+         "table_zebra": _valid_bool(raw.get("table_zebra"), STYLE_DEFAULTS["table_zebra"]),
+         "base_size": _valid_num(raw.get("base_size"), 11, 24, STYLE_DEFAULTS["base_size"]),
+         "line_height": _valid_num(raw.get("line_height"), 1.2, 2.4, STYLE_DEFAULTS["line_height"]),
+         "content_width": _valid_num(raw.get("content_width"), 600, 2000, STYLE_DEFAULTS["content_width"], is_int=True)}
+    for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+        v = raw.get(key) if isinstance(raw.get(key), dict) else {}
+        d[key] = _valid_pair(v.get("light"), v.get("dark"), STYLE_DEFAULTS[key])
+    hl_raw = raw.get("hl") if isinstance(raw.get("hl"), list) else []
+    hl = []
+    for i in range(6):
+        item = hl_raw[i] if i < len(hl_raw) and isinstance(hl_raw[i], dict) else {}
+        hl.append(_valid_pair(item.get("light"), item.get("dark"), STYLE_DEFAULTS["hl"][i]))
+    d["hl"] = hl
+    return d
+
+# name of the CSS custom property each *_light/_dark-shaped style key maps to
+_THEMED_CSS_VAR = {"code_bg": "--code-bg", "code_border": "--code-bd",
+                    "table_border": "--tbl-bd", "table_head_bg": "--tbl-head-bg"}
+# the .md-table zebra-stripe background is fixed (not independently colorable — table_zebra is
+# only on/off), matching the color the existing (pre-feature) CSS hardcodes for each theme.
+_ZEBRA_BG = {"light": "#fafbfc", "dark": "#191c22"}
+
+def style_css_text(raw):
+    """Render the *touched* keys of a style dict (see resolve_style()'s docstring on why every
+    field is re-validated here too) as a block of CSS custom-property overrides for shell()'s
+    <style> tag. A key the user never touched is left OUT of :root entirely, so that rule's own
+    var(--x, ORIGINAL-HARDCODED-VALUE) fallback is what actually renders — this is what keeps a
+    from-scratch page (no style settings saved at all) byte-for-byte identical to the page
+    before this feature existed, and keeps an UNTOUCHED aspect (e.g. inline-code font-size)
+    unaffected even once some unrelated key (e.g. table_zebra) has been customized.
+
+    Only color-bearing fields (backgrounds/borders/highlights) differ between light and dark —
+    those get the full 4-state token pattern (:root default, OS-dark media query, and explicit
+    [data-theme] overrides so the /settings page's preview toggle can force a theme regardless
+    of the OS setting) plus an `@media print` reset back to light. Non-color fields (font,
+    sizes, widths) have no light/dark variant, so they go straight into a plain :root block."""
+    raw = raw if isinstance(raw, dict) else {}
+    const, light, dark = [], [], []
+    if "code_font" in raw:
+        const.append(f'--code-font:{_valid_font(raw.get("code_font"), STYLE_DEFAULTS["code_font"])}')
+    if "code_size" in raw:
+        const.append(f'--code-size:{_css_num(_valid_num(raw.get("code_size"), 8, 30, STYLE_DEFAULTS["code_size"]))}px')
+    if "code_border_w" in raw:
+        const.append(f'--code-bw:{_css_num(_valid_num(raw.get("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"]))}px')
+    if "code_radius" in raw:
+        const.append(f'--code-rad:{_css_num(_valid_num(raw.get("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"]))}px')
+    if "table_border_w" in raw:
+        const.append(f'--tbl-bw:{_css_num(_valid_num(raw.get("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"]))}px')
+    if "base_size" in raw:
+        const.append(f'--body-size:{_css_num(_valid_num(raw.get("base_size"), 11, 24, STYLE_DEFAULTS["base_size"]))}px')
+    if "line_height" in raw:
+        const.append(f'--body-lh:{_css_num(_valid_num(raw.get("line_height"), 1.2, 2.4, STYLE_DEFAULTS["line_height"]))}')
+    if "content_width" in raw:
+        const.append(f'--content-w:{_css_num(_valid_num(raw.get("content_width"), 600, 2000, STYLE_DEFAULTS["content_width"], is_int=True))}px')
+    for key, cssvar in _THEMED_CSS_VAR.items():
+        if key in raw:
+            v = raw.get(key) if isinstance(raw.get(key), dict) else {}
+            pair = _valid_pair(v.get("light"), v.get("dark"), STYLE_DEFAULTS[key])
+            light.append(f'{cssvar}:{pair["light"]}')
+            dark.append(f'{cssvar}:{pair["dark"]}')
+    if "table_zebra" in raw:
+        on = _valid_bool(raw.get("table_zebra"), STYLE_DEFAULTS["table_zebra"])
+        light.append(f'--tbl-zebra:{_ZEBRA_BG["light"] if on else "transparent"}')
+        dark.append(f'--tbl-zebra:{_ZEBRA_BG["dark"] if on else "transparent"}')
+    if isinstance(raw.get("hl"), list):
+        for i, item in enumerate(raw["hl"][:6]):
+            if not isinstance(item, dict):
+                continue
+            pair = _valid_pair(item.get("light"), item.get("dark"), STYLE_DEFAULTS["hl"][i])
+            light.append(f'--hl{i}:{pair["light"]}')
+            dark.append(f'--hl{i}:{pair["dark"]}')
+    if not (const or light or dark):
+        return ""
+    out = []
+    root0 = ";".join(const + light)
+    if root0:
+        out.append(f':root{{{root0}}}')
+    if dark:
+        d_css = ";".join(dark)
+        out.append(f'@media(prefers-color-scheme:dark){{:root:not([data-theme="light"]){{{d_css}}}}}')
+        out.append(f':root[data-theme="dark"]{{{d_css}}}')
+    if light:
+        l_css = ";".join(light)
+        out.append(f':root[data-theme="light"]{{{l_css}}}')
+        out.append(f'@media print{{:root{{{l_css}}}}}')
+    return "".join(out)
+
+def style_css_text_full(resolved):
+    """Always-emit variant of style_css_text(), for a fully-defaulted dict from resolve_style()
+    — used ONLY by the /settings page (its initial render and its live-preview /api/style
+    responses), never by shell()'s site-wide %%STYLEVARS%%. The site-wide page must stay
+    byte-identical when untouched (style_css_text()'s job); the /settings preview instead needs
+    every token defined so its 밝게/어둡게 toggle can demonstrate light-vs-dark contrast even
+    for a token the user has never customized — the whole point of the preview."""
+    const = (f'--code-font:{resolved["code_font"]};--code-size:{_css_num(resolved["code_size"])}px;'
+             f'--code-bw:{_css_num(resolved["code_border_w"])}px;--code-rad:{_css_num(resolved["code_radius"])}px;'
+             f'--tbl-bw:{_css_num(resolved["table_border_w"])}px;--body-size:{_css_num(resolved["base_size"])}px;'
+             f'--body-lh:{_css_num(resolved["line_height"])};--content-w:{_css_num(resolved["content_width"])}px')
+    def themed(mode):
+        zebra = _ZEBRA_BG[mode] if resolved["table_zebra"] else "transparent"
+        parts = [f'--code-bg:{resolved["code_bg"][mode]}', f'--code-bd:{resolved["code_border"][mode]}',
+                 f'--tbl-bd:{resolved["table_border"][mode]}', f'--tbl-head-bg:{resolved["table_head_bg"][mode]}',
+                 f'--tbl-zebra:{zebra}']
+        parts += [f'--hl{i}:{resolved["hl"][i][mode]}' for i in range(6)]
+        return ";".join(parts)
+    light, dark = themed("light"), themed("dark")
+    return (f':root{{{const};{light}}}'
+            f'@media(prefers-color-scheme:dark){{:root:not([data-theme="light"]){{{dark}}}}}'
+            f':root[data-theme="dark"]{{{dark}}}'
+            f':root[data-theme="light"]{{{light}}}'
+            f'@media print{{:root{{{light}}}}}')
 
 # ---- update check -----------------------------------------------------------
 # Privacy: this is the ONLY thing the app ever sends over the network. It is a plain
@@ -3942,8 +4219,9 @@ try{if(!%%TEMP_PORT_JS%%&&new URLSearchParams(location.search).get('welcome')===
 <title>%%TITLE%%</title>
 <style>
 :root{color-scheme:light dark}
+%%STYLEVARS%%
 *{box-sizing:border-box}
-body{font:14.5px/1.65 -apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;margin:0;background:#f5f6f8;color:#1a1a1a}
+body{font-family:-apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;font-size:var(--body-size,14.5px);line-height:var(--body-lh,1.65);margin:0;background:#f5f6f8;color:#1a1a1a}
 @media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
 header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);color:#fff;padding:11px 18px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center}
 /* Installed-app window chrome (no effect in a normal browser tab) */
@@ -4060,7 +4338,7 @@ linear-gradient(158deg,#3450c4 0%,#20369b 46%,#0a6d9d 100%)}}
 .adv.open{display:flex}
 .adv .advlbl{color:#fff;font-size:12px;opacity:.85}
 .adv select,.adv input{padding:6px 9px;border:0;border-radius:7px;font-size:13px;min-width:0;max-width:100%}
-.wrap{max-width:940px;margin:0 auto;padding:16px}
+.wrap{max-width:var(--content-w,940px);margin:0 auto;padding:16px}
 .rootbar{max-width:940px;margin:0 auto;padding:8px 16px 0;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .rootbar .lbl{font-size:11.5px;color:#8a8f98}
 .rootbar a{font-size:12px;text-decoration:none;padding:4px 11px;border-radius:14px;background:#e9edf2;color:#444;border:1px solid #dfe3e8}
@@ -4205,24 +4483,29 @@ form.ssearch a.ssclear{align-self:center;font-size:12px;color:#b04;text-decorati
 .md-bq{margin:8px 0;padding:2px 12px;border-left:3px solid #cbd2da;color:#555}
 @media(prefers-color-scheme:dark){.md-bq{border-color:#3a3f47;color:#9aa0a8}}
 .md-hr{border:0;border-top:1px solid #e0e3e7;margin:12px 0}
-.md-ic{background:#eef1f4;border-radius:4px;padding:.5px 5px;font-family:ui-monospace,Menlo,monospace;font-size:.9em}
+.md-ic{background:#eef1f4;border-radius:4px;padding:.5px 5px;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,.9em)}
 @media(prefers-color-scheme:dark){.md-ic{background:#2a2e35}}
 .md a{color:#1f6feb}
 .md-codewrap{margin:8px 0;border:1px solid #e4e7eb;border-radius:8px;overflow:hidden}
 @media(prefers-color-scheme:dark){.md-codewrap{border-color:#2a2e35}}
 .md-clang{font:11px/1 ui-monospace,Menlo,monospace;color:#8a8f98;padding:6px 10px;background:#f0f1f3;border-bottom:1px solid #e4e7eb}
 @media(prefers-color-scheme:dark){.md-clang{background:#23262d;border-color:#2a2e35}}
-pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:#fafbfc;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;line-height:1.5}
-@media(prefers-color-scheme:dark){pre.md-code{background:#15171c}}
+pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:var(--code-bg,#fafbfc);font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);white-space:pre;line-height:1.5}
+@media(prefers-color-scheme:dark){pre.md-code{background:var(--code-bg,#15171c)}}
 .md-tablewrap{overflow-x:auto;margin:9px 0}
 table.md-table{border-collapse:collapse;font-size:13px}
-table.md-table th,table.md-table td{border:1px solid #dfe3e8;padding:5px 11px;text-align:left;vertical-align:top}
-table.md-table thead th{background:#f0f3f7;font-weight:650;white-space:nowrap}
-table.md-table tbody tr:nth-child(even){background:#fafbfc}
+table.md-table th,table.md-table td{border:var(--tbl-bw,1px) solid var(--tbl-bd,#dfe3e8);padding:5px 11px;text-align:left;vertical-align:top}
+table.md-table thead th{background:var(--tbl-head-bg,#f0f3f7);font-weight:650;white-space:nowrap}
+table.md-table tbody tr:nth-child(even){background:var(--tbl-zebra,#fafbfc)}
 @media(prefers-color-scheme:dark){
- table.md-table th,table.md-table td{border-color:#2a2e35}
- table.md-table thead th{background:#23262d}
- table.md-table tbody tr:nth-child(even){background:#191c22}}
+ /* var()+dark-fallback here too (not a bare hardcoded color) — this rule has the same
+    selector specificity as the light rule above and comes later in the stylesheet, so a
+    bare color would always win in dark mode and silently ignore a customized --tbl-bd/
+    --tbl-head-bg/--tbl-zebra; referencing the SAME custom property keeps both rules
+    resolving to one consistent value regardless of whether style settings are in play. */
+ table.md-table th,table.md-table td{border-color:var(--tbl-bd,#2a2e35)}
+ table.md-table thead th{background:var(--tbl-head-bg,#23262d)}
+ table.md-table tbody tr:nth-child(even){background:var(--tbl-zebra,#191c22)}}
 /* tool call / tool result */
 .tk-body{padding:8px 14px;background:#fafbfc}
 @media(prefers-color-scheme:dark){.tk-body{background:#15171c}}
@@ -4264,9 +4547,9 @@ pre.tk-add{background:#eaffee;color:#116329;border-color:#acefbf}
 details.fold{border-top:1px dashed #e0e3e7}
 details.fold>summary{cursor:pointer;padding:5px 15px;font-size:12px;color:#8a8f98;user-select:none}
 @media(prefers-color-scheme:dark){details.fold{border-color:#2a2e35}}
-mark{background:#ffe27a;color:#000;padding:0 1px;border-radius:2px;font-weight:600}
-.hl0{background:#ffe27a}.hl1{background:#9ae6b4}.hl2{background:#9ecbff}
-.hl3{background:#fbb6ce}.hl4{background:#ffc38a}.hl5{background:#cbb2f7}
+mark{background:var(--hl0,#ffe27a);color:#000;padding:0 1px;border-radius:2px;font-weight:600}
+.hl0{background:var(--hl0,#ffe27a)}.hl1{background:var(--hl1,#9ae6b4)}.hl2{background:var(--hl2,#9ecbff)}
+.hl3{background:var(--hl3,#fbb6ce)}.hl4{background:var(--hl4,#ffc38a)}.hl5{background:var(--hl5,#cbb2f7)}
 .hlkey{display:inline-block;font-size:11px;padding:0 6px;border-radius:3px;color:#000;margin-right:5px;font-weight:600}
 .msg.kfocus{outline:3px solid #1f6feb;outline-offset:2px}
 .card.rowfocus{outline:3px solid #1f6feb;outline-offset:1px}
@@ -4342,8 +4625,8 @@ kbd{background:#e7e9ec;border-radius:4px;padding:0 5px;font-size:11px;border:1px
 .codectx{padding:4px 12px;font-size:11.5px;color:#8a8f98;background:#fafbfc;border-bottom:1px solid #eef1f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(prefers-color-scheme:dark){.codectx{background:#191c22;border-color:#23262d}}
 .copy{cursor:pointer;border:0;background:#1f6feb;color:#fff;border-radius:6px;padding:3px 10px;font-size:11px}
-pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;max-height:520px;overflow:auto;background:#fafbfc}
-@media(prefers-color-scheme:dark){pre.code{background:#15171c;color:#dfe3e8}}
+pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);max-height:520px;overflow:auto;background:var(--code-bg,#fafbfc);border:var(--code-bw,1px) solid var(--code-bd,#e6e9ee);border-radius:var(--code-rad,6px)}
+@media(prefers-color-scheme:dark){pre.code{background:var(--code-bg,#15171c);color:#dfe3e8}}
 #minimap{position:fixed;right:3px;top:58px;bottom:8px;width:11px;display:flex;flex-direction:column;z-index:8;opacity:.6;border-radius:5px;overflow:hidden}
 #minimap:hover{opacity:1;width:15px}
 #minimap .seg{flex:1 1 auto;min-height:1px;cursor:pointer;border:0}
@@ -4351,6 +4634,45 @@ pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;f
 .mm-error{background:#e5484d}.mm-you{background:#1f6feb}.mm-edit{background:#8b5cf6}
 .mm-command{background:#16a34a}.mm-claude{background:#9bd3ad}.mm-orch{background:#a78bda}.mm-other{background:#cdd2d8}
 @media(max-width:760px){#minimap{display:none}}
+/* ---- /settings page (H.settings()): theme presets, advanced color/size controls, live
+   preview. The page's OWN chrome below is deliberately plain CSS (no var(--x,…) tokens) —
+   only .stylepreview's children (which reuse the real pre.code/table.md-table/mark rules
+   above) are meant to react to the style being edited; see H.settings()'s own <style>
+   override for how the surrounding page is additionally pinned against --body-size/
+   --body-lh/--content-w so a bad/extreme value can never make the settings page itself
+   unreadable — that's what stands in for an escape hatch besides the reset button. */
+.stylesec{margin:14px 0}
+.presetrow{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.presetbtn{border:2px solid #dfe3e8;border-radius:10px;padding:9px 14px;background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#333;display:flex;align-items:center;gap:8px}
+.presetbtn.on{border-color:#1f6feb;box-shadow:0 0 0 2px rgba(31,111,235,.18)}
+@media(prefers-color-scheme:dark){.presetbtn{background:#1b1e24;border-color:#3a3f47;color:#e7e9ec}}
+.presetswatch{display:inline-flex;gap:2px}
+.presetswatch i{width:12px;height:12px;border-radius:3px;display:inline-block;font-style:normal}
+.styleadv summary{cursor:pointer;font-weight:650;color:#1f6feb;padding:4px 0}
+.stylegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin:10px 0}
+.stylefield{background:#fff;border:1px solid #e4e7eb;border-radius:9px;padding:10px 12px}
+@media(prefers-color-scheme:dark){.stylefield{background:#1b1e24;border-color:#2a2e35}}
+.stylefield label{display:block;font-size:11.5px;color:#8a8f98;margin-bottom:4px}
+.stylefield input[type=text],.stylefield input[type=number]{width:100%;padding:5px 8px;border:1px solid #cfd4db;border-radius:6px;font-size:12.5px;background:#fff;color:#1a1a1a}
+@media(prefers-color-scheme:dark){.stylefield input[type=text],.stylefield input[type=number]{background:#13151a;color:#e7e9ec;border-color:#3a3f47}}
+.colorpair{display:flex;gap:12px;align-items:center}
+.colorpair span{font-size:11px;color:#8a8f98;display:flex;flex-direction:column;align-items:center;gap:3px}
+/* the "✓ saved" flash lives inside .colorpair, so the rule above would give it display:flex and
+   defeat its own `hidden` attribute — making every colour control claim it was saved on first
+   paint. An author `display` always beats the UA's [hidden]{display:none}, so restore it. */
+.colorpair span[hidden]{display:none}
+.colorpair input[type=color]{width:36px;height:26px;border:1px solid #cfd4db;border-radius:5px;padding:0;cursor:pointer;background:none}
+.hlrow{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.stylepreview{border:1px solid var(--pv-border,#e0e3e7);border-radius:11px;padding:16px;background:var(--pv-bg,#fff);color:var(--pv-fg,#1a1a1a);margin:10px 0}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .stylepreview{--pv-bg:#13151a;--pv-fg:#e7e9ec;--pv-border:#2a2e35}}
+[data-theme="dark"] .stylepreview{--pv-bg:#13151a;--pv-fg:#e7e9ec;--pv-border:#2a2e35}
+[data-theme="light"] .stylepreview{--pv-bg:#fff;--pv-fg:#1a1a1a;--pv-border:#e0e3e7}
+.pvtoolbar{display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px}
+.pvtoolbar button{padding:5px 12px;border-radius:7px;border:1px solid #cfd4db;background:transparent;color:inherit;cursor:pointer;font-size:12px}
+.pvtoolbar button.on{background:#1f6feb;color:#fff;border-color:#1f6feb}
+.styleresetbtn{padding:7px 16px;border-radius:8px;border:1px solid #e5484d;background:transparent;color:#e5484d;cursor:pointer;font-size:13px;margin-top:6px}
+.styleresetbtn:hover{background:#e5484d;color:#fff}
+.styleok{color:#16a34a;font-size:12px;margin-left:8px}
 </style></head><body>
 <div class=titlebar>%%HOMELABEL%%</div>
 <header>
@@ -5244,6 +5566,10 @@ def shell(title, body, q="", scope="all", root=None, days="", from_="", to="", p
         + '</span><button type=button class=updx title="' + esc(tr("dismiss"))
         + '" onclick="this.parentElement.remove()">✕</button></div>')
     repl = {
+        # user-customized code/table/highlight colors etc — see style_css_text()'s docstring
+        # for why an untouched style dict renders this as "" (byte-identical to the pre-feature
+        # page) rather than a full block of vars that merely restate the hardcoded defaults.
+        "%%STYLEVARS%%": style_css_text(_SETTINGS.get("style")),
         "%%KBHELP%%": kbhelp,
         "%%CONVONLY%%": esc(tr("conversation only — press t to show tools")),
         "%%INSTALLMODAL%%": ('' if _ON_TEMP_PORT else install_modal),
@@ -5499,6 +5825,72 @@ class H(BaseHTTPRequestHandler):
                 # same as an unparsable value, rather than persisting a bogus setting.
             settings = set_settings(**kw) if kw else dict(_SETTINGS)
             return self._send_json({"settings": settings})
+        if u.path == "/api/style":
+            # persist UI style settings (code font/colors, table borders, highlight colors, …)
+            # to CONFIG_DIR/settings.json's "style" key — same guard as /api/settings above.
+            # Only the top-level keys present in the query are written (see STYLE_DEFAULTS'
+            # module docstring for why); everything is validated by the _valid_*() helpers
+            # before it's stored, and validated AGAIN on every render (style_css_text()) since
+            # settings.json is a plain user-editable file this save-time check can't guard.
+            sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
+            if sfs in ("cross-site", "same-site"):
+                return self._send_json({"error": "cross-site rejected"}, 403)
+            if g("reset") == "1":
+                set_settings(style={})
+                resolved = resolve_style({})
+                return self._send_json({"style": resolved, "css": style_css_text_full(resolved)})
+            cur = dict(_SETTINGS.get("style") or {})
+            if "preset" in qs:
+                cur["preset"] = _valid_preset(g("preset"))
+            if "code_font" in qs:
+                cur["code_font"] = _valid_font(g("code_font"), STYLE_DEFAULTS["code_font"])
+            if "code_size" in qs:
+                cur["code_size"] = _valid_num(g("code_size"), 8, 30, STYLE_DEFAULTS["code_size"])
+            if "code_border_w" in qs:
+                cur["code_border_w"] = _valid_num(g("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"])
+            if "code_radius" in qs:
+                cur["code_radius"] = _valid_num(g("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"])
+            if "table_border_w" in qs:
+                cur["table_border_w"] = _valid_num(g("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"])
+            if "table_zebra" in qs:
+                cur["table_zebra"] = g("table_zebra") == "1"
+            if "base_size" in qs:
+                cur["base_size"] = _valid_num(g("base_size"), 11, 24, STYLE_DEFAULTS["base_size"])
+            if "line_height" in qs:
+                cur["line_height"] = _valid_num(g("line_height"), 1.2, 2.4, STYLE_DEFAULTS["line_height"])
+            if "content_width" in qs:
+                cur["content_width"] = _valid_num(g("content_width"), 600, 2000, STYLE_DEFAULTS["content_width"], is_int=True)
+            # paired light+dark color controls — the settings-page form always submits both
+            # halves of a pair together, so a partial update just keeps whichever half of the
+            # OLD stored (or default) pair wasn't resubmitted, rather than silently discarding it.
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+                lk, dk = key + "_light", key + "_dark"
+                if lk in qs or dk in qs:
+                    old = cur.get(key) if isinstance(cur.get(key), dict) else {}
+                    default = STYLE_DEFAULTS[key]
+                    cur[key] = _valid_pair(g(lk, old.get("light", default["light"])),
+                                            g(dk, old.get("dark", default["dark"])), default)
+            hl_old = cur.get("hl") if isinstance(cur.get("hl"), list) else []
+            # pad with None (not {}) — {} is itself a dict, so a naive isinstance(dict) check
+            # below would treat a padding placeholder as "already a real pair" and never fill
+            # it in with the default.
+            hl_new = (list(hl_old[:6]) + [None] * 6)[:6]
+            hl_touched = False
+            for i in range(6):
+                lk, dk = f"hl{i}_light", f"hl{i}_dark"
+                if lk in qs or dk in qs:
+                    old = hl_new[i] if isinstance(hl_new[i], dict) else {}
+                    default = STYLE_DEFAULTS["hl"][i]
+                    hl_new[i] = _valid_pair(g(lk, old.get("light", default["light"])),
+                                             g(dk, old.get("dark", default["dark"])), default)
+                    hl_touched = True
+                elif not isinstance(hl_new[i], dict):
+                    hl_new[i] = STYLE_DEFAULTS["hl"][i]
+            if hl_touched:
+                cur["hl"] = hl_new
+            settings = set_settings(style=cur)
+            resolved = resolve_style(settings.get("style"))
+            return self._send_json({"style": resolved, "css": style_css_text_full(resolved)})
         if u.path == "/api/stars.json":
             b = json.dumps({"stars": sorted(_STARS)}, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
@@ -5596,6 +5988,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(self.subagent(g("p"), g("parent"), g("q")))
         if u.path == "/favs":
             return self._send(self.favs())
+        if u.path == "/settings":
+            return self._send(self.settings())
         if u.path in ("/addroot", "/delroot", "/pickroot"):
             # CSRF guard for state-changing routes: modern browsers send
             # Sec-Fetch-Site; block explicit cross-site, allow same-origin,
@@ -5821,7 +6215,8 @@ class H(BaseHTTPRequestHandler):
                 + legend_html()
                 # a distinct nav entry to /favs (per-message ★), not to be confused with the
                 # whole-session ⭐ stars summarized in favbar just below
-                + f'<p class=meta><a href="/favs">⭐ {tr("Favorites")} ({len(_FAVS)})</a></p>')
+                + f'<p class=meta><a href="/favs">⭐ {tr("Favorites")} ({len(_FAVS)})</a> · '
+                  f'<a href="/settings">⚙️ {tr("Settings")}</a></p>')
         if not items and not proj_filter:
             head += (f'<div class=card><b>{tr("No sessions.")}</b>'
                      f'<p class=meta>{tr("No <code>&lt;project&gt;/&lt;uuid&gt;.jsonl</code> files found under")} {esc(rootlabel)}. '
@@ -6622,6 +7017,154 @@ class H(BaseHTTPRequestHandler):
         backup = (f'<p class=meta>{tr("Favorites are saved to")} <code class=sid>{esc(FAVS_FILE)}</code> — '
                   f'{tr("to move them to a new computer, copy just this one file to the same location there.")}</p>')
         return shell(f'⭐ {tr("Favorites")}', f'<h3 style="margin:4px 0 8px">⭐ {tr("Favorites")}</h3>' + body + backup)
+
+    def settings(self):
+        """/settings — UI style customization (code font/colors, table borders, highlight
+        colors, body typography/width) plus a read-only view of the other scattered settings
+        (default per-page, lazy-render, timeline per-page). See STYLE_DEFAULTS' module
+        docstring for the storage/validation model.
+
+        The page itself must stay legible no matter what the user has saved (a bad color must
+        never be able to lock them out of the very page that fixes it) — so besides the
+        reset button, everything OUTSIDE the #stylepreview box is deliberately plain, hardcoded
+        CSS: the tiny <style> below pins #wrap's width and body's font back to the shipped
+        defaults, overriding --content-w/--body-size/--body-lh regardless of what's saved."""
+        resolved = resolve_style(_SETTINGS.get("style"))
+
+        def flat(d, zebra_default=True):
+            out = {}
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+                out[key + "_light"] = d[key]["light"]
+                out[key + "_dark"] = d[key]["dark"]
+            out["table_zebra"] = "1" if d.get("table_zebra", zebra_default) else "0"
+            for i in range(6):
+                out[f"hl{i}_light"] = d["hl"][i]["light"]
+                out[f"hl{i}_dark"] = d["hl"][i]["dark"]
+            return out
+
+        presets_js = {"default": flat(STYLE_DEFAULTS)}
+        presets_js.update({name: flat(vals) for name, vals in STYLE_PRESETS.items()})
+
+        def preset_btn(name, label):
+            vals = STYLE_PRESETS.get(name, STYLE_DEFAULTS)
+            dots = "".join(f'<i style="background:{esc(vals["hl"][i]["light"])}"></i>' for i in (0, 1, 2))
+            on = " on" if resolved["preset"] == name else ""
+            return (f'<button type=button class="presetbtn{on}" data-preset="{name}" onclick="AISSapplyPreset(\'{name}\')">'
+                    f'<span class=presetswatch>{dots}</span>{esc(label)}</button>')
+
+        presets_html = ('<div class=presetrow>'
+                         + preset_btn("default", tr("Default"))
+                         + preset_btn("github", "GitHub")
+                         + preset_btn("dracula", "Dracula")
+                         + preset_btn("solarized", "Solarized")
+                         + '</div>')
+
+        def pair_field(key, label, pair):
+            return (f'<div class=stylefield><label>{esc(label)}</label><div class=colorpair>'
+                    f'<span>{tr("Light")}<input type=color id="f_{key}_light" value="{esc(pair["light"])}"></span>'
+                    f'<span>{tr("Dark")}<input type=color id="f_{key}_dark" value="{esc(pair["dark"])}"></span>'
+                    f'<span id="ok_{key}" class=styleok hidden>✓ {tr("saved")}</span>'
+                    '</div></div>')
+
+        def num_field(key, label, val, lo, hi, step=1):
+            return (f'<div class=stylefield><label>{esc(label)}</label>'
+                    f'<input type=number id="f_{key}" value="{val}" min="{lo}" max="{hi}" step="{step}">'
+                    f'<span id="ok_{key}" class=styleok hidden>✓ {tr("saved")}</span></div>')
+
+        advanced_html = (
+            '<div class=stylegrid>'
+            + f'<div class=stylefield><label>{esc(tr("Code font"))}</label>'
+              f'<input type=text id=f_code_font value="{esc(resolved["code_font"])}">'
+              f'<span id=ok_code_font class=styleok hidden>✓ {tr("saved")}</span></div>'
+            + num_field("code_size", tr("Code size (px)"), resolved["code_size"], 8, 30, 0.5)
+            + pair_field("code_bg", tr("Code background"), resolved["code_bg"])
+            + pair_field("code_border", tr("Code border color"), resolved["code_border"])
+            + num_field("code_border_w", tr("Code border width (px)"), resolved["code_border_w"], 0, 4)
+            + num_field("code_radius", tr("Code corner radius (px)"), resolved["code_radius"], 0, 20)
+            + pair_field("table_border", tr("Table border color"), resolved["table_border"])
+            + num_field("table_border_w", tr("Table border width (px)"), resolved["table_border_w"], 0, 4)
+            + pair_field("table_head_bg", tr("Table header background"), resolved["table_head_bg"])
+            + (f'<div class=stylefield><label>{esc(tr("Table zebra stripes"))}</label>'
+               f'<label class=hint><input type=checkbox id=f_table_zebra'
+               f'{" checked" if resolved["table_zebra"] else ""}> {tr("Shade every other row")}</label>'
+               f'<span id=ok_table_zebra class=styleok hidden>✓ {tr("saved")}</span></div>')
+            + num_field("base_size", tr("Body font size (px)"), resolved["base_size"], 11, 24, 0.5)
+            + num_field("line_height", tr("Line height"), resolved["line_height"], 1.2, 2.4, 0.05)
+            + num_field("content_width", tr("Content width (px)"), resolved["content_width"], 600, 2000, 10)
+            + '</div>'
+            + f'<div class=hlrow>' + "".join(pair_field(f"hl{i}", f'{tr("Highlight color")} {i + 1}', resolved["hl"][i])
+                                              for i in range(6)) + '</div>'
+        )
+
+        preview_html = (
+            '<div class=pvtoolbar>'
+            f'<button type=button id=pvlight onclick="AISSsetPreviewTheme(\'light\')">☀️ {tr("Light")}</button>'
+            f'<button type=button id=pvdark onclick="AISSsetPreviewTheme(\'dark\')">🌙 {tr("Dark")}</button>'
+            '</div>'
+            '<div class=stylepreview id=stylepreview>'
+            '<div class="md-codewrap"><div class="md-clang">python</div>'
+            '<pre class="md-code"><code>' + esc('def greet(name):\n    return f"Hello, {name}!"') + '</code></pre></div>'
+            '<div class="md-tablewrap"><table class="md-table"><thead><tr>'
+            f'<th>{esc(tr("Setting"))}</th><th>{esc(tr("Value"))}</th></tr></thead><tbody>'
+            f'<tr><td>{esc(tr("Theme"))}</td><td>Dracula</td></tr>'
+            f'<tr><td>{esc(tr("Font size"))}</td><td>14.5px</td></tr>'
+            '</tbody></table></div>'
+            f'<p>{tr("Search results highlight your query terms, like")} <mark class=hl0>keyword</mark> '
+            f'{tr("and")} <mark class=hl1>example</mark>.</p>'
+            '</div>'
+        )
+
+        other = (f'<p class=meta>{tr("per page")} ({tr("session view")}): <b>{esc(str(get_default_lim() or tr("all")))}</b> · '
+                 f'{tr("Lazy-load long sessions")}: <b>{tr("enabled") if get_lazy_render() else tr("disabled")}</b> · '
+                 f'{tr("per page")} ({tr("timeline")}): <b>{get_timeline_lim()}</b>'
+                 f'<br><span class=hint>{tr("Changed from their own page-size controls — in the session view and the timeline view, not here.")}</span></p>')
+
+        body = (
+            f'<style>#wrap{{max-width:960px}}body{{font-size:14.5px;line-height:1.65}}</style>'
+            f'<style id=liveStyleVars>{style_css_text_full(resolved)}</style>'
+            f'<h3 style="margin:4px 0 8px">⚙️ {tr("Settings")}</h3>'
+            f'<div class=stylesec><h4 style="margin:6px 0">{tr("Theme presets")}</h4>{presets_html}</div>'
+            f'<details class=styleadv><summary>{tr("Advanced")}</summary>{advanced_html}</details>'
+            f'<div class=stylesec><h4 style="margin:14px 0 6px">{tr("Preview")}</h4>{preview_html}</div>'
+            f'<div class=stylesec><button type=button id=styleResetBtn class=styleresetbtn onclick="AISSresetStyle()">'
+            f'↺ {tr("Reset to defaults")}</button></div>'
+            f'<div class=stylesec><h4 style="margin:14px 0 6px">{tr("Other settings")}</h4>{other}</div>'
+            '<script>(function(){'
+            'var PRESETS = ' + json.dumps(presets_js) + ';'
+            'function api(p){var qs=Object.keys(p).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(p[k]);}).join("&");'
+            'return fetch("/api/style?"+qs).then(function(r){return r.json();});}'
+            'function applyCss(css){var t=document.getElementById("liveStyleVars");if(t)t.textContent=css;}'
+            'function flash(key){var el=document.getElementById("ok_"+key);if(!el)return;el.hidden=false;'
+            'clearTimeout(el._t);el._t=setTimeout(function(){el.hidden=true;},1200);}'
+            'function save(p,key){api(p).then(function(d){if(d.css)applyCss(d.css);if(key)flash(key);});}'
+            'window.AISSapplyPreset=function(name){var f=PRESETS[name];if(!f)return;'
+            'Object.keys(f).forEach(function(k){var el=document.getElementById("f_"+k);if(!el)return;'
+            'if(el.type==="checkbox")el.checked=(f[k]==="1");else el.value=f[k];});'
+            'var p=Object.assign({},f,{preset:name});save(p);'
+            'document.querySelectorAll(".presetbtn").forEach(function(b){b.classList.toggle("on",b.dataset.preset===name);});};'
+            'window.AISSsetPreviewTheme=function(mode){document.documentElement.setAttribute("data-theme",mode);'
+            'document.getElementById("pvlight").classList.toggle("on",mode==="light");'
+            'document.getElementById("pvdark").classList.toggle("on",mode==="dark");};'
+            'window.AISSresetStyle=function(){if(!confirm(' + json.dumps(tr("Reset all style settings to their defaults? This cannot be undone.")) + '))return;'
+            'api({reset:"1"}).then(function(){location.reload();});};'
+            '["code_font","code_size","code_border_w","code_radius","table_border_w","base_size","line_height","content_width"]'
+            '.forEach(function(key){var el=document.getElementById("f_"+key);if(!el)return;'
+            'el.addEventListener("change",function(){var p={};p[key]=el.value;save(p,key);});});'
+            'var zEl=document.getElementById("f_table_zebra");if(zEl)zEl.addEventListener("change",function(){'
+            'save({table_zebra:zEl.checked?"1":"0"},"table_zebra");});'
+            '["code_bg","code_border","table_border","table_head_bg"].forEach(function(key){'
+            '["light","dark"].forEach(function(mode){var el=document.getElementById("f_"+key+"_"+mode);if(!el)return;'
+            'el.addEventListener("input",function(){var p={};'
+            'p[key+"_light"]=document.getElementById("f_"+key+"_light").value;'
+            'p[key+"_dark"]=document.getElementById("f_"+key+"_dark").value;save(p,key);});});});'
+            'for(var i=0;i<6;i++){(function(i){var key="hl"+i;'
+            '["light","dark"].forEach(function(mode){var el=document.getElementById("f_"+key+"_"+mode);if(!el)return;'
+            'el.addEventListener("input",function(){var p={};'
+            'p[key+"_light"]=document.getElementById("f_"+key+"_light").value;'
+            'p[key+"_dark"]=document.getElementById("f_"+key+"_dark").value;save(p,key);});});})(i);}'
+            '})();</script>'
+        )
+        return shell(f'⚙️ {tr("Settings")}', body)
 
 # ---- main -------------------------------------------------------------------
 def make_server(host="127.0.0.1", port=DEFAULT_PORT):

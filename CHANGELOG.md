@@ -1,5 +1,30 @@
 # Changelog
 
+## 4.1.0 — 2026-08-19
+
+- **New: a Settings page for how the UI looks** (`⚙️ Settings`, linked from the top of the index).
+  Start from a **theme preset** — Default, GitHub, Dracula, or Solarized — which sets the code,
+  table, and highlight colors for light and dark at once. Open **Advanced** for individual
+  control: the code font and size, code-block background, border color/width/corner radius,
+  table border and header shading, zebra striping on/off, all six search-highlight colors, and
+  the body text size, line height, and content width.
+- **Colors are chosen per mode, with a preview that can show either one.** A single color
+  necessarily looks wrong in one of the two modes, so light and dark are set separately. Since
+  the app follows your macOS appearance and has no theme switch of its own, the preview panel
+  has its own **Light / Dark** buttons: the sample code block, table, and highlighted sentence
+  render in the mode you're editing — with matching background and text color — without touching
+  your system setting.
+- **Anything you haven't changed renders exactly as before.** Untouched settings emit no CSS at
+  all and fall back to the original built-in values, so this release changes nothing visually
+  until you choose something.
+- **The Settings page never styles itself with your choices**, so no color you pick can make the
+  page you'd fix it from unreadable. A **Reset to defaults** button clears everything at once.
+  Printing is unaffected too: a print stylesheet resets to the light values, so a dark code
+  background can't come out as white-on-white on paper.
+- Values are validated on both save and render — colors must be hex, sizes are range-checked, and
+  the font field accepts only font-name characters — so a hand-edited settings file can't inject
+  anything into the page's stylesheet.
+
 ## 4.0.37 — 2026-08-19
 
 - **New: each search result snippet shows when that message was written.** Results used to give
