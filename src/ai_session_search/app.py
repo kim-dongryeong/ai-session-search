@@ -49,7 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.0.36"
+__version__ = "4.0.37"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -1815,7 +1815,8 @@ _INDEX = {"by_root": {}, "slow": {}, "lock": threading.Lock()}
 # Safety: entries loaded from disk go through the SAME (mtime_ns, size) revalidation
 # as always — a stale disk entry is simply reparsed. Bump _CACHE_SCHEMA whenever the
 # shape of _index_item() output or search rows changes, so old caches are discarded.
-_CACHE_SCHEMA = 6
+# v7: search rows gained a "ts" field (per-snippet timestamp in search results).
+_CACHE_SCHEMA = 7
 _DISK = {"loaded": set(), "rows_loaded": set(), "dirty": set(), "lock": threading.Lock(),
          "io_idx": threading.Lock(), "io_rows": threading.Lock()}
 _EXCLUSIVE = False   # set by configure(); demo/exclusive data never touches the cache
@@ -2122,37 +2123,41 @@ K_FILE, K_CMD, K_ERROR, K_THINK, K_SYS = 16, 32, 64, 128, 256
 _CODE_CAP = 20000   # cap a single code body's searchable length (bloat guard)
 
 def _rows_from_turns(turns):
-    """Structured search rows for one session's turns: {gi, role, text, kind, label}.
+    """Structured search rows for one session's turns: {gi, role, text, kind, label, ts}.
     Includes CODE rows from extract_code() so the '🧩 Code only' content is searchable."""
     out = []
     for gi, t in enumerate(turns):
         role, tags = t["role"], t["tags"]
         err = K_ERROR if "error" in tags else 0
+        ts = t.get("ts", "")   # fetched once per turn and shared by every row it produces below —
+                                # dict.get returns the SAME string object each call, so pickling the
+                                # row list memoizes it instead of duplicating it per row (bloat guard)
         for k, v in t["segs"]:
             if k == "text":
-                out.append({"gi": gi, "role": role, "text": v, "kind": K_TEXT, "label": ""})
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_TEXT, "label": "", "ts": ts})
             elif k == "channel":
                 pc = parse_channel(v)
-                out.append({"gi": gi, "role": role, "text": pc[1] if pc else v, "kind": K_TEXT, "label": ""})
+                out.append({"gi": gi, "role": role, "text": pc[1] if pc else v, "kind": K_TEXT, "label": "", "ts": ts})
             elif k == "thinking":
-                out.append({"gi": gi, "role": role, "text": v, "kind": K_THINK, "label": ""})
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_THINK, "label": "", "ts": ts})
             elif k == "injected":
-                out.append({"gi": gi, "role": role, "text": v, "kind": K_SYS, "label": ""})
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_SYS, "label": "", "ts": ts})
             elif k == "task_notification":
                 out.append({"gi": gi, "role": role, "text": task_notification_text(v),
-                            "kind": K_SYS, "label": ""})
+                            "kind": K_SYS, "label": "", "ts": ts})
             elif k == "tool_use":
                 name, inp = _toolinput(v)
                 kind = K_TOOL | (K_CMD if name == "Bash" else 0)
                 if isinstance(inp, dict) and (inp.get("file_path") or inp.get("path") or inp.get("notebook_path")):
                     kind |= K_FILE
-                out.append({"gi": gi, "role": role, "text": _tool_use_search_text(v), "kind": kind, "label": name})
+                out.append({"gi": gi, "role": role, "text": _tool_use_search_text(v), "kind": kind, "label": name, "ts": ts})
             elif k == "tool_result":
-                out.append({"gi": gi, "role": role, "text": v, "kind": K_RESULT | err, "label": ""})
+                out.append({"gi": gi, "role": role, "text": v, "kind": K_RESULT | err, "label": "", "ts": ts})
     for art in extract_code(turns):
         body = str(art["body"])
         out.append({"gi": art["gi"], "role": "assistant", "text": body[:_CODE_CAP],
-                    "kind": K_CODE | (K_FILE if art["kind"] == "edit" else 0), "label": art.get("label", "")})
+                    "kind": K_CODE | (K_FILE if art["kind"] == "edit" else 0), "label": art.get("label", ""),
+                    "ts": art.get("ts", "")})   # extract_code already carries the same t["ts"] object
     return [r for r in out if r["text"].strip()]
 
 _WORD_RE = re.compile(r"\w+")
@@ -2544,7 +2549,7 @@ def _snippet(text, terms, before=90, after=210):
 # negative; false positives are fine (the matcher drops them).
 _FTS_SCHEMA = 3              # bump → new DB filename → auto-rebuild (handles payload/format drift)
 _FTS_ENABLED = True          # feature flag: set False to force the classic full scan
-_FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock()}
+_FTS = {"con": None, "capable": None, "disabled": False, "lock": threading.Lock(), "cleaned": False}
 _FTS_GEN      = [0]   # index-generation stamp: bumped only when a rebuild/refresh/reset actually
                       # changed the index. Invalidates the doc-count cache — PERF only; a stale
                       # count never affects recall (it only steers which terms are OR'd).
@@ -2574,10 +2579,36 @@ def fts_capable():
 def _fts_off():
     return _EXCLUSIVE or not _FTS_ENABLED or _FTS["disabled"] or not fts_capable()
 
+def _cleanup_stale_fts_dbs():
+    """Delete cache/search-v*.sqlite3 files that aren't the CURRENT schema's — every
+    _FTS_SCHEMA/_CACHE_SCHEMA bump picks a new filename (see _fts_db_path) and the old one
+    is simply abandoned, so real installs accumulate one orphaned multi-hundred-MB DB per
+    past schema (observed: multiple GB on a long-lived machine). Runs at most once per
+    process (guarded by _FTS['cleaned']) — the cache dir is NOT rescanned on every connection
+    open, only the first time this process opens the FTS DB. Failed removals (permissions,
+    a stray -wal held open elsewhere) are ignored: cleanup is a nice-to-have, never load-bearing."""
+    if _FTS["cleaned"]:
+        return
+    _FTS["cleaned"] = True
+    cache_dir = os.path.join(CONFIG_DIR, "cache")
+    current = os.path.basename(_fts_db_path())
+    keep = {current, current + "-wal", current + "-shm"}
+    try:
+        names = os.listdir(cache_dir)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith("search-v") and name not in keep:
+            try:
+                os.remove(os.path.join(cache_dir, name))
+            except OSError:
+                pass
+
 def _fts_conn():
     """The one writer/reader connection (all access is serialized under _FTS['lock'])."""
     if _FTS["con"] is not None:
         return _FTS["con"]
+    _cleanup_stale_fts_dbs()
     os.makedirs(os.path.join(CONFIG_DIR, "cache"), exist_ok=True)
     con = sqlite3.connect(_fts_db_path(), check_same_thread=False)
     con.execute("PRAGMA journal_mode=WAL")
@@ -6044,7 +6075,7 @@ class H(BaseHTTPRequestHandler):
                 rs = by_gi.get(gi, [])
                 row = next((r for r in rs if any(blob.find(t, r["s"], r["e"]) != -1 for t in snip_terms)), rs[0] if rs else None)
                 if row:
-                    hits.append((gi, row["role"], _snippet(row["text"], snip_terms)))
+                    hits.append((gi, row["role"], _snippet(row["text"], snip_terms), row.get("ts", "")))
 
             # title matches are a strong intent signal (users recall session titles)
             title_low = titles.get(path, "").lower()
@@ -6124,10 +6155,15 @@ class H(BaseHTTPRequestHandler):
             # role chip label — for an assistant turn, name this row's own session provider
             # (search results span many sessions/providers on one page)
             _row_lbl = lambda role: ASSISTANT_LABEL.get(r["provider"], ROLE_LABEL["assistant"]) if role == "assistant" else ROLE_LABEL.get(role, role)
+            def _snip_ts(ts):
+                # blank for providers/turns with no timestamp (e.g. some Codex/Gemini turns) —
+                # no empty span, just nothing, per the no-broken-markup requirement
+                return (f' <span class=hint title="{esc(fmt_ts(ts))}">{esc(fmt_ts_short(ts))}</span>'
+                        if ts else "")
             snips = "".join(
                 f'<div class=snip><a class=snipjump href="{jump(gi)}">'
-                f'<span class=chip>{_row_lbl(role)}</span></a>{hl(s, hlq)}</div>'
-                for gi, role, s in r["hits"])
+                f'<span class=chip>{_row_lbl(role)}</span></a>{_snip_ts(ts)}{hl(s, hlq)}</div>'
+                for gi, role, s, ts in r["hits"])
             cnt = f'({r["n"]})' if r["hits"] else tr('reference match')
             short = proj_cwd.get(r["proj"], r["proj"])
             proj_href = "/?" + urllib.parse.urlencode({"proj": r["proj"], **({"root": rootp} if rootp else {})})

@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.37 — 2026-08-19
+
+- **New: each search result snippet shows when that message was written.** Results used to give
+  you the matching text and the role, but no date — so you couldn't tell a hit from last week
+  from one a year old without opening it. Every snippet now carries a compact `MM/DD HH:MM`
+  stamp (hover it for the full date including the year). Turns that genuinely have no timestamp
+  simply show nothing rather than an empty slot.
+  The timestamp rides the existing cached search rows, so a broad search costs the same as
+  before — an earlier attempt that re-parsed each matched session on render was 20× slower and
+  was thrown away.
+- **Old search index files are now cleaned up.** Each time the cache format changed, the app
+  started a new index file and silently abandoned the previous one, so a long-lived install
+  accumulated one orphaned multi-hundred-megabyte database per past format (several GB in
+  practice). The app now deletes superseded index files the first time it opens the current one.
+  Because this release does change the format, expect one background re-index after updating —
+  it runs in the warm-up thread, so searching stays available while it catches up.
+
 ## 4.0.36 — 2026-08-15
 
 - **Fix: retrying a stuck "Restarting into the new version…" re-downloaded the whole update.**
