@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.1.0"
+__version__ = "4.1.1"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -4486,12 +4486,21 @@ form.ssearch a.ssclear{align-self:center;font-size:12px;color:#b04;text-decorati
 .md-ic{background:#eef1f4;border-radius:4px;padding:.5px 5px;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,.9em)}
 @media(prefers-color-scheme:dark){.md-ic{background:#2a2e35}}
 .md a{color:#1f6feb}
-.md-codewrap{margin:8px 0;border:1px solid #e4e7eb;border-radius:8px;overflow:hidden}
-@media(prefers-color-scheme:dark){.md-codewrap{border-color:#2a2e35}}
+/* The frame around a markdown code block lives on the WRAPPER, not on pre.md-code — the wrapper
+   also holds the language bar, so bordering the <pre> alone would draw a line between the label
+   and its own code. The style settings' code border/radius therefore target this rule; pre.code
+   (the separate "Code only" view, which has no wrapper) carries its own copy of the same vars. */
+.md-codewrap{margin:8px 0;border:var(--code-bw,1px) solid var(--code-bd,#e4e7eb);border-radius:var(--code-rad,8px);overflow:hidden}
+@media(prefers-color-scheme:dark){.md-codewrap{border-color:var(--code-bd,#2a2e35)}}
 .md-clang{font:11px/1 ui-monospace,Menlo,monospace;color:#8a8f98;padding:6px 10px;background:#f0f1f3;border-bottom:1px solid #e4e7eb}
 @media(prefers-color-scheme:dark){.md-clang{background:#23262d;border-color:#2a2e35}}
 pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:var(--code-bg,#fafbfc);font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);white-space:pre;line-height:1.5}
 @media(prefers-color-scheme:dark){pre.md-code{background:var(--code-bg,#15171c)}}
+/* The visible text sits in a <code> INSIDE the <pre>, and every browser's default stylesheet has
+   its own `code{font-family:monospace}`. A rule that matches the element directly beats a value
+   inherited from its parent, so that UA rule — not the <pre>'s font-family above — is what the
+   text actually rendered in, and the chosen code font silently did nothing. Inherit explicitly. */
+pre.md-code code{font-family:inherit;font-size:inherit}
 .md-tablewrap{overflow-x:auto;margin:9px 0}
 table.md-table{border-collapse:collapse;font-size:13px}
 table.md-table th,table.md-table td{border:var(--tbl-bw,1px) solid var(--tbl-bd,#dfe3e8);padding:5px 11px;text-align:left;vertical-align:top}

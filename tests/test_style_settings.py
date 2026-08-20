@@ -14,6 +14,7 @@ auto-discovery of the real ~/.claude / ~/.codex projects dirs), same pattern as
 tests/test_lazy_settings.py."""
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -306,3 +307,34 @@ class SavedFlashHiddenUntilSaved(unittest.TestCase):
     def test_hidden_saved_flash_has_a_display_none_override(self):
         html = app.shell("Test", "<p>body</p>")
         self.assertIn(".colorpair span[hidden]{display:none}", html)
+
+
+class CodeFontAndBorderActuallyApply(unittest.TestCase):
+    """Two settings rendered as CSS but had no visible effect (4.1.1):
+
+    - Code font: markdown code blocks put the text in a <code> INSIDE the <pre>. A UA-stylesheet
+      rule (`code{font-family:monospace}`) matches that child directly, and a directly-matching
+      rule beats an inherited value — so the font set on pre.md-code never reached the text.
+    - Code border width/color/radius: only pre.code (the separate "Code only" view) had a border.
+      The markdown code block's frame is drawn by its .md-codewrap parent, which still hardcoded
+      its border, so the border settings did nothing where code is normally read.
+    """
+
+    def test_inner_code_inherits_the_configured_font(self):
+        html = app.shell("Test", "<p>body</p>")
+        self.assertIn("pre.md-code code{font-family:inherit;font-size:inherit}", html)
+
+    def test_markdown_code_wrapper_uses_the_border_variables(self):
+        html = app.shell("Test", "<p>body</p>")
+        m = re.search(r"\.md-codewrap\{[^}]*\}", html)
+        self.assertIsNotNone(m)
+        rule = m.group(0)
+        self.assertIn("var(--code-bw,", rule)
+        self.assertIn("var(--code-bd,", rule)
+        self.assertIn("var(--code-rad,", rule)
+
+    def test_dark_wrapper_border_also_honors_the_variable(self):
+        # the dark override must not re-hardcode the color, or a chosen border color would be
+        # silently dropped for anyone using dark mode
+        html = app.shell("Test", "<p>body</p>")
+        self.assertIn(".md-codewrap{border-color:var(--code-bd,", html)

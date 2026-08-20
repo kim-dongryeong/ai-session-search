@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.1.1 — 2026-08-20
+
+- **Fix: "Code font", "Code border width", and "Code border color" did nothing.** All three saved
+  correctly and appeared in the page's stylesheet, but had no visible effect on the code blocks
+  in a conversation:
+  - **The font** was set on the `<pre>`, while the text you actually see sits in a `<code>` inside
+    it. Every browser's built-in stylesheet has its own rule for `<code>`, and a rule that matches
+    an element directly beats a value inherited from its parent — so the built-in monospace font
+    won and your choice was ignored. The inner element now inherits the font and size explicitly.
+  - **The border** was only applied to the standalone "🧩 Code only" view. In a normal
+    conversation the frame around a code block is drawn by its wrapper (which also holds the
+    language label), and that wrapper still had its border hardcoded. It now follows the width,
+    color, and corner-radius settings, in both light and dark mode.
+  Every style control was then re-verified in a real browser by setting a distinctive value and
+  reading back the rendered result, rather than only checking that the CSS was emitted.
+
 ## 4.1.0 — 2026-08-19
 
 - **New: a Settings page for how the UI looks** (`⚙️ Settings`, linked from the top of the index).
