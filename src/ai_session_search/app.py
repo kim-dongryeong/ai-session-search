@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.2.0"
+__version__ = "4.2.1"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -93,11 +93,26 @@ if os.name == "nt":
     CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ai-session-search")
 else:
     CONFIG_DIR = os.path.expanduser("~/.config/ai-session-search")
-ROOTS_FILE = os.path.join(CONFIG_DIR, "roots.txt")
-STARS_FILE = os.path.join(CONFIG_DIR, "stars.json")   # starred session-ids, persisted per machine
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")  # user prefs (default per-page, lazy-render), persisted per machine
-UPDATE_FILE = os.path.join(CONFIG_DIR, "update.json")  # cached latest-release check (throttled to 1/day)
-FAVS_FILE = os.path.join(CONFIG_DIR, "favorites.json")  # per-message favorites (★), persisted per machine
+# Per-machine state files. These are FUNCTIONS, not constants, because CONFIG_DIR is
+# reassignable at runtime — tests (and the demo/exclusive mode) point it at a throwaway
+# directory to keep the real user config untouched. Baking the joined path into a module
+# constant at import time defeated that completely: the directory moved but the file path
+# didn't, so a test server happily overwrote the real ~/.config/ai-session-search files.
+# That actually happened and destroyed a user's saved settings — resolve at call time.
+def _roots_file():
+    return os.path.join(CONFIG_DIR, "roots.txt")
+
+def _stars_file():
+    return os.path.join(CONFIG_DIR, "stars.json")        # starred session-ids
+
+def _settings_file():
+    return os.path.join(CONFIG_DIR, "settings.json")     # user prefs (page size, lazy render, style)
+
+def _update_file():
+    return os.path.join(CONFIG_DIR, "update.json")       # cached latest-release check (1/day)
+
+def _favs_file():
+    return os.path.join(CONFIG_DIR, "favorites.json")    # per-message favorites (★)
 REPO_SLUG = "kim-dongryeong/ai-session-search"
 _ROOTLOCK = threading.Lock()
 _STARLOCK = threading.Lock()
@@ -109,7 +124,7 @@ _FAVS = {}   # "sid:gi" -> {"sid","gi","provider","role","title","excerpt","ts",
 
 def load_stars():
     try:
-        with open(STARS_FILE, encoding="utf-8") as fh:
+        with open(_stars_file(), encoding="utf-8") as fh:
             d = json.load(fh)
         return set(d if isinstance(d, list) else d.get("stars", []))
     except (OSError, ValueError):
@@ -118,7 +133,7 @@ def load_stars():
 def save_stars(stars):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(STARS_FILE, "w", encoding="utf-8") as fh:
+        with open(_stars_file(), "w", encoding="utf-8") as fh:
             json.dump({"stars": sorted(stars)}, fh, ensure_ascii=False, indent=0)
     except OSError:
         pass
@@ -141,7 +156,7 @@ def load_favs():
     """{"sid:gi": entry} keyed for O(1) lookup/dedup — see set_fav(). A broken/missing file is
     just an empty favorites set, same as load_stars()/load_settings()."""
     try:
-        with open(FAVS_FILE, encoding="utf-8") as fh:
+        with open(_favs_file(), encoding="utf-8") as fh:
             d = json.load(fh)
         favs = d.get("favs", []) if isinstance(d, dict) else []
         return {fav_key(f["sid"], f["gi"]): f for f in favs
@@ -152,7 +167,7 @@ def load_favs():
 def save_favs(favs):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(FAVS_FILE, "w", encoding="utf-8") as fh:
+        with open(_favs_file(), "w", encoding="utf-8") as fh:
             json.dump({"favs": list(favs.values())}, fh, ensure_ascii=False, indent=0)
     except OSError:
         pass
@@ -176,7 +191,7 @@ def set_fav(entry, on):
 
 def load_settings():
     try:
-        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+        with open(_settings_file(), encoding="utf-8") as fh:
             d = json.load(fh)
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
@@ -185,7 +200,7 @@ def load_settings():
 def save_settings(d):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
+        with open(_settings_file(), "w", encoding="utf-8") as fh:
             json.dump(d, fh, ensure_ascii=False, indent=0)
     except OSError:
         pass
@@ -619,7 +634,7 @@ def check_update(force=False):
     with _UPDLOCK:
         cache = {}
         try:
-            with open(UPDATE_FILE, encoding="utf-8") as fh:
+            with open(_update_file(), encoding="utf-8") as fh:
                 cache = json.load(fh)
         except (OSError, ValueError):
             cache = {}
@@ -637,7 +652,7 @@ def check_update(force=False):
                          "url": data.get("html_url") or info["url"]}
                 try:
                     os.makedirs(CONFIG_DIR, exist_ok=True)
-                    with open(UPDATE_FILE, "w", encoding="utf-8") as fh:
+                    with open(_update_file(), "w", encoding="utf-8") as fh:
                         json.dump(cache, fh)
                 except OSError:
                     pass
@@ -1054,7 +1069,7 @@ def _discover_roots(primary, extra_roots=()):
 def _load_saved():
     out = []
     try:
-        with open(ROOTS_FILE, encoding="utf-8") as fh:
+        with open(_roots_file(), encoding="utf-8") as fh:
             for ln in fh:
                 p = ln.strip()
                 if p and os.path.isdir(p):
@@ -1066,7 +1081,7 @@ def _load_saved():
 def _save_saved(extra):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(ROOTS_FILE, "w", encoding="utf-8") as fh:
+        with open(_roots_file(), "w", encoding="utf-8") as fh:
             fh.write("".join(p + "\n" for p in extra))
     except OSError:
         pass
@@ -5824,7 +5839,7 @@ class H(BaseHTTPRequestHandler):
             # read-only, so (unlike /api/fav below) no cross-site guard is needed, same as /api/stars.json.
             favs_list = sorted(_FAVS.values(), key=lambda f: f.get("added", ""), reverse=True)
             keys = [fav_key(f["sid"], f["gi"]) for f in favs_list]
-            return self._send_json({"favs": favs_list, "file": FAVS_FILE, "keys": keys})
+            return self._send_json({"favs": favs_list, "file": _favs_file(), "keys": keys})
         if u.path == "/api/fav":
             # toggle one message's favorite. Turning ON needs `p` (the session path) — the entry's
             # role/excerpt/title/ts are read fresh from the transcript, not trusted from the client.
@@ -7076,7 +7091,7 @@ class H(BaseHTTPRequestHandler):
                     f'title="{esc(tr("Remove from favorites"))}">★</button></div></div>')
             cards.append(f'<div class=card>{badge} <b>{title}</b>{"".join(rows)}</div>')
         body = "".join(cards) or f'<p class=meta>{tr("No favorites yet — click ☆ next to any message to add one.")}</p>'
-        backup = (f'<p class=meta>{tr("Favorites are saved to")} <code class=sid>{esc(FAVS_FILE)}</code> — '
+        backup = (f'<p class=meta>{tr("Favorites are saved to")} <code class=sid>{esc(_favs_file())}</code> — '
                   f'{tr("to move them to a new computer, copy just this one file to the same location there.")}</p>')
         return shell(f'⭐ {tr("Favorites")}', f'<h3 style="margin:4px 0 8px">⭐ {tr("Favorites")}</h3>' + body + backup)
 

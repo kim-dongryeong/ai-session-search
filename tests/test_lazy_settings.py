@@ -142,7 +142,7 @@ class SettingsEndpoint(unittest.TestCase):
         self.assertEqual(d["settings"]["default_lim"], 5000)
         self.assertEqual(d["settings"]["lazy_render"], False)
         # persisted to disk
-        with open(app.SETTINGS_FILE, encoding="utf-8") as fh:
+        with open(app._settings_file(), encoding="utf-8") as fh:
             on_disk = json.load(fh)
         self.assertEqual(on_disk["default_lim"], 5000)
         self.assertEqual(on_disk["lazy_render"], False)

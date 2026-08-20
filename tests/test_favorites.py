@@ -59,13 +59,10 @@ def build_fixture_root():
 class FavoritesHttp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # NEVER touch the user's real CONFIG_DIR — redirect it AND the FAVS_FILE constant
-        # derived from it (module-level constants captured at import time don't follow a
-        # later CONFIG_DIR reassignment, same caveat other tests note for SETTINGS_FILE).
+        # NEVER touch the user's real CONFIG_DIR. Redirecting it is now enough on its own:
+        # the state-file paths are resolved at call time (_favs_file() etc.), so they follow.
         cls._orig_cfg = app.CONFIG_DIR
-        cls._orig_favs_file = app.FAVS_FILE
         app.CONFIG_DIR = tempfile.mkdtemp(prefix="aiss-fav-cfg-")
-        app.FAVS_FILE = os.path.join(app.CONFIG_DIR, "favorites.json")
 
         cls.root, cls.claude_path, cls.codex_path, cls.claude_sid, cls.codex_sid = build_fixture_root()
         app.configure(cls.root)
@@ -83,13 +80,12 @@ class FavoritesHttp(unittest.TestCase):
         shutil.rmtree(app.CONFIG_DIR, ignore_errors=True)
         shutil.rmtree(cls.root, ignore_errors=True)
         app.CONFIG_DIR = cls._orig_cfg
-        app.FAVS_FILE = cls._orig_favs_file
 
     def setUp(self):
         # each test starts from an empty favorites set, in memory AND on disk
         app._FAVS = {}
         try:
-            os.remove(app.FAVS_FILE)
+            os.remove(app._favs_file())
         except OSError:
             pass
 
@@ -103,13 +99,13 @@ class FavoritesHttp(unittest.TestCase):
 
     # ---- 1. toggle API ----
     def test_toggle_on_creates_file_and_entry(self):
-        self.assertFalse(os.path.exists(app.FAVS_FILE))
+        self.assertFalse(os.path.exists(app._favs_file()))
         status, d = self.get_json("/api/fav?p=" + urllib.parse.quote(self.claude_path) + "&gi=0&on=1")
         self.assertEqual(status, 200)
         self.assertTrue(d["ok"])
         self.assertTrue(d["on"])
-        self.assertTrue(os.path.exists(app.FAVS_FILE))
-        with open(app.FAVS_FILE, encoding="utf-8") as fh:
+        self.assertTrue(os.path.exists(app._favs_file()))
+        with open(app._favs_file(), encoding="utf-8") as fh:
             saved = json.load(fh)
         self.assertEqual(len(saved["favs"]), 1)
         entry = saved["favs"][0]
@@ -124,7 +120,7 @@ class FavoritesHttp(unittest.TestCase):
         status, d = self.get_json(f"/api/fav?sid={sid}&gi=0&on=0")
         self.assertEqual(status, 200)
         self.assertFalse(d["on"])
-        with open(app.FAVS_FILE, encoding="utf-8") as fh:
+        with open(app._favs_file(), encoding="utf-8") as fh:
             saved = json.load(fh)
         self.assertEqual(saved["favs"], [])
 
@@ -134,7 +130,7 @@ class FavoritesHttp(unittest.TestCase):
         # forge a second session at the SAME sid:gi with different text is impractical here, so
         # instead just confirm a second identical toggle doesn't create a second entry
         self.get("/api/fav?p=" + urllib.parse.quote(self.claude_path) + "&gi=1&on=1")
-        with open(app.FAVS_FILE, encoding="utf-8") as fh:
+        with open(app._favs_file(), encoding="utf-8") as fh:
             saved = json.load(fh)
         self.assertEqual(len(saved["favs"]), 1)
 

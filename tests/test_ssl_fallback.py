@@ -163,14 +163,11 @@ class UrlopenSslFallback(unittest.TestCase):
 class UpdateCheckErrorSurfacing(unittest.TestCase):
     def setUp(self):
         self._orig_cfg = app.CONFIG_DIR
-        self._orig_update_file = app.UPDATE_FILE
         self.tmpcfg = tempfile.mkdtemp()
-        app.CONFIG_DIR = self.tmpcfg
-        app.UPDATE_FILE = os.path.join(self.tmpcfg, "update.json")
+        app.CONFIG_DIR = self.tmpcfg      # _update_file() follows CONFIG_DIR on its own now
 
     def tearDown(self):
         app.CONFIG_DIR = self._orig_cfg
-        app.UPDATE_FILE = self._orig_update_file
         shutil.rmtree(self.tmpcfg, ignore_errors=True)
 
     def test_check_error_surfaced_on_failure_and_not_cached(self):
@@ -179,14 +176,14 @@ class UpdateCheckErrorSurfacing(unittest.TestCase):
             info = app.check_update(force=True)
         self.assertIn("check_error", info)
         self.assertIn("SSLCertVerificationError", info["check_error"])
-        self.assertFalse(os.path.exists(app.UPDATE_FILE))
+        self.assertFalse(os.path.exists(app._update_file()))
 
     def test_check_error_surfaced_on_url_error(self):
         with mock.patch.object(app, "_urlopen",
                                 side_effect=urllib.error.URLError("no network")):
             info = app.check_update(force=True)
         self.assertIn("check_error", info)
-        self.assertFalse(os.path.exists(app.UPDATE_FILE))
+        self.assertFalse(os.path.exists(app._update_file()))
 
     def test_success_path_still_writes_cache_and_no_check_error(self):
         fake_resp = mock.MagicMock()
@@ -198,8 +195,8 @@ class UpdateCheckErrorSurfacing(unittest.TestCase):
             info = app.check_update(force=True)
         self.assertNotIn("check_error", info)
         self.assertEqual(info["latest"], "9.9.9")
-        self.assertTrue(os.path.exists(app.UPDATE_FILE))
-        with open(app.UPDATE_FILE, encoding="utf-8") as fh:
+        self.assertTrue(os.path.exists(app._update_file()))
+        with open(app._update_file(), encoding="utf-8") as fh:
             cache = json.load(fh)
         self.assertEqual(cache["latest"], "9.9.9")
 

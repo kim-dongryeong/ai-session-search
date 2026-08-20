@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.2.1 — 2026-08-21
+
+- **Fix: the app could write its state files into the real config directory even when pointed
+  somewhere else.** The paths for settings, favorites, starred sessions, saved folders, and the
+  update check were assembled once when the program started. Anything that later redirected the
+  config directory — the test suite, demo mode — moved the directory but not those paths, so
+  writes still landed in the real `~/.config/ai-session-search`. Every path is now resolved at
+  the moment it is used, and a test asserts that redirecting the config directory redirects all
+  of them (and that the old import-time constants stay gone).
+
+  **This bug destroyed saved settings.** Verifying the style settings in a browser ran a throwaway
+  server that was supposed to use a temporary config directory; because of this defect it wrote
+  over the real settings file instead, clearing the saved UI style. If your Settings → style
+  choices are back to defaults after updating, that is why — they cannot be recovered and will
+  need to be chosen again. Favorites, starred sessions, and your folder list were not affected.
+
 ## 4.2.0 — 2026-08-20
 
 - **Inline code now has its own style settings, separate from code blocks.** Previously the two

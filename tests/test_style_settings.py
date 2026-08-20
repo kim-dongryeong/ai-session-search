@@ -125,7 +125,7 @@ class InjectionDefense(StyleSettingsBase):
         self.assertEqual(status, 200)
         self.assertEqual(d["style"]["code_font"], app.STYLE_DEFAULTS["code_font"])
         # and it must not have been written to disk verbatim either
-        with open(app.SETTINGS_FILE, encoding="utf-8") as fh:
+        with open(app._settings_file(), encoding="utf-8") as fh:
             on_disk = json.load(fh)
         self.assertEqual(on_disk["style"]["code_font"], app.STYLE_DEFAULTS["code_font"])
 
@@ -241,7 +241,7 @@ class ResetRestoresDefaults(StyleSettingsBase):
         self.assertEqual(status, 200)
         self.assertEqual(d["style"]["code_size"], app.STYLE_DEFAULTS["code_size"])
         self.assertFalse(app._SETTINGS.get("style"))
-        with open(app.SETTINGS_FILE, encoding="utf-8") as fh:
+        with open(app._settings_file(), encoding="utf-8") as fh:
             on_disk = json.load(fh)
         self.assertFalse(on_disk.get("style"))
         # a page rendered after reset is back to carrying no override at all
