@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.1.1"
+__version__ = "4.2.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -250,6 +250,25 @@ STYLE_DEFAULTS = {
     "code_border":   {"light": "#e6e9ee", "dark": "#2a2e35"},
     "code_border_w": 1,
     "code_radius":   6,
+    # Inline code (`.md-ic`, the `` `code` `` spans inside a sentence) used to share code_size/
+    # code_bg/code_radius with code BLOCKS (pre.md-code) — bumping the block font size for a big
+    # code sample also bumped every inline mention mid-sentence, blowing out line-height. These
+    # four keys give inline code its own size/color/radius; code_font is still shared on purpose
+    # (a doc rarely wants a different monospace face for inline vs. block). ic_size stays an EM
+    # (not px, unlike code_size) because inline code sits inside running prose and must scale
+    # with the surrounding text, not the page's fixed code-block size.
+    #   Compat: ic_size's default (0.9) is exactly the em value .md-ic was hardcoded to before
+    #   this split, so a settings.json that already has a customized code_size (from before this
+    #   feature existed) does NOT change how inline code renders — no migration needed, the new
+    #   key's default alone preserves the old shared behavior for anyone who hasn't touched it.
+    "ic_size":   0.9,
+    "ic_bg":     {"light": "#eef1f4", "dark": "#2a2e35"},
+    # .md-ic never set its own text color before this feature (it inherited body{color}) — these
+    # defaults are exactly body's light/dark color values (see body{} / its @media(dark) override
+    # a few hundred lines below), so an untouched page's inline code text stays byte-for-byte the
+    # same color it always was.
+    "ic_fg":     {"light": "#1a1a1a", "dark": "#e7e9ec"},
+    "ic_radius": 4,
     "table_border":  {"light": "#dfe3e8", "dark": "#2a2e35"},
     "table_border_w": 1,
     # dark value matches table.md-table thead th's existing @media(dark) override exactly —
@@ -284,6 +303,12 @@ STYLE_PRESETS = {
         "table_border": {"light": "#d0d7de", "dark": "#30363d"},
         "table_head_bg": {"light": "#f6f8fa", "dark": "#161b22"},
         "table_zebra": True,
+        # GitHub's own markdown rendering tints inline `code` with a soft neutral gray (not the
+        # same tone as its fenced-block background) and keeps the surrounding prose's text color
+        # rather than a special accent — so ic_fg here is GitHub's own body-text pair (Primer's
+        # fg.default), not code_bg's color repeated.
+        "ic_bg": {"light": "#eff1f3", "dark": "#292e36"},
+        "ic_fg": {"light": "#24292f", "dark": "#c9d1d9"},
         "hl": [
             {"light": "#fff8c5", "dark": "#7d6a1e"},
             {"light": "#d2f8d2", "dark": "#1f6d33"},
@@ -299,6 +324,11 @@ STYLE_PRESETS = {
         "table_border": {"light": "#d9d9e3", "dark": "#44475a"},
         "table_head_bg": {"light": "#eae9f2", "dark": "#343746"},
         "table_zebra": True,
+        # dark ic_fg is Dracula's actual foreground (#f8f8f2); dark ic_bg is Dracula's
+        # "current line" tone (#44475a family) darkened slightly so inline code still reads as a
+        # distinct chip against the page background rather than blending into it.
+        "ic_bg": {"light": "#efeef7", "dark": "#2b2d3a"},
+        "ic_fg": {"light": "#44475a", "dark": "#f8f8f2"},
         "hl": [
             {"light": "#f1fa8c", "dark": "#8c8f3f"},
             {"light": "#8ffab0", "dark": "#2f8f52"},
@@ -314,6 +344,10 @@ STYLE_PRESETS = {
         "table_border": {"light": "#d3cbb7", "dark": "#0f4a58"},
         "table_head_bg": {"light": "#e4ddc4", "dark": "#0a4552"},
         "table_zebra": True,
+        # ic_fg is Solarized's own body-text pair (base00 for light, base0 for dark — the same
+        # tones Solarized's palette designates for prose, not a syntax-highlight accent).
+        "ic_bg": {"light": "#f5efdc", "dark": "#0a3b47"},
+        "ic_fg": {"light": "#657b83", "dark": "#839496"},
         "hl": [
             {"light": "#f5e6a8", "dark": "#7a6520"},
             {"light": "#dde8a0", "dark": "#556b1f"},
@@ -387,12 +421,14 @@ def resolve_style(raw):
          "code_size": _valid_num(raw.get("code_size"), 8, 30, STYLE_DEFAULTS["code_size"]),
          "code_border_w": _valid_num(raw.get("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"]),
          "code_radius": _valid_num(raw.get("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"]),
+         "ic_size": _valid_num(raw.get("ic_size"), 0.6, 1.4, STYLE_DEFAULTS["ic_size"]),
+         "ic_radius": _valid_num(raw.get("ic_radius"), 0, 12, STYLE_DEFAULTS["ic_radius"]),
          "table_border_w": _valid_num(raw.get("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"]),
          "table_zebra": _valid_bool(raw.get("table_zebra"), STYLE_DEFAULTS["table_zebra"]),
          "base_size": _valid_num(raw.get("base_size"), 11, 24, STYLE_DEFAULTS["base_size"]),
          "line_height": _valid_num(raw.get("line_height"), 1.2, 2.4, STYLE_DEFAULTS["line_height"]),
          "content_width": _valid_num(raw.get("content_width"), 600, 2000, STYLE_DEFAULTS["content_width"], is_int=True)}
-    for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+    for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
         v = raw.get(key) if isinstance(raw.get(key), dict) else {}
         d[key] = _valid_pair(v.get("light"), v.get("dark"), STYLE_DEFAULTS[key])
     hl_raw = raw.get("hl") if isinstance(raw.get("hl"), list) else []
@@ -405,7 +441,8 @@ def resolve_style(raw):
 
 # name of the CSS custom property each *_light/_dark-shaped style key maps to
 _THEMED_CSS_VAR = {"code_bg": "--code-bg", "code_border": "--code-bd",
-                    "table_border": "--tbl-bd", "table_head_bg": "--tbl-head-bg"}
+                    "table_border": "--tbl-bd", "table_head_bg": "--tbl-head-bg",
+                    "ic_bg": "--ic-bg", "ic_fg": "--ic-fg"}
 # the .md-table zebra-stripe background is fixed (not independently colorable — table_zebra is
 # only on/off), matching the color the existing (pre-feature) CSS hardcodes for each theme.
 _ZEBRA_BG = {"light": "#fafbfc", "dark": "#191c22"}
@@ -434,6 +471,10 @@ def style_css_text(raw):
         const.append(f'--code-bw:{_css_num(_valid_num(raw.get("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"]))}px')
     if "code_radius" in raw:
         const.append(f'--code-rad:{_css_num(_valid_num(raw.get("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"]))}px')
+    if "ic_size" in raw:
+        const.append(f'--ic-size:{_css_num(_valid_num(raw.get("ic_size"), 0.6, 1.4, STYLE_DEFAULTS["ic_size"]))}em')
+    if "ic_radius" in raw:
+        const.append(f'--ic-rad:{_css_num(_valid_num(raw.get("ic_radius"), 0, 12, STYLE_DEFAULTS["ic_radius"]))}px')
     if "table_border_w" in raw:
         const.append(f'--tbl-bw:{_css_num(_valid_num(raw.get("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"]))}px')
     if "base_size" in raw:
@@ -484,11 +525,13 @@ def style_css_text_full(resolved):
     for a token the user has never customized — the whole point of the preview."""
     const = (f'--code-font:{resolved["code_font"]};--code-size:{_css_num(resolved["code_size"])}px;'
              f'--code-bw:{_css_num(resolved["code_border_w"])}px;--code-rad:{_css_num(resolved["code_radius"])}px;'
+             f'--ic-size:{_css_num(resolved["ic_size"])}em;--ic-rad:{_css_num(resolved["ic_radius"])}px;'
              f'--tbl-bw:{_css_num(resolved["table_border_w"])}px;--body-size:{_css_num(resolved["base_size"])}px;'
              f'--body-lh:{_css_num(resolved["line_height"])};--content-w:{_css_num(resolved["content_width"])}px')
     def themed(mode):
         zebra = _ZEBRA_BG[mode] if resolved["table_zebra"] else "transparent"
         parts = [f'--code-bg:{resolved["code_bg"][mode]}', f'--code-bd:{resolved["code_border"][mode]}',
+                 f'--ic-bg:{resolved["ic_bg"][mode]}', f'--ic-fg:{resolved["ic_fg"][mode]}',
                  f'--tbl-bd:{resolved["table_border"][mode]}', f'--tbl-head-bg:{resolved["table_head_bg"][mode]}',
                  f'--tbl-zebra:{zebra}']
         parts += [f'--hl{i}:{resolved["hl"][i][mode]}' for i in range(6)]
@@ -4483,8 +4526,14 @@ form.ssearch a.ssclear{align-self:center;font-size:12px;color:#b04;text-decorati
 .md-bq{margin:8px 0;padding:2px 12px;border-left:3px solid #cbd2da;color:#555}
 @media(prefers-color-scheme:dark){.md-bq{border-color:#3a3f47;color:#9aa0a8}}
 .md-hr{border:0;border-top:1px solid #e0e3e7;margin:12px 0}
-.md-ic{background:#eef1f4;border-radius:4px;padding:.5px 5px;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,.9em)}
-@media(prefers-color-scheme:dark){.md-ic{background:#2a2e35}}
+/* Inline code has its own --ic-* size/color/radius variables, separate from the code-BLOCK
+   --code-* ones (see STYLE_DEFAULTS' ic_* comment) — only --code-font is still shared, since a
+   page rarely wants a different monospace face for inline vs. block. Like pre.md-code's dark
+   override below, the @media(dark) rule here references var(--ic-bg, ...) rather than a bare
+   hardcoded color, so a user-customized dark value isn't clobbered by this later, same-specificity
+   rule (see 4.1.0's fix for the identical pre.md-code issue). */
+.md-ic{background:var(--ic-bg,#eef1f4);color:var(--ic-fg,inherit);border-radius:var(--ic-rad,4px);padding:.5px 5px;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--ic-size,.9em)}
+@media(prefers-color-scheme:dark){.md-ic{background:var(--ic-bg,#2a2e35)}}
 .md a{color:#1f6feb}
 /* The frame around a markdown code block lives on the WRAPPER, not on pre.md-code — the wrapper
    also holds the language bar, so bordering the <pre> alone would draw a line between the label
@@ -5859,6 +5908,10 @@ class H(BaseHTTPRequestHandler):
                 cur["code_border_w"] = _valid_num(g("code_border_w"), 0, 4, STYLE_DEFAULTS["code_border_w"])
             if "code_radius" in qs:
                 cur["code_radius"] = _valid_num(g("code_radius"), 0, 20, STYLE_DEFAULTS["code_radius"])
+            if "ic_size" in qs:
+                cur["ic_size"] = _valid_num(g("ic_size"), 0.6, 1.4, STYLE_DEFAULTS["ic_size"])
+            if "ic_radius" in qs:
+                cur["ic_radius"] = _valid_num(g("ic_radius"), 0, 12, STYLE_DEFAULTS["ic_radius"])
             if "table_border_w" in qs:
                 cur["table_border_w"] = _valid_num(g("table_border_w"), 0, 4, STYLE_DEFAULTS["table_border_w"])
             if "table_zebra" in qs:
@@ -5872,7 +5925,7 @@ class H(BaseHTTPRequestHandler):
             # paired light+dark color controls — the settings-page form always submits both
             # halves of a pair together, so a partial update just keeps whichever half of the
             # OLD stored (or default) pair wasn't resubmitted, rather than silently discarding it.
-            for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
                 lk, dk = key + "_light", key + "_dark"
                 if lk in qs or dk in qs:
                     old = cur.get(key) if isinstance(cur.get(key), dict) else {}
@@ -7042,7 +7095,7 @@ class H(BaseHTTPRequestHandler):
 
         def flat(d, zebra_default=True):
             out = {}
-            for key in ("code_bg", "code_border", "table_border", "table_head_bg"):
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
                 out[key + "_light"] = d[key]["light"]
                 out[key + "_dark"] = d[key]["dark"]
             out["table_zebra"] = "1" if d.get("table_zebra", zebra_default) else "0"
@@ -7085,11 +7138,18 @@ class H(BaseHTTPRequestHandler):
             + f'<div class=stylefield><label>{esc(tr("Code font"))}</label>'
               f'<input type=text id=f_code_font value="{esc(resolved["code_font"])}">'
               f'<span id=ok_code_font class=styleok hidden>✓ {tr("saved")}</span></div>'
-            + num_field("code_size", tr("Code size (px)"), resolved["code_size"], 8, 30, 0.5)
-            + pair_field("code_bg", tr("Code background"), resolved["code_bg"])
-            + pair_field("code_border", tr("Code border color"), resolved["code_border"])
-            + num_field("code_border_w", tr("Code border width (px)"), resolved["code_border_w"], 0, 4)
-            + num_field("code_radius", tr("Code corner radius (px)"), resolved["code_radius"], 0, 20)
+            # code_font above is shared by both inline code and code blocks (see STYLE_DEFAULTS'
+            # ic_* comment on why); everything below it is labeled "code block" to make clear it
+            # no longer touches inline `code` spans — those get their own group further down.
+            + num_field("code_size", tr("Code block size (px)"), resolved["code_size"], 8, 30, 0.5)
+            + pair_field("code_bg", tr("Code block background"), resolved["code_bg"])
+            + pair_field("code_border", tr("Code block border color"), resolved["code_border"])
+            + num_field("code_border_w", tr("Code block border width (px)"), resolved["code_border_w"], 0, 4)
+            + num_field("code_radius", tr("Code block corner radius (px)"), resolved["code_radius"], 0, 20)
+            + num_field("ic_size", tr("Inline code size (em)"), resolved["ic_size"], 0.6, 1.4, 0.05)
+            + pair_field("ic_bg", tr("Inline code background"), resolved["ic_bg"])
+            + pair_field("ic_fg", tr("Inline code color"), resolved["ic_fg"])
+            + num_field("ic_radius", tr("Inline code corner radius (px)"), resolved["ic_radius"], 0, 12)
             + pair_field("table_border", tr("Table border color"), resolved["table_border"])
             + num_field("table_border_w", tr("Table border width (px)"), resolved["table_border_w"], 0, 4)
             + pair_field("table_head_bg", tr("Table header background"), resolved["table_head_bg"])
@@ -7111,6 +7171,7 @@ class H(BaseHTTPRequestHandler):
             f'<button type=button id=pvdark onclick="AISSsetPreviewTheme(\'dark\')">🌙 {tr("Dark")}</button>'
             '</div>'
             '<div class=stylepreview id=stylepreview>'
+            f'<p>{tr("Run")} <code class="md-ic">npm install</code> {tr("first.")}</p>'
             '<div class="md-codewrap"><div class="md-clang">python</div>'
             '<pre class="md-code"><code>' + esc('def greet(name):\n    return f"Hello, {name}!"') + '</code></pre></div>'
             '<div class="md-tablewrap"><table class="md-table"><thead><tr>'
@@ -7156,12 +7217,12 @@ class H(BaseHTTPRequestHandler):
             'document.getElementById("pvdark").classList.toggle("on",mode==="dark");};'
             'window.AISSresetStyle=function(){if(!confirm(' + json.dumps(tr("Reset all style settings to their defaults? This cannot be undone.")) + '))return;'
             'api({reset:"1"}).then(function(){location.reload();});};'
-            '["code_font","code_size","code_border_w","code_radius","table_border_w","base_size","line_height","content_width"]'
+            '["code_font","code_size","code_border_w","code_radius","ic_size","ic_radius","table_border_w","base_size","line_height","content_width"]'
             '.forEach(function(key){var el=document.getElementById("f_"+key);if(!el)return;'
             'el.addEventListener("change",function(){var p={};p[key]=el.value;save(p,key);});});'
             'var zEl=document.getElementById("f_table_zebra");if(zEl)zEl.addEventListener("change",function(){'
             'save({table_zebra:zEl.checked?"1":"0"},"table_zebra");});'
-            '["code_bg","code_border","table_border","table_head_bg"].forEach(function(key){'
+            '["code_bg","code_border","table_border","table_head_bg","ic_bg","ic_fg"].forEach(function(key){'
             '["light","dark"].forEach(function(mode){var el=document.getElementById("f_"+key+"_"+mode);if(!el)return;'
             'el.addEventListener("input",function(){var p={};'
             'p[key+"_light"]=document.getElementById("f_"+key+"_light").value;'

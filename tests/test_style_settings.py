@@ -338,3 +338,82 @@ class CodeFontAndBorderActuallyApply(unittest.TestCase):
         # silently dropped for anyone using dark mode
         html = app.shell("Test", "<p>body</p>")
         self.assertIn(".md-codewrap{border-color:var(--code-bd,", html)
+
+
+class InlineCodeStyleIsSeparateFromCodeBlockStyle(StyleSettingsBase):
+    """Inline code (`.md-ic`) used to share code_size/code_bg/code_radius with code BLOCKS
+    (pre.md-code) — bumping the block font size for a big code sample also bumped every inline
+    `code` mention mid-sentence, blowing out line-height, and inline code's background/radius
+    could not be customized at all (hardcoded). This split gives inline code its own ic_size/
+    ic_bg/ic_fg/ic_radius keys, sharing only code_font. Covers items #1-#6 of the task write-up."""
+
+    def test_default_md_ic_rule_has_the_original_values_as_fallbacks(self):
+        # #1 — untouched, .md-ic's var() fallbacks must equal exactly what was hardcoded before
+        # this feature (background #eef1f4, radius 4px, size .9em) — same guarantee style_css_text
+        # gives every other target rule.
+        html = app.shell("Test", "<p>body</p>")
+        m = re.search(r"\.md-ic\{[^}]*\}", html)
+        self.assertIsNotNone(m)
+        rule = m.group(0)
+        self.assertIn("var(--ic-bg,#eef1f4)", rule)
+        self.assertIn("var(--ic-rad,4px)", rule)
+        self.assertIn("var(--ic-size,.9em)", rule)
+        self.assertIn("var(--code-font,", rule)  # font is still shared with code blocks
+
+    def test_saved_ic_settings_show_up_as_their_own_css_variables(self):
+        # #2 — ic_size/ic_bg/ic_fg/ic_radius, once saved, render as --ic-* custom properties.
+        status, d = self.get_json(
+            "/api/style?ic_size=1.3&ic_bg_light=%23ff0000&ic_fg_light=%230000ff&ic_radius=0")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["ic_size"], 1.3)
+        self.assertEqual(d["style"]["ic_bg"]["light"], "#ff0000")
+        self.assertEqual(d["style"]["ic_fg"]["light"], "#0000ff")
+        self.assertEqual(d["style"]["ic_radius"], 0)
+        status, body = self.get("/favs")
+        self.assertIn("--ic-size:1.3em", body)
+        self.assertIn("--ic-bg:#ff0000", body)
+        self.assertIn("--ic-fg:#0000ff", body)
+        self.assertIn("--ic-rad:0px", body)
+
+    def test_code_block_size_change_does_not_touch_inline_code_variable(self):
+        # #3 — the actual point of this task: changing code_size (code BLOCK size) must never
+        # emit or alter --ic-size. This is the regression the whole split guards against.
+        status, d = self.get_json("/api/style?code_size=20")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["code_size"], 20)
+        status, body = self.get("/favs")
+        self.assertIn("--code-size:20px", body)
+        self.assertNotIn("--ic-size:", body)
+
+    def test_ic_bg_and_ic_size_injection_defense(self):
+        # #4 — a bad ic_bg_light color or an out-of-range/garbage ic_size must fall back to the
+        # default, both at save time and (independently) at render time.
+        import urllib.parse as up
+        payload = up.quote("red;background:url(x)")
+        status, d = self.get_json(f"/api/style?ic_bg_light={payload}")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["ic_bg"]["light"], app.STYLE_DEFAULTS["ic_bg"]["light"])
+        for bad in ("2.0", "0.1", "abc"):
+            status, d = self.get_json(f"/api/style?ic_size={bad}")
+            self.assertEqual(status, 200)
+            self.assertEqual(d["style"]["ic_size"], app.STYLE_DEFAULTS["ic_size"])
+        app._SETTINGS = {"style": {"ic_bg": {"light": "javascript:alert(1)", "dark": "#2a2e35"},
+                                    "ic_size": "not-a-number"}}
+        resolved = app.resolve_style(app._SETTINGS["style"])
+        self.assertEqual(resolved["ic_bg"]["light"], app.STYLE_DEFAULTS["ic_bg"]["light"])
+        self.assertEqual(resolved["ic_size"], app.STYLE_DEFAULTS["ic_size"])
+
+    def test_dark_media_override_uses_the_css_variable_not_a_hardcoded_color(self):
+        # #5 — same reasoning as pre.md-code's 4.1.1 fix: a bare hardcoded dark background would
+        # always win over a user-customized --ic-bg (same specificity, declared later).
+        html = app.shell("Test", "<p>body</p>")
+        m = re.search(r'@media\(prefers-color-scheme:dark\)\{\.md-ic\{[^}]*\}\}', html)
+        self.assertIsNotNone(m)
+        self.assertIn("var(--ic-bg,", m.group(0))
+
+    def test_preview_renders_an_inline_code_element(self):
+        # #6 — the /settings preview must show inline code, not just code blocks/tables/
+        # highlights, so the ic_* controls can actually be judged against something.
+        status, body = self.get("/settings")
+        self.assertEqual(status, 200)
+        self.assertIn('class="md-ic"', body)

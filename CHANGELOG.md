@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.2.0 — 2026-08-20
+
+- **Inline code now has its own style settings, separate from code blocks.** Previously the two
+  shared one set of controls, so enlarging code blocks also enlarged the `` `code` `` spans inside
+  sentences — pushing the line height around — and inline code's background and corners couldn't
+  be changed at all. Settings → Advanced now has an **Inline code** group: size, background,
+  text color, and corner radius, each independent of the code-block controls. The existing
+  controls are relabelled "Code block …" so it's clear which is which.
+- **Inline size is set as a multiple of your body text, not a fixed pixel size**, so it stays
+  proportionate when you change the body font size.
+- **The font is still shared between the two** — a document rarely wants a different monospace
+  face inline than in a block. Ask if you'd like these split too.
+- **The preview now includes a sentence with inline code**, so you can see that setting while
+  choosing it, and the theme presets fill in inline colors along with everything else.
+- **Nothing changes until you choose something**: the new defaults are exactly what inline code
+  looked like before, so an existing install renders identically.
+
 ## 4.1.1 — 2026-08-20
 
 - **Fix: "Code font", "Code border width", and "Code border color" did nothing.** All three saved
