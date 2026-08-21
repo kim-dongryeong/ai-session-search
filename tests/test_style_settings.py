@@ -417,3 +417,113 @@ class InlineCodeStyleIsSeparateFromCodeBlockStyle(StyleSettingsBase):
         status, body = self.get("/settings")
         self.assertEqual(status, 200)
         self.assertIn('class="md-ic"', body)
+
+
+class TextAndCodeFgColors(StyleSettingsBase):
+    """text_fg (body text color) and code_fg (code-block text color) — two new style keys added
+    alongside a deliberate softening of the default body color. Before this change, body{color}
+    was hardcoded #1a1a1a/#e7e9ec, a contrast ratio against the page background of 16.1:1
+    (light) / 16.6:1 (dark) — more than double the 7:1 WCAG AAA requirement. The new defaults,
+    #2e3338/#d6d9de, still clear AAA by a wide margin (11.8:1 / 12.9:1) while reading less
+    harshly. code_fg is new territory for the light mode specifically: pre.code/pre.md-code
+    never had their own light-mode text color before (they inherited body{color}), so this is
+    the first place that inheritance is made explicit and independently customizable."""
+
+    def test_default_fallbacks_use_the_new_softened_colors(self):
+        # #1 — untouched, body's var() fallback must be the NEW default (#2e3338/#d6d9de), not
+        # the old hardcoded #1a1a1a/#e7e9ec this feature deliberately moved away from.
+        html = app.shell("Test", "<p>body</p>")
+        self.assertIn("color:var(--text-fg,#2e3338)", html)
+        self.assertIn("color:var(--text-fg,#d6d9de)", html)
+        # code blocks share the same light-mode default as body text (they used to inherit it),
+        # and keep the dark mode's pre-existing hardcoded value (#dfe3e8) as their fallback.
+        self.assertIn("color:var(--code-fg,#2e3338)", html)
+        self.assertIn("color:var(--code-fg,#dfe3e8)", html)
+
+    def test_saved_text_fg_shows_up_in_rendered_css(self):
+        # #2 — a saved value actually reaches the site-wide CSS.
+        status, d = self.get_json("/api/style?text_fg_light=%23ff0000&text_fg_dark=%2300ff00")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["text_fg"]["light"], "#ff0000")
+        self.assertEqual(d["style"]["text_fg"]["dark"], "#00ff00")
+        status, body = self.get("/favs")
+        self.assertEqual(status, 200)
+        self.assertIn("--text-fg:#ff0000", body)
+        self.assertIn("--text-fg:#00ff00", body)
+
+    def test_saved_code_fg_shows_up_in_rendered_css(self):
+        status, d = self.get_json("/api/style?code_fg_light=%230000ff")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["code_fg"]["light"], "#0000ff")
+        status, body = self.get("/favs")
+        self.assertIn("--code-fg:#0000ff", body)
+
+    def test_both_code_rules_use_the_code_fg_variable(self):
+        # #3 — pre.code (the "Code only" view) and pre.md-code (fenced blocks in the
+        # conversation) must BOTH read from --code-fg, not just one of them.
+        html = app.shell("Test", "<p>body</p>")
+        m_block = re.search(r"pre\.md-code\{[^}]*\}", html)
+        m_only = re.search(r"pre\.code\{[^}]*\}", html)
+        self.assertIsNotNone(m_block)
+        self.assertIsNotNone(m_only)
+        self.assertIn("var(--code-fg,", m_block.group(0))
+        self.assertIn("var(--code-fg,", m_only.group(0))
+
+    def test_dark_overrides_use_variables_not_hardcoded_colors(self):
+        # #4 — same reasoning as the pre-existing ic_bg/code border fixes: a bare hardcoded dark
+        # color would always beat a user-customized --text-fg/--code-fg (same specificity,
+        # declared later in the stylesheet), silently discarding the customization in dark mode.
+        html = app.shell("Test", "<p>body</p>")
+        m_body_dark = re.search(r'@media\(prefers-color-scheme:dark\)\{body\{[^}]*\}\}', html)
+        self.assertIsNotNone(m_body_dark)
+        self.assertIn("var(--text-fg,", m_body_dark.group(0))
+        self.assertNotIn("color:#e7e9ec", m_body_dark.group(0))
+        m_mdcode_dark = re.search(r'@media\(prefers-color-scheme:dark\)\{pre\.md-code\{[^}]*\}\}', html)
+        self.assertIsNotNone(m_mdcode_dark)
+        self.assertIn("var(--code-fg,", m_mdcode_dark.group(0))
+        m_code_dark = re.search(r'@media\(prefers-color-scheme:dark\)\{pre\.code\{[^}]*\}\}', html)
+        self.assertIsNotNone(m_code_dark)
+        self.assertIn("var(--code-fg,", m_code_dark.group(0))
+        self.assertNotIn("color:#dfe3e8", m_code_dark.group(0))
+
+    def test_injection_defense_at_save_and_render(self):
+        # #5 — a bad color must fall back to the default at save time (via /api/style) and,
+        # independently, at render time (resolve_style() on a hand-tampered settings.json).
+        import urllib.parse as up
+        payload = up.quote("red;background:url(x)")
+        status, d = self.get_json(f"/api/style?text_fg_light={payload}")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["text_fg"]["light"], app.STYLE_DEFAULTS["text_fg"]["light"])
+        status, d = self.get_json(f"/api/style?code_fg_light={payload}")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["style"]["code_fg"]["light"], app.STYLE_DEFAULTS["code_fg"]["light"])
+        app._SETTINGS = {"style": {"text_fg": {"light": "javascript:alert(1)", "dark": "#d6d9de"},
+                                    "code_fg": {"light": "javascript:alert(1)", "dark": "#dfe3e8"}}}
+        resolved = app.resolve_style(app._SETTINGS["style"])
+        self.assertEqual(resolved["text_fg"]["light"], app.STYLE_DEFAULTS["text_fg"]["light"])
+        self.assertEqual(resolved["code_fg"]["light"], app.STYLE_DEFAULTS["code_fg"]["light"])
+        status, body = self.get("/favs")
+        self.assertNotIn("javascript:alert", body)
+
+    def test_ic_fg_default_now_matches_the_softened_text_fg_default(self):
+        # ic_fg's default used to shadow body's OLD color exactly; it must now shadow the NEW
+        # one instead, so inline code doesn't end up the one visibly-darker leftover on the page.
+        self.assertEqual(app.STYLE_DEFAULTS["ic_fg"], app.STYLE_DEFAULTS["text_fg"])
+
+    def test_presets_fill_text_fg_and_code_fg(self):
+        # theme presets must give a complete look, including the two new color keys — a preset
+        # missing them would silently fall back to the (unrelated) default palette's text color.
+        for name in ("github", "dracula", "solarized"):
+            preset = app.STYLE_PRESETS[name]
+            self.assertIn("text_fg", preset)
+            self.assertIn("code_fg", preset)
+            self.assertIn("light", preset["text_fg"])
+            self.assertIn("dark", preset["text_fg"])
+
+    def test_settings_page_has_text_and_code_color_controls(self):
+        status, body = self.get("/settings")
+        self.assertEqual(status, 200)
+        self.assertIn("f_text_fg_light", body)
+        self.assertIn("f_text_fg_dark", body)
+        self.assertIn("f_code_fg_light", body)
+        self.assertIn("f_code_fg_dark", body)

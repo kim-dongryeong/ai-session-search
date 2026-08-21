@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ._icons import ICON_PNG_192, ICON_PNG_256
 
-__version__ = "4.2.1"
+__version__ = "4.3.0"
 
 # App icon — a speech bubble with a person mark (🧑 = "you"), the app's core idea.
 # App icon: glass "AI" on a blue→green gradient with purple/cyan glows. Used as the
@@ -259,12 +259,27 @@ def get_timeline_lim():
 # bad style value must never be able to break page rendering.
 STYLE_DEFAULTS = {
     "preset": "default",
+    # Body text color. The value hardcoded here before this feature existed was #1a1a1a on the
+    # #f5f6f8 light background — a contrast ratio of 16.1:1, more than DOUBLE the 7:1 WCAG AAA
+    # requirement (AA only needs 4.5:1), which read as unnecessarily heavy/harsh for long
+    # sessions of running prose. #2e3338 measures 11.8:1 against the same background — still
+    # far above AAA, just softer. The dark default moves the same direction for the same
+    # reason: #e7e9ec against #13151a was 16.6:1; #d6d9de is 12.9:1. Both new values stay well
+    # clear of AA/AAA at any body font size, this is a comfort choice, not a compliance fix.
+    "text_fg":   {"light": "#2e3338", "dark": "#d6d9de"},
     "code_font": "ui-monospace, Menlo, monospace",
     "code_size": 12.5,
     "code_bg":       {"light": "#fafbfc", "dark": "#15171c"},
     "code_border":   {"light": "#e6e9ee", "dark": "#2a2e35"},
     "code_border_w": 1,
     "code_radius":   6,
+    # Code BLOCK text color (pre.code / pre.md-code). Before this feature, the light mode had no
+    # explicit color at all — it inherited body{color}, so this default matches the NEW text_fg
+    # light value above (not the old #1a1a1a) to stay consistent with the softened body color.
+    # The dark mode DID already hardcode its own color (#dfe3e8) — that one is kept as-is, since
+    # it was never tied to body{color} in the first place and the task only asked to soften the
+    # two shades that used to shadow body text, not touch a value that was already independent.
+    "code_fg":   {"light": "#2e3338", "dark": "#dfe3e8"},
     # Inline code (`.md-ic`, the `` `code` `` spans inside a sentence) used to share code_size/
     # code_bg/code_radius with code BLOCKS (pre.md-code) — bumping the block font size for a big
     # code sample also bumped every inline mention mid-sentence, blowing out line-height. These
@@ -279,10 +294,12 @@ STYLE_DEFAULTS = {
     "ic_size":   0.9,
     "ic_bg":     {"light": "#eef1f4", "dark": "#2a2e35"},
     # .md-ic never set its own text color before this feature (it inherited body{color}) — these
-    # defaults are exactly body's light/dark color values (see body{} / its @media(dark) override
-    # a few hundred lines below), so an untouched page's inline code text stays byte-for-byte the
-    # same color it always was.
-    "ic_fg":     {"light": "#1a1a1a", "dark": "#e7e9ec"},
+    # defaults originally mirrored body's OLD hardcoded #1a1a1a/#e7e9ec exactly. Now that
+    # text_fg's own default has been softened to #2e3338/#d6d9de (see its comment above), this
+    # pair is updated to match — otherwise inline code would be the only thing on the page still
+    # rendering in the old, darker shade, which reads as an unintended mismatch rather than a
+    # deliberate accent.
+    "ic_fg":     {"light": "#2e3338", "dark": "#d6d9de"},
     "ic_radius": 4,
     "table_border":  {"light": "#dfe3e8", "dark": "#2a2e35"},
     "table_border_w": 1,
@@ -324,6 +341,12 @@ STYLE_PRESETS = {
         # fg.default), not code_bg's color repeated.
         "ic_bg": {"light": "#eff1f3", "dark": "#292e36"},
         "ic_fg": {"light": "#24292f", "dark": "#c9d1d9"},
+        # text_fg/code_fg reuse the exact same Primer fg.default pair as ic_fg above — GitHub's
+        # own rendering gives prose, inline code, and fenced code blocks all the same text
+        # color, varying only the background behind code, so there is no separate "code text"
+        # tone to source here.
+        "text_fg": {"light": "#24292f", "dark": "#c9d1d9"},
+        "code_fg": {"light": "#24292f", "dark": "#c9d1d9"},
         "hl": [
             {"light": "#fff8c5", "dark": "#7d6a1e"},
             {"light": "#d2f8d2", "dark": "#1f6d33"},
@@ -344,6 +367,13 @@ STYLE_PRESETS = {
         # distinct chip against the page background rather than blending into it.
         "ic_bg": {"light": "#efeef7", "dark": "#2b2d3a"},
         "ic_fg": {"light": "#44475a", "dark": "#f8f8f2"},
+        # text_fg/code_fg reuse the same pair as ic_fg above — Dracula only defines ONE
+        # foreground tone (#f8f8f2) since it's a dark-only theme; the light-mode half here is
+        # the same "current line" tone the preset already borrows for ic_fg's light value (there
+        # being no official Dracula light palette to source a distinct one from), applied
+        # identically to prose and code text rather than inventing a second approximation.
+        "text_fg": {"light": "#44475a", "dark": "#f8f8f2"},
+        "code_fg": {"light": "#44475a", "dark": "#f8f8f2"},
         "hl": [
             {"light": "#f1fa8c", "dark": "#8c8f3f"},
             {"light": "#8ffab0", "dark": "#2f8f52"},
@@ -363,6 +393,11 @@ STYLE_PRESETS = {
         # tones Solarized's palette designates for prose, not a syntax-highlight accent).
         "ic_bg": {"light": "#f5efdc", "dark": "#0a3b47"},
         "ic_fg": {"light": "#657b83", "dark": "#839496"},
+        # text_fg/code_fg reuse the same base00/base0 pair as ic_fg above — Solarized's palette
+        # designates these two tones for body text specifically, and its own syntax-highlighted
+        # code blocks are built on top of that same base text color, not a separate one.
+        "text_fg": {"light": "#657b83", "dark": "#839496"},
+        "code_fg": {"light": "#657b83", "dark": "#839496"},
         "hl": [
             {"light": "#f5e6a8", "dark": "#7a6520"},
             {"light": "#dde8a0", "dark": "#556b1f"},
@@ -443,7 +478,7 @@ def resolve_style(raw):
          "base_size": _valid_num(raw.get("base_size"), 11, 24, STYLE_DEFAULTS["base_size"]),
          "line_height": _valid_num(raw.get("line_height"), 1.2, 2.4, STYLE_DEFAULTS["line_height"]),
          "content_width": _valid_num(raw.get("content_width"), 600, 2000, STYLE_DEFAULTS["content_width"], is_int=True)}
-    for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
+    for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg", "text_fg", "code_fg"):
         v = raw.get(key) if isinstance(raw.get(key), dict) else {}
         d[key] = _valid_pair(v.get("light"), v.get("dark"), STYLE_DEFAULTS[key])
     hl_raw = raw.get("hl") if isinstance(raw.get("hl"), list) else []
@@ -457,7 +492,8 @@ def resolve_style(raw):
 # name of the CSS custom property each *_light/_dark-shaped style key maps to
 _THEMED_CSS_VAR = {"code_bg": "--code-bg", "code_border": "--code-bd",
                     "table_border": "--tbl-bd", "table_head_bg": "--tbl-head-bg",
-                    "ic_bg": "--ic-bg", "ic_fg": "--ic-fg"}
+                    "ic_bg": "--ic-bg", "ic_fg": "--ic-fg",
+                    "text_fg": "--text-fg", "code_fg": "--code-fg"}
 # the .md-table zebra-stripe background is fixed (not independently colorable — table_zebra is
 # only on/off), matching the color the existing (pre-feature) CSS hardcodes for each theme.
 _ZEBRA_BG = {"light": "#fafbfc", "dark": "#191c22"}
@@ -547,6 +583,7 @@ def style_css_text_full(resolved):
         zebra = _ZEBRA_BG[mode] if resolved["table_zebra"] else "transparent"
         parts = [f'--code-bg:{resolved["code_bg"][mode]}', f'--code-bd:{resolved["code_border"][mode]}',
                  f'--ic-bg:{resolved["ic_bg"][mode]}', f'--ic-fg:{resolved["ic_fg"][mode]}',
+                 f'--text-fg:{resolved["text_fg"][mode]}', f'--code-fg:{resolved["code_fg"][mode]}',
                  f'--tbl-bd:{resolved["table_border"][mode]}', f'--tbl-head-bg:{resolved["table_head_bg"][mode]}',
                  f'--tbl-zebra:{zebra}']
         parts += [f'--hl{i}:{resolved["hl"][i][mode]}' for i in range(6)]
@@ -4279,8 +4316,8 @@ try{if(!%%TEMP_PORT_JS%%&&new URLSearchParams(location.search).get('welcome')===
 :root{color-scheme:light dark}
 %%STYLEVARS%%
 *{box-sizing:border-box}
-body{font-family:-apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;font-size:var(--body-size,14.5px);line-height:var(--body-lh,1.65);margin:0;background:#f5f6f8;color:#1a1a1a}
-@media(prefers-color-scheme:dark){body{background:#13151a;color:#e7e9ec}}
+body{font-family:-apple-system,system-ui,'Apple SD Gothic Neo',sans-serif;font-size:var(--body-size,14.5px);line-height:var(--body-lh,1.65);margin:0;background:#f5f6f8;color:var(--text-fg,#2e3338)}
+@media(prefers-color-scheme:dark){body{background:#13151a;color:var(--text-fg,#d6d9de)}}
 header{position:sticky;top:0;z-index:9;background:radial-gradient(700px circle at 0% 21%,rgba(138,157,255,1),rgba(138,157,255,0)),radial-gradient(700px circle at 84% 86%,rgba(105,245,247,.88),rgba(105,245,247,0)),linear-gradient(18deg,#0084ff 0%,#1061b7 39%,#b0ff29 100%);color:#fff;padding:11px 18px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center}
 /* Installed-app window chrome (no effect in a normal browser tab) */
 .titlebar{display:none}
@@ -4558,8 +4595,8 @@ form.ssearch a.ssclear{align-self:center;font-size:12px;color:#b04;text-decorati
 @media(prefers-color-scheme:dark){.md-codewrap{border-color:var(--code-bd,#2a2e35)}}
 .md-clang{font:11px/1 ui-monospace,Menlo,monospace;color:#8a8f98;padding:6px 10px;background:#f0f1f3;border-bottom:1px solid #e4e7eb}
 @media(prefers-color-scheme:dark){.md-clang{background:#23262d;border-color:#2a2e35}}
-pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:var(--code-bg,#fafbfc);font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);white-space:pre;line-height:1.5}
-@media(prefers-color-scheme:dark){pre.md-code{background:var(--code-bg,#15171c)}}
+pre.md-code{margin:0;padding:10px 12px;overflow:auto;background:var(--code-bg,#fafbfc);color:var(--code-fg,#2e3338);font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);white-space:pre;line-height:1.5}
+@media(prefers-color-scheme:dark){pre.md-code{background:var(--code-bg,#15171c);color:var(--code-fg,#dfe3e8)}}
 /* The visible text sits in a <code> INSIDE the <pre>, and every browser's default stylesheet has
    its own `code{font-family:monospace}`. A rule that matches the element directly beats a value
    inherited from its parent, so that UA rule — not the <pre>'s font-family above — is what the
@@ -4698,8 +4735,8 @@ kbd{background:#e7e9ec;border-radius:4px;padding:0 5px;font-size:11px;border:1px
 .codectx{padding:4px 12px;font-size:11.5px;color:#8a8f98;background:#fafbfc;border-bottom:1px solid #eef1f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(prefers-color-scheme:dark){.codectx{background:#191c22;border-color:#23262d}}
 .copy{cursor:pointer;border:0;background:#1f6feb;color:#fff;border-radius:6px;padding:3px 10px;font-size:11px}
-pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);max-height:520px;overflow:auto;background:var(--code-bg,#fafbfc);border:var(--code-bw,1px) solid var(--code-bd,#e6e9ee);border-radius:var(--code-rad,6px)}
-@media(prefers-color-scheme:dark){pre.code{background:var(--code-bg,#15171c);color:#dfe3e8}}
+pre.code{margin:0;padding:10px 13px;white-space:pre-wrap;word-break:break-word;font-family:var(--code-font,ui-monospace,Menlo,monospace);font-size:var(--code-size,12.5px);max-height:520px;overflow:auto;background:var(--code-bg,#fafbfc);color:var(--code-fg,#2e3338);border:var(--code-bw,1px) solid var(--code-bd,#e6e9ee);border-radius:var(--code-rad,6px)}
+@media(prefers-color-scheme:dark){pre.code{background:var(--code-bg,#15171c);color:var(--code-fg,#dfe3e8)}}
 #minimap{position:fixed;right:3px;top:58px;bottom:8px;width:11px;display:flex;flex-direction:column;z-index:8;opacity:.6;border-radius:5px;overflow:hidden}
 #minimap:hover{opacity:1;width:15px}
 #minimap .seg{flex:1 1 auto;min-height:1px;cursor:pointer;border:0}
@@ -5940,7 +5977,7 @@ class H(BaseHTTPRequestHandler):
             # paired light+dark color controls — the settings-page form always submits both
             # halves of a pair together, so a partial update just keeps whichever half of the
             # OLD stored (or default) pair wasn't resubmitted, rather than silently discarding it.
-            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg", "text_fg", "code_fg"):
                 lk, dk = key + "_light", key + "_dark"
                 if lk in qs or dk in qs:
                     old = cur.get(key) if isinstance(cur.get(key), dict) else {}
@@ -7110,7 +7147,7 @@ class H(BaseHTTPRequestHandler):
 
         def flat(d, zebra_default=True):
             out = {}
-            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg"):
+            for key in ("code_bg", "code_border", "table_border", "table_head_bg", "ic_bg", "ic_fg", "text_fg", "code_fg"):
                 out[key + "_light"] = d[key]["light"]
                 out[key + "_dark"] = d[key]["dark"]
             out["table_zebra"] = "1" if d.get("table_zebra", zebra_default) else "0"
@@ -7161,6 +7198,7 @@ class H(BaseHTTPRequestHandler):
             + pair_field("code_border", tr("Code block border color"), resolved["code_border"])
             + num_field("code_border_w", tr("Code block border width (px)"), resolved["code_border_w"], 0, 4)
             + num_field("code_radius", tr("Code block corner radius (px)"), resolved["code_radius"], 0, 20)
+            + pair_field("code_fg", tr("Code block text color"), resolved["code_fg"])
             + num_field("ic_size", tr("Inline code size (em)"), resolved["ic_size"], 0.6, 1.4, 0.05)
             + pair_field("ic_bg", tr("Inline code background"), resolved["ic_bg"])
             + pair_field("ic_fg", tr("Inline code color"), resolved["ic_fg"])
@@ -7172,6 +7210,7 @@ class H(BaseHTTPRequestHandler):
                f'<label class=hint><input type=checkbox id=f_table_zebra'
                f'{" checked" if resolved["table_zebra"] else ""}> {tr("Shade every other row")}</label>'
                f'<span id=ok_table_zebra class=styleok hidden>✓ {tr("saved")}</span></div>')
+            + pair_field("text_fg", tr("Text color"), resolved["text_fg"])
             + num_field("base_size", tr("Body font size (px)"), resolved["base_size"], 11, 24, 0.5)
             + num_field("line_height", tr("Line height"), resolved["line_height"], 1.2, 2.4, 0.05)
             + num_field("content_width", tr("Content width (px)"), resolved["content_width"], 600, 2000, 10)
@@ -7237,7 +7276,7 @@ class H(BaseHTTPRequestHandler):
             'el.addEventListener("change",function(){var p={};p[key]=el.value;save(p,key);});});'
             'var zEl=document.getElementById("f_table_zebra");if(zEl)zEl.addEventListener("change",function(){'
             'save({table_zebra:zEl.checked?"1":"0"},"table_zebra");});'
-            '["code_bg","code_border","table_border","table_head_bg","ic_bg","ic_fg"].forEach(function(key){'
+            '["code_bg","code_border","table_border","table_head_bg","ic_bg","ic_fg","text_fg","code_fg"].forEach(function(key){'
             '["light","dark"].forEach(function(mode){var el=document.getElementById("f_"+key+"_"+mode);if(!el)return;'
             'el.addEventListener("input",function(){var p={};'
             'p[key+"_light"]=document.getElementById("f_"+key+"_light").value;'

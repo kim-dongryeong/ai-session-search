@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.3.0 — 2026-08-21
+
+- **New: text color settings.** Settings → Advanced now has **Text color** (body text) and
+  **Code block text color**, each with a separate light and dark value. Code-block text
+  previously had a color only in dark mode; in light mode it just followed the body, so it
+  couldn't be set at all.
+- **The default text is lighter than it was.** Body text was `#1a1a1a` on a near-white page —
+  a contrast ratio of about 16:1, more than double the 7:1 that the strictest accessibility
+  level asks for, which reads as heavier than it needs to be. The default is now `#2e3338`
+  (about 12:1), and dark mode goes from near-white `#e7e9ec` to `#d6d9de` (about 13:1) to cut
+  glare. Both stay well above the accessibility threshold. If you preferred the heavier text,
+  set Text color back to `#1a1a1a`.
+- Inline code's text color default was moved to match, so inline code no longer looks heavier
+  than the sentence around it. A value you saved yourself is kept as-is.
+- The theme presets fill in both new colors along with everything else.
+
 ## 4.2.1 — 2026-08-21
 
 - **Fix: the app could write its state files into the real config directory even when pointed
